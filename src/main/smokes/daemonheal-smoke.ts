@@ -37,6 +37,15 @@
 //
 // Windowless on purpose: the relay takes a WebContents GETTER and tolerates null (renderer
 // events are simply unsent), and daemon health is read straight off runtime-health's state.
+//
+// THE TIME BUDGET, because every act here waits on a real daemon dying or being born. The
+// gate allows 240s and the guard below writes a red verdict at 150s — a red the harness can
+// read, rather than the MISSING result file a gate timeout leaves. A PASSING run spends
+// roughly 30-50s and its slow-machine ceiling is ~85-90s: the fixed windows (B's 4s, the 5s
+// client spawn timeout act F waits out) plus the two anchored waits that dominate the rest —
+// act F's heal + heal-line + 5s welcome sampling, and act G's window, which is bounded by
+// ensureDaemon's own 15s readiness wait. Every other bound in this file is an escape hatch
+// on a run that is already failing, and most of them throw the moment they expire.
 import { app, ipcMain } from 'electron'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -92,8 +101,31 @@ async function waitHealed(notPid: number, ms: number): Promise<DaemonEndpoint | 
 }
 
 /** How many times `event` has been journaled so far — the loop's own progress, read from the
- *  side. Act G waits on 'daemon-spawning' rather than sleeping a guessed number of ms. */
-const journalCount = (event: string): number => readClientLog().split(event).length - 1
+ *  side. Act G waits on 'daemon-spawning' rather than sleeping a guessed number of ms.
+ *
+ *  Matched WITH the ' {' that clientLog writes before an event's JSON detail, so a name that
+ *  is a prefix of another event ('quiesce-retire-late-spawn' and its '-refused'/'-failed'
+ *  siblings) counts only itself. And always read as a DELTA against a baseline taken before
+ *  the act: client.log is appended ACROSS RUNS (truncated only past 256KB), so a line an
+ *  earlier act — or an earlier run of this same gate — left behind must never be allowed to
+ *  answer for this one. A presence test would let a stale line pass a PRE-FIX build. */
+const journalCount = (event: string): number => readClientLog().split(event + ' {').length - 1
+
+/** The 'daemon-reconnected' lines in order, each carrying the relay's own replay count for
+ *  that heal ('{"panes":N}'). Sliced against a pre-act baseline for the same reason. */
+const reconnectLines = (): string[] =>
+  readClientLog()
+    .split('\n')
+    .filter((l) => l.includes('daemon-reconnected {'))
+
+/** Wait for the relay to journal a heal PAST `baseline`, and hand back the new lines. The
+ *  relay flips health to 'connected' and THEN journals, so `waitHealed` returning is not yet
+ *  proof that the reconnect's replay loop ran — this is. */
+async function waitForHealLines(baseline: number, ms: number): Promise<string[]> {
+  const until = Date.now() + ms
+  while (Date.now() < until && reconnectLines().length <= baseline) await delay(100)
+  return reconnectLines().slice(baseline)
+}
 
 type InvokeDoor = (event: unknown, ...args: unknown[]) => unknown
 
@@ -245,18 +277,25 @@ export async function runDaemonHealSmoke(): Promise<void> {
     // ── F. a spawn that failed with the daemon ABSENT must leave nothing to replay ───────
     // The spec is recorded BEFORE the reply on purpose (a spawn into a dying daemon must still
     // come back), so the ONLY thing standing between a FAILED spawn and a resurrected session
-    // is the handler's own withdrawal on the error path — the same `specs.delete` the kill
-    // handler does, for the same reason ("closed on purpose — never resurrected by a reconnect
-    // replay"). Quiescence is the clamp that makes the sequence deterministic: with it latched
-    // nothing can heal while the spawn is in flight, so the failure is decided BEFORE the
-    // reconnect that would replay it — otherwise a heal racing the 5s spawn timeout replays the
-    // spec while it is still legitimately present and the act would prove nothing.
+    // is the handler's own withdrawal on the error path — the same withdrawal the kill handler
+    // does, for the same reason ("closed on purpose — never resurrected by a reconnect
+    // replay"). Quiescence is the clamp that keeps THIS act's sequence deterministic: with it
+    // latched nothing can heal while the spawn is in flight, so the failure is decided with no
+    // session anywhere behind it, and what the act reads afterwards is the withdrawal alone.
+    // The OTHER ordering — a heal racing the 5s spawn timeout, which replays the spec into a
+    // real session before the rejection arrives — is not clamped away in production and is not
+    // this act's claim: the handler answers it in kind (withdraw only what is still yours, and
+    // reap the session rather than orphan it), which is a race no windowless smoke can stage
+    // deterministically. Act F pins the half that IS deterministic; the identity rule it rests
+    // on is stated where it lives, in the handler.
     {
       const door = spawnDoor()
       r.replayDoorFound = !!door
       if (!door) throw new Error('no TerminalChannels.spawn handler registered — cannot reach the spec door')
       const epBefore = readEndpoint()
       if (!epBefore || !isAlive(epBefore.pid)) throw new Error('no live daemon at the start of act F')
+      // Baselined BEFORE the death: every heal past this line belongs to act F.
+      const healsBefore = reconnectLines().length
       beginDaemonQuiescence()
       process.kill(epBefore.pid)
       const deadBy = Date.now() + 5000
@@ -273,16 +312,25 @@ export async function runDaemonHealSmoke(): Promise<void> {
       const epHealed = await waitHealed(epBefore.pid, 30_000)
       r.replayHealed = !!epHealed
       if (!epHealed) throw new Error('relay did not heal after the failed spawn')
-      // The relay's own count, journaled at the moment it replays: 'daemon-reconnected {panes:N}'.
-      const reconnects = readClientLog().split('\n').filter((l) => l.includes('daemon-reconnected'))
-      r.replayedNothing = /"panes":0/.test(reconnects[reconnects.length - 1] ?? '')
+      // THE ANCHOR. The relay's own count, journaled at the moment it replays:
+      // 'daemon-reconnected {"panes":N}'. Read as the DELTA past this act's baseline — acts
+      // A-C heal with zero panes too, so the last line in the file (or one a previous run
+      // left) is satisfied by a heal that never replayed anything of ours. Waiting for it
+      // also settles the ordering: health flips to 'connected' BEFORE this line is written,
+      // so waitHealed alone can return while the replay loop has not yet run.
+      const healLines = await waitForHealLines(healsBefore, 15_000)
+      r.replayHealJournaled = healLines.length > 0
+      r.replayedNothing = healLines.length > 0 && healLines.every((l) => /"panes":0/.test(l))
       // THE claim, end to end: ask the healed daemon itself. `welcome` lists every session it
       // holds, so a replayed spec shows up here as a REAL pane — the prompt that would be
-      // painting under the renderer's dead banner. Sampled a few times because the replay is
-      // dispatched (not awaited) just before health flips to 'connected'.
+      // painting under the renderer's dead banner. Sampled from the anchor above (the replay
+      // frames are on the wire by then) and kept sampling for several seconds: the daemon
+      // answers a replayed spawn by SPAWNING, and a slow ConPTY start would otherwise let a
+      // pre-fix build read clean simply because nobody had looked late enough.
       let welcomeReads = 0
       let resurrectedPane = false
-      for (let i = 0; i < 3 && !resurrectedPane; i++) {
+      const welcomeUntil = Date.now() + 5000
+      for (let i = 0; !resurrectedPane && (i === 0 || Date.now() < welcomeUntil); i++) {
         if (i > 0) await delay(700)
         const probe = new DaemonClient(epHealed, {}, { kind: 'daemonheal-welcome', heartbeatMs: 0 })
         try {
@@ -310,33 +358,47 @@ export async function runDaemonHealSmoke(): Promise<void> {
       const epLive = readEndpoint()
       if (!epLive || !isAlive(epLive.pid)) throw new Error('no live daemon at the start of act G')
       const spawnsBefore = journalCount('daemon-spawning')
+      // The other delta this act reads: which check refused the spawn — the LATE one, past the
+      // readiness wait. A quiesce answered by the ENTRY check journals 'daemon-reconnect-failed
+      // … quiescing' and nothing else, so this line is also the proof the act landed mid-flight
+      // rather than early. Baselined, because client.log outlives the run.
+      const lateRetiresBefore = journalCount('quiesce-retire-late-spawn')
+      const lateRetired = (): boolean => journalCount('quiesce-retire-late-spawn') > lateRetiresBefore
       process.kill(epLive.pid)
       const committedBy = Date.now() + 10_000
       while (journalCount('daemon-spawning') === spawnsBefore && Date.now() < committedBy) await delay(25)
       r.midFlightCaughtInSpawn = journalCount('daemon-spawning') > spawnsBefore
       beginDaemonQuiescence()
+      // ONE loop for both claims, anchored on the retire rather than on a guessed number of ms.
       // Health is the observable, NOT a live pid: post-fix the daemon this spawn seated does
       // exist for a moment before it is retired — that is the fix WORKING (retire what we just
       // seated rather than hand it back). What must never happen is the relay taking it into
       // service, which is the resurrection the installer trips over.
-      const windowUntil = Date.now() + 8000
+      // The window has to OUTLAST ensureDaemon's readiness wait (15s), because that is exactly
+      // where the spawn under test is sitting. A fixed 8s window was shorter than the thing it
+      // was watching: on a loaded runner it closed before the daemon was even ready, which
+      // reddened the FIXED build on the retire line (journaled only once that wait returns) and
+      // let a PRE-FIX build's resurrection land after the last health sample. Sampling stops
+      // when the late retire is journaled — past that point every further attempt is refused by
+      // the entry check, so there is nothing left to catch — plus a short tail, because the
+      // retire is journaled BEFORE it is carried out and a fix that retired and then handed the
+      // endpoint back anyway would show up in those two seconds.
+      const windowUntil = Date.now() + 25_000
       let resurrections = 0
+      let tailUntil = 0
       while (Date.now() < windowUntil) {
         if (getDaemonHealth().state === 'connected') resurrections++
+        if (!tailUntil && lateRetired()) tailUntil = Date.now() + 2000
+        if (tailUntil && Date.now() >= tailUntil) break
         await delay(200)
       }
       r.midFlightNotResurrected = resurrections === 0
-      // Which check refused it: the LATE one, past the readiness wait. A quiesce answered by
-      // the entry check journals 'daemon-reconnect-failed … quiescing' and nothing else — so
-      // this line is also the proof the act landed mid-flight rather than early. POLLED, not
-      // sampled once: the daemon's readiness is the machine's business, not the claim's.
-      const lateRetire = /quiesce-retire-late-spawn/
-      const retiredBy = Date.now() + 8000
-      while (!lateRetire.test(readClientLog()) && Date.now() < retiredBy) await delay(200)
-      r.midFlightLateSpawnRetired = lateRetire.test(readClientLog())
+      r.midFlightLateSpawnRetired = lateRetired()
       // And nothing may be LEFT running: a live daemon still holds the exe the installer is
-      // about to overwrite, which is the entire point of the pre-install retire.
-      const goneBy = Date.now() + 8000
+      // about to overwrite, which is the entire point of the pre-install retire. Polled past
+      // the retire's own budget (a connect timeout plus the wait for the pid to actually die),
+      // since the loop above breaks on the journal line, which precedes all of that.
+      const goneBy = Date.now() + 12_000
       let left = readEndpoint()
       while (left && isAlive(left.pid) && Date.now() < goneBy) {
         await delay(200)

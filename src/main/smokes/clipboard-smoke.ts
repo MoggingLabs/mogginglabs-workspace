@@ -692,9 +692,10 @@ async function probeAgentClipboard(win: BrowserWindow): Promise<Record<string, u
     //      another process makes the write a no-op that neither copies nor throws). A refused
     //      IMAGE restore therefore still re-dated its row, floated it to the top and primed
     //      lastImageSig, while the settings tab reported a green "Copied" for an image that is
-    //      not on the clipboard. The read-back compares SIZE, not a fingerprint: the OS DIB
-    //      round-trip can move a semi-transparent image's hash (phase 8's note), and a strict
-    //      compare would refuse honest restores.
+    //      not on the clipboard. What this phase does NOT prove: the system clipboard holds
+    //      TEXT at this point, so "there is no image on the clipboard at all" carries the whole
+    //      refusal on its own and the guard's identity rule is never asked a question. 11d
+    //      asks it.
     const imageEntryId = (await exec(
       `window.bridge.invoke('clipboard:history').then((h) => { const i = h.find((e) => e.kind === 'image'); return i ? String(i.id) : '' })`
     )) as string
@@ -713,6 +714,82 @@ async function probeAgentClipboard(win: BrowserWindow): Promise<Record<string, u
       `window.bridge.invoke('clipboard:history').then((h) => h.map((e) => e.id).join(','))`
     )) as string
     const failedImageRestoreLeftRingAlone = ringBeforeImg === ringAfterImg
+
+    // 11d. The SAME-SIZE trap — the question 11c cannot ask, and the one image history
+    //      actually gets asked in the field. The workflow is the ordinary one: two
+    //      full-screen screenshots sit in the ring, #2 is on the clipboard, and the user
+    //      clicks Copy on #1 while another process holds the clipboard open. The write
+    //      no-ops. A read-back that only compares WIDTH and HEIGHT sees 1920x1080 come back
+    //      and calls it proof — of the WRONG image: the row is re-dated, lastImageSig is
+    //      primed with #1, the toast goes green, and Ctrl+V still pastes #2. Modelled at 8x8
+    //      by two images that differ ONLY in colour, so nothing but an identity check can
+    //      refuse the restore.
+    const sameSizePair = (await exec(`(async () => {
+      const b = window.bridge
+      // Read history IMMEDIATELY after each write: the handler has already unshifted the
+      // row by the time the invoke resolves, and a shorter window is a smaller chance for
+      // the 800 ms watcher to land a row of its own between the write and the read.
+      const paint = async (fill) => {
+        const c = document.createElement('canvas')
+        c.width = c.height = 8
+        const cx = c.getContext('2d')
+        cx.fillStyle = fill
+        cx.fillRect(0, 0, 8, 8)
+        await b.invoke('clipboard:writeEntry', { kind: 'image', imageDataUrl: c.toDataURL('image/png'), source: 'app' })
+        const h = await b.invoke('clipboard:history')
+        return h[0] && h[0].kind === 'image' ? String(h[0].id) : ''
+      }
+      const one = await paint('#11cc55') // "screenshot #1" — the row the user restores
+      const two = await paint('#cc1155') // "screenshot #2" — what the clipboard holds now
+      return one + '|' + two
+    })()`)) as string
+    const sameSizeTargetId = sameSizePair.split('|')[0] ?? ''
+    const sameSizeLiveId = sameSizePair.split('|')[1] ?? ''
+    const ringBeforeSameSize = (await exec(
+      `window.bridge.invoke('clipboard:history').then((h) => h.map((e) => e.id).join(','))`
+    )) as string
+    silentlyDropNextClipboardWrites(1)
+    const sameSizeRestoreRejected =
+      sameSizeTargetId && sameSizeLiveId && sameSizeTargetId !== sameSizeLiveId
+        ? ((await exec(`(async () => {
+            try { await window.bridge.invoke('clipboard:restore', { id: ${JSON.stringify(sameSizeTargetId)} }); return false }
+            catch { return true }
+          })()`)) as boolean)
+        : false
+    silentlyDropNextClipboardWrites(0)
+    const ringAfterSameSize = (await exec(
+      `window.bridge.invoke('clipboard:history').then((h) => h.map((e) => e.id).join(','))`
+    )) as string
+    const sameSizeRestoreLeftRingAlone = ringBeforeSameSize === ringAfterSameSize
+    // …and the consequence, read off the SYSTEM clipboard: what a Ctrl+V would paste is
+    // still #2. Decoded through a canvas rather than compared as bytes — the clipboard
+    // re-encodes the PNG, but the pixels survive. A ±4 tolerance per channel, because this
+    // asserts WHICH image is on the clipboard, not the OS's colour arithmetic.
+    const sameSizeClipboardPixel = (await exec(`(async () => {
+      const rich = await window.bridge.invoke('clipboard:readRich')
+      if (rich.kind !== 'image' || !rich.imageDataUrl) return 'NO-IMAGE'
+      return await new Promise((resolve) => {
+        const im = new Image()
+        im.onload = () => {
+          const c = document.createElement('canvas')
+          c.width = im.width
+          c.height = im.height
+          const cx = c.getContext('2d')
+          cx.drawImage(im, 0, 0)
+          const d = cx.getImageData(0, 0, 1, 1).data
+          resolve(d[0] + ',' + d[1] + ',' + d[2])
+        }
+        im.onerror = () => resolve('DECODE-FAILED')
+        im.src = rich.imageDataUrl
+      })
+    })()`)) as string
+    const near = (v: number | undefined, want: number): boolean => typeof v === 'number' && Math.abs(v - want) <= 4
+    const [pxR, pxG, pxB] = sameSizeClipboardPixel.split(',').map(Number)
+    const sameSizeClipboardUnchanged = near(pxR, 0xcc) && near(pxG, 0x11) && near(pxB, 0x55)
+    // Put the system clipboard back to TEXT. An image left here outlives the phase and
+    // falsifies whatever reads the clipboard next — phase 8's delete-clears assertion is
+    // the standing example of exactly that going wrong.
+    await exec(`window.bridge.invoke('clipboard:write', { text: 'RESET_AFTER_SAMESIZE_5591' })`)
 
     // 12. …and the USER must see it. Drive the real chord (select + Ctrl+C) against an
     //     armed failure and require the danger toast. Two arms: copy-on-select's debounced
@@ -747,6 +824,11 @@ async function probeAgentClipboard(win: BrowserWindow): Promise<Record<string, u
       failedImageRestoreRejected,
       failedImageRestoreLeftRingAlone,
       imageEntryId,
+      sameSizePair,
+      sameSizeRestoreRejected,
+      sameSizeRestoreLeftRingAlone,
+      sameSizeClipboardPixel,
+      sameSizeClipboardUnchanged,
       failedRestoreLeftRingAlone,
       failedWriteNotOnClipboard,
       copyFailToast,
@@ -757,6 +839,9 @@ async function probeAgentClipboard(win: BrowserWindow): Promise<Record<string, u
         failedRestoreRejected &&
         failedImageRestoreRejected &&
         failedImageRestoreLeftRingAlone &&
+        sameSizeRestoreRejected &&
+        sameSizeRestoreLeftRingAlone &&
+        sameSizeClipboardUnchanged &&
         failedRestoreLeftRingAlone &&
         copyFailToast === 'toast-shown'
       )

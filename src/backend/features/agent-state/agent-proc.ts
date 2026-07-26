@@ -277,6 +277,41 @@ const isForegroundRow = (row: ProcRow): boolean => {
   return !hasGroupEvidence || (row.pgid! > 0 && row.pgid === row.tpgid)
 }
 
+/** Switches that leave a shell INTERACTIVE. The prefix is stripped before the lookup, so `/c`
+ *  and `-c` disqualify as the same thing, and anything not listed here disqualifies too. */
+const INTERACTIVE_SHELL_SWITCHES = new Set([
+  'i', 'l', 'login', 'interactive', 'norc', 'noprofile', 'no-rcs', // POSIX
+  'nologo', 'noexit', 'sta', 'mta', // PowerShell
+  'd', 'q' // cmd.exe
+])
+
+/** Is this row a shell the user is SITTING IN, rather than a shell running a command?
+ *
+ *  The bare basename test this replaced fired for ANY foreground row named like a shell, and
+ *  the commonest one on Windows is not a nested prompt at all: PowerShell cannot CreateProcess
+ *  a `.cmd`, so `npm run dev` in a PowerShell pane spawns `cmd.exe /c "…npm.cmd" run dev` as
+ *  the pane's shallowest foreground child. That latched `foregroundIsShell` for the whole life
+ *  of the dev server — only a prompt clears it, and a dev server never prompts — which handed
+ *  the re-anchor below a pane it was never meant to pay for: one process listing every
+ *  REANCHOR_MS for as long as the server ran, in exactly the pane the cost model promises
+ *  costs ONE. `bash ./dev.sh`, `sh -c …` and `./gradlew` are the same shape on POSIX.
+ *
+ *  The tell is the COMMAND LINE, which ProcRow already carries on both platforms (Windows:
+ *  Win32_Process.CommandLine; POSIX: `ps args`), argv[0] first on both. A shell handed a
+ *  script or a command string has an argument that is neither the shell nor an interactivity
+ *  switch; a shell the user typed has none. An unreadable command line is not evidence of an
+ *  interactive shell — say no, and that pane keeps the pre-flag cost of zero listings.
+ *  Exported for the unit tier. */
+export function isInteractiveShellRow(row: ProcRow | undefined): boolean {
+  if (!row || !SHELL_BINS.has(row.base) || !row.cmd.trim()) return false
+  return tokenizeCommandLine(row.cmd)
+    .slice(1) // argv[0] is the shell itself
+    .every((arg) => {
+      const name = /^(?:--?|\/)(.+)$/.exec(arg)?.[1]
+      return name !== undefined && INTERACTIVE_SHELL_SWITCHES.has(name.toLowerCase())
+    })
+}
+
 /** The agent id a single process represents, or null. Pure — the unit of the gate. */
 export function matchAgentProcess(base: string, cmd: string): string | null {
   const direct = BIN_TO_AGENT.get(base)
@@ -441,11 +476,12 @@ interface TrackedPane {
   /** The foreground process context, whether or not its executable is a known adapter. */
   foreground: DetectedProcessContext | null
   /** True when that foreground is itself an interactive SHELL (the user typed `bash` or
-   *  `powershell` at the pane prompt). It suppresses every later commandSubmitted, and the
-   *  nested shell emits no prompt marker of its own — while `hasPromptMarker` stays latched
-   *  from the OUTER shell, which used to skip the one re-anchor built for marker-less panes.
-   *  An agent started in there was invisible to the whole identity stack: no gauge, no
-   *  provider mark, no resume, and a restore brought back a plain shell. */
+   *  `powershell` at the pane prompt) — proven from its command line by `isInteractiveShellRow`,
+   *  because a shell RUNNING something wears the same name. It suppresses every later
+   *  commandSubmitted, and the nested shell emits no prompt marker of its own — while
+   *  `hasPromptMarker` stays latched from the OUTER shell, which used to skip the one re-anchor
+   *  built for marker-less panes. An agent started in there was invisible to the whole identity
+   *  stack: no gauge, no provider mark, no resume, and a restore brought back a plain shell. */
   foregroundIsShell: boolean
   contextCheckedAt: number
   /** True only while the shell is waiting for a submitted/restored foreground command. */
@@ -838,7 +874,7 @@ export class AgentProcessDetector {
                 : sinceFloorMs(byPid.get(foreground.pid)?.startedAt, this.now())
           }
           t.foreground = nextContext
-          t.foregroundIsShell = !!nextContext && SHELL_BINS.has(byPid.get(nextContext.pid)?.base ?? '')
+          t.foregroundIsShell = isInteractiveShellRow(byPid.get(nextContext.pid))
           t.contextCheckedAt = this.now()
           t.pendingSubmits = 0 // subsequent Enter keys belong to this foreground program
           if (

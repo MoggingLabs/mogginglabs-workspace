@@ -34,12 +34,19 @@ import { app, type BrowserWindow } from 'electron'
 // one named flag here.
 // Writes out/launchnow-result.json, then exits (0=pass, 1=fail).
 
-const CLAUDE_PANE = 102 // 2nd workspace (ordinal 1) -> base 100; mix [shell, claude] -> slot 2
-const SHELL_PANE = 101
-const CUSTOM_PANE = 201 // 3rd workspace (ordinal 2), single custom slot
-const FALLBACK_PANE = 301 // 4th workspace (ordinal 3), single claude slot, build held
-const DISPOSE_PANE = 402 // 5th workspace (ordinal 4), mix [shell, claude] -> slot 2, reply held
+// Each phase opens the NEXT workspace, so its panes sit at `ordinal * PANE_STRIDE + slot`.
+// The ORDINAL is READ from live state in `run` (worktree-smoke's rule), never hardcoded: a
+// shifted workspace count — a restored session, a phase reordered, a base workspace already
+// present — otherwise retargets every assertion at a pane that does not exist, which burns
+// the phase's whole poll budget and then reports `dSpawnState:'no-pane'` rather than saying
+// the id was wrong.
+const PANE_STRIDE = 100 // @contracts PANE_SLOT_STRIDE
 const DISPOSE_HOLD_MS = 5000 // how long that pane's spawn reply is stretched
+// The hold's timer starts when the spawn REPLY lands, not when the pane issued the spawn,
+// so the release is polled (see phase D) rather than slept out: 35s covers a daemon that
+// answers late without any fixed budget having to guess how late.
+const DISPOSE_RELEASE_TRIES = 140
+const DISPOSE_RELEASE_GAP_MS = 250
 const CUSTOM_MARK = 'LAUNCHNOW_SPAWNRUN_31337'
 
 export function runLaunchNowSmoke(win: BrowserWindow): void {
@@ -97,6 +104,17 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
           'if(m&&m.workspace&&m.workspace.count()===0)m.workspace.create({name:"Workspace 1"});return 1;})()'
       )
       await delay(600)
+      // The four phases below open four NEW workspaces, in order, from the next free
+      // ordinal — read from the live list, so the ids follow the app instead of a formula
+      // re-derived here that only happens to agree with it.
+      const nextOrdinal = Number(
+        await ES('window.__mogging.workspace.list().reduce(function(m,w){return Math.max(m,w.ordinal+1);},0)')
+      )
+      const SHELL_PANE = nextOrdinal * PANE_STRIDE + 1 // phase A: mix [shell, claude] -> slot 1
+      const CLAUDE_PANE = nextOrdinal * PANE_STRIDE + 2 // …and its claude slot
+      const CUSTOM_PANE = (nextOrdinal + 1) * PANE_STRIDE + 1 // phase B: single custom slot
+      const FALLBACK_PANE = (nextOrdinal + 2) * PANE_STRIDE + 1 // phase C: single claude slot, build held
+      const DISPOSE_PANE = (nextOrdinal + 3) * PANE_STRIDE + 2 // phase D: [shell, claude] -> slot 2, reply held
       // Both spies BEFORE any open — every launch byte and build call is caught.
       await ES('(function(){window.__mogging.ptyWrites=[];window.__mogging.agentCommandCalls=[];return 1;})()')
 
@@ -162,6 +180,9 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
       // The reply is in flight RIGHT NOW: the spawn went out AND no outcome exists yet
       // (the hold still owns it). Both, or closing the pane below proves nothing.
       const disposeSpawnIssued = dSpawnState === 'issued'
+      // Diagnostics only: the ids the LAYOUT actually built for this workspace. A derived id
+      // that misses its pane then reads as a visible mismatch instead of a bare 'no-pane'.
+      const dLayoutIds = String(await ES('JSON.stringify(window.__mogging.layout.paneIds())'))
       const disposeHeldAtClose = String(await ES(outcomeOf(DISPOSE_PANE))) === 'undefined'
       // The real close door (pane ⋯ / ✕ / shortcut all land here). Two panes in this
       // workspace, so this closes the PANE, not the workspace; nothing is typed into
@@ -178,8 +199,21 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
         )
       }
       const disposePaneGone = disposedAt > 0
-      await delay(DISPOSE_HOLD_MS + 1200) // the held reply resumes INSIDE this window
-      const dReleasedAt = Number(await ES('window.__mogging.agents.spawnReplyHoldReleasedAt()'))
+      // WAIT FOR THE RELEASE, never for a budget. The hold's timer starts when the spawn
+      // REPLY lands (claimSpawnReplyHold rides `reply.then`), NOT when the pane issued its
+      // spawn — so nothing measured from the close can predict when it lets go. A daemon
+      // that answers more than ~1.5s late used to leave `dReleasedAt` at 0 and take
+      // `disposeReplyRan` red ON A CORRECT BUILD; polling the stamp cannot.
+      let dReleasedAt = 0
+      for (let i = 0; i < DISPOSE_RELEASE_TRIES && dReleasedAt === 0; i++) {
+        await delay(DISPOSE_RELEASE_GAP_MS)
+        dReleasedAt = Number(await ES('window.__mogging.agents.spawnReplyHoldReleasedAt()'))
+      }
+      // Settle: a stale outcome is written by the reply handler that resumes WITH the
+      // release, so read the outcome only after giving that handler room to land — this
+      // window is the bite, and it is now measured from the release rather than from a
+      // sleep that may have started before the handler even existed.
+      await delay(1200)
       const dOutcome = String(await ES(outcomeOf(DISPOSE_PANE)))
       // Anti-vacuity: the handler REALLY resumed, and it did so after the pane was gone.
       // Without this, "no stale outcome" is equally true of a reply that never landed.
@@ -227,7 +261,10 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
         dSpawnState,
         dOutcome,
         dDisposedAt: disposedAt,
-        dReleasedAt
+        dReleasedAt,
+        // Triage for a mis-derived id: what this run aimed at, and what the layout built.
+        paneIds: { nextOrdinal, SHELL_PANE, CLAUDE_PANE, CUSTOM_PANE, FALLBACK_PANE, DISPOSE_PANE },
+        dLayoutIds
       })
       app.exit(pass ? 0 : 1)
     } catch (e) {

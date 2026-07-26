@@ -162,6 +162,57 @@ const CASES: Case[] = [
     }
   },
   {
+    // …and the SAME dev server as Windows actually spawns it — the spelling the case above does
+    // not model, which is why a regression in the exact scenario it certifies went unseen.
+    // PowerShell cannot CreateProcess a `.cmd`, so `npm run dev` in a PowerShell pane arrives as
+    // `cmd.exe /c "…npm.cmd" run dev`: the pane's shallowest foreground child, wearing a SHELL
+    // basename. A `foregroundIsShell` derived from that NAME alone latched for the whole life of
+    // the server — nothing clears it but a prompt, and a dev server never prompts — and bought
+    // this pane a re-anchor listing every five minutes for as long as it ran (2 inside these ten
+    // minutes, unbounded in a real day). Same ceiling as the node-child spelling above, because
+    // it is the same pane doing the same thing.
+    name: 'npm run dev via cmd /c from a PowerShell pane, 10 min',
+    maxListings: 1,
+    context: { pid: 200, cwd: 'C:\\repo', unidentified: true },
+    run: async (w) => {
+      w.procs.set(SHELL, { ppid: 1, base: 'powershell', cmd: 'powershell.exe' })
+      w.detector.track('p1', SHELL)
+      w.detector.promptSeen('p1') // shell integration: hasPromptMarker latches true
+      await w.advance(20_000)
+      w.detector.commandSubmitted('p1') // the user types: npm run dev
+      w.procs.set(200, {
+        ppid: SHELL,
+        base: 'cmd',
+        cmd: '"C:\\WINDOWS\\system32\\cmd.exe" /c ""C:\\Program Files\\nodejs\\npm.cmd" run dev"',
+        cwd: 'C:\\repo'
+      })
+      await w.advance(10 * 60_000) // it streams and never prompts
+    }
+  },
+  {
+    // The POSIX spelling of the same trap: a script run BY a shell (`./scripts/dev.sh`,
+    // `./gradlew`, `bash build.sh`) is a shell-named foreground child that never prompts either.
+    name: 'bash ./scripts/dev.sh, 10 min',
+    maxListings: 1,
+    context: { pid: 210, cwd: '/repo', unidentified: true },
+    run: async (w) => {
+      w.procs.set(SHELL, { ppid: 1, base: 'bash', cmd: 'bash', pgid: SHELL, tpgid: SHELL })
+      w.detector.track('p1', SHELL)
+      w.detector.promptSeen('p1')
+      await w.advance(20_000)
+      w.detector.commandSubmitted('p1')
+      w.procs.set(210, {
+        ppid: SHELL,
+        base: 'bash',
+        cmd: 'bash ./scripts/dev.sh',
+        cwd: '/repo',
+        pgid: 210,
+        tpgid: 210
+      })
+      await w.advance(10 * 60_000)
+    }
+  },
+  {
     // The feature this gate now protects: an executable absent from every adapter still owns a
     // trustworthy process cwd. Enter presses after detection are its input, not new shell jobs.
     name: 'arbitrary CLI changes cwd and then exits to prompt',
@@ -393,6 +444,8 @@ const CASES: Case[] = [
       w.detector.promptSeen('p1') // the OUTER shell has integration: hasPromptMarker latches true
       await w.advance(20_000)
       w.detector.commandSubmitted('p1') // the user types: powershell
+      // Its command line is load-bearing: bare, so it is INTERACTIVE. Hand it a script or a
+      // `-Command` and it becomes the dev-server case above, which must NOT re-anchor.
       w.procs.set(320, { ppid: SHELL, base: 'powershell', cmd: 'powershell.exe', cwd: 'C:\\repo' })
       await w.advance(5_000) // listing 1: the pane's foreground is itself a SHELL
       w.detector.commandSubmitted('p1') // `claude`, typed INTO the nested shell — ignored, and

@@ -92,6 +92,33 @@ const IS_MAC = navigator.platform.toUpperCase().includes('MAC')
  */
 const REFIT_SETTLE_MS = 120
 
+/**
+ * How long a replay span may stay open before it is force-closed (see replayWatchdog).
+ * Only a THROW out of a parser handler can leave one open, and that also wedges xterm's
+ * write buffer, so this is a backstop against a permanent latch, never part of normal flow.
+ * Sized well past the worst honest replay: a full 10k-line scrollback lands in one chunk and
+ * parses in 12 ms slices — hundreds of ms on a loaded machine, never ten seconds.
+ */
+const REPLAY_SPAN_MAX_MS = 10000
+
+/**
+ * The Windows worktree-lock ladder for the pane's DIRECT removal road (buildMenu's
+ * `!eventHost.isConnected` branch). node-pty exits ASYNCHRONOUSLY, and on Windows the closed
+ * pty's former cwd stays locked until its handle drops, so `git worktree remove` answers
+ * `error` for a moment after the pane is gone. The codebase models this explicitly —
+ * src/main/worktrees.ts injects a transient lock and the WORKTREE gate asserts the ladder
+ * rides it out — and the workspace controller has always retried the identical backend call
+ * (controller.ts, removePaneWorktree). The direct road invoked ONCE, so a transient lock fell
+ * straight to "Could not remove worktree" with the pane already closed: the same dead end the
+ * bypass was added to close.
+ *
+ * These are re-STATED, not imported: the only other copy lives in the workspace controller,
+ * a file this change does not own. A shared home (one worktree-removal helper both roads
+ * call) is the right end state — the two ladders must not be allowed to drift.
+ */
+const WORKTREE_REMOVE_ATTEMPTS = 20
+const WORKTREE_REMOVE_RETRY_MS = 150
+
 /** A single xterm pane bound to a backend PTY of the same id. */
 export class TerminalPane {
   private readonly instance: number
@@ -116,9 +143,42 @@ export class TerminalPane {
    *  first two made the PANEFIT assertion VACUOUS — it passed on the pre-fix bytes
    *  because the pane had not spawned yet, not because the fix worked. */
   private lastSpawnDims: { cols: number; rows: number } | null | undefined = undefined
-  /** True while REPLAYED scrollback is being parsed (see DataEvent.replay): handlers that
-   *  act on the world rather than paint — OSC 52's clipboard write — stay inert. */
-  private replaying = false
+  /**
+   * How many REPLAY spans the parser is currently inside (see DataEvent.replay): handlers
+   * that act on the world rather than paint — OSC 52's clipboard write — stay inert while it
+   * is up. A COUNT scoped to the BYTES, not a boolean raised when the replay EVENT arrived.
+   *
+   * `term.write` only ENQUEUES: WriteBuffer.write pushes the chunk and schedules, and
+   * _innerWrite parses queued chunks in order, firing THAT chunk's callback right after its
+   * own parse. A flag raised on event arrival therefore covered whatever was already in the
+   * queue, not the replay payload — three failures, all reachable:
+   *   · every LIVE chunk still unparsed when a replay event landed was parsed suppressed, so
+   *     a real user's OSC 52 copy was silently dropped. Reachable on the in-process backend
+   *     across a renderer reload: this pane's onData listener is live early, while spawnPty —
+   *     and so the `existing:true` replay — is one IPC round trip (up to 2.5 s of armed-run
+   *     race) later, and live bytes flow for that whole gap. xterm yields every 12 ms, so a
+   *     torrent spans many ticks. The dropped ESC]52 is exactly the case the feature exists
+   *     for, and the CLI has already told the user "Copied N characters to clipboard".
+   *   · back-to-back replays: chunk 1's callback cleared the boolean, so chunk 2 parsed
+   *     UNSUPPRESSED and re-executed its copy. A boolean cannot express nesting; a count can.
+   *   · no reset path at all — see replayWatchdog.
+   */
+  private replayDepth = 0
+  /**
+   * The guaranteed clear. xterm does not guard SYNCHRONOUS throws out of a parser handler
+   * (WriteBuffer._innerWrite calls `_action(data)` bare and only then the chunk's callback),
+   * so a throw while a replay chunk parses unwinds before the balancing callback and would
+   * latch suppression for the life of the pane — killing every OSC 52 copy for the rest of
+   * the session. Nothing else cleared the old boolean: no finally, no reset in dispose() or
+   * restart(). This is armed while the count is up and drops it if the balance never comes.
+   * Deliberately generous: a full 10k-line scrollback replay is parsed in xterm's 12 ms
+   * slices and must never be cut short mid-replay.
+   */
+  private replayWatchdog?: ReturnType<typeof setTimeout>
+  /** Are we inside a replay span right now? (The only question the OSC handlers ask.) */
+  private get replaying(): boolean {
+    return this.replayDepth > 0
+  }
   private remoteReadyProbe = ''
   private remoteReadyMarked = false
   private scrollbar?: PaneScrollbarHandle
@@ -152,8 +212,6 @@ export class TerminalPane {
    *  whichever fires first sends the ladder, the other finds this latched.
    *  restart() re-arms it: a respawned pane is a new session life. */
   private captureEmitted = false
-  /** Blocks already captured by a PRIOR life's emission (the ladder spans lives —
-   *  scrollback survives restart). Each emission captures only past this mark. */
   /** High-water mark for session capture, by BLOCK ID — never by array index. `blocks` is a
    *  300-entry RING that deliberately spans restarts, so an index went stale the moment it
    *  shifted: once saturated, `list().length` stops growing, `slice(index)` returns empty and
@@ -355,18 +413,7 @@ export class TerminalPane {
             this.liveMarked = true
             markPaneLive(this.id) // first PTY output — lineup launches may proceed
           }
-          // The flag must span xterm's parse, which is ASYNCHRONOUS — hence the write
-          // callback rather than a straight-line reset. Replayed bytes are re-parsed, and
-          // handlers that ACT (OSC 52 copying to the system clipboard) must stay inert
-          // for them.
-          if (e.replay) {
-            this.replaying = true
-            this.term.write(e.data, () => {
-              this.replaying = false
-            })
-          } else {
-            this.term.write(e.data)
-          }
+          this.writeFromBackend(e.data, e.replay === true)
         }
       }),
       terminalClient.onExit((e) => {
@@ -522,6 +569,50 @@ export class TerminalPane {
     this.exposeForDev(host)
   }
 
+  /**
+   * THE door every backend byte enters by. Suppression for REPLAYED bytes is fenced around
+   * the CHUNK, not around the event: xterm parses queued chunks in order and fires each
+   * chunk's callback immediately after its own parse, so a zero-length write enqueued just
+   * ahead of the replay payload raises the count exactly when the parser reaches this point
+   * in the stream — after every live chunk written before it has already been parsed, live.
+   * The payload's own callback lowers it when its last byte is parsed. (`write('')` is the
+   * documented xterm barrier idiom: WriteBuffer pushes it like any other chunk and
+   * InputHandler.parse decodes zero code points.)
+   */
+  private writeFromBackend(data: string, replay: boolean): void {
+    if (!replay) {
+      this.term.write(data)
+      return
+    }
+    this.term.write('', () => this.stepReplay(1))
+    this.term.write(data, () => this.stepReplay(-1))
+  }
+
+  /** Move the replay-suppression count and keep its watchdog in step. Clamped at zero so a
+   *  forced clear (watchdog, dispose, restart) can never be driven negative by the balancing
+   *  callback that arrives afterwards. */
+  private stepReplay(delta: 1 | -1): void {
+    this.replayDepth = Math.max(0, this.replayDepth + delta)
+    if (this.replayWatchdog) clearTimeout(this.replayWatchdog)
+    this.replayWatchdog = undefined
+    if (!this.replayDepth) return
+    this.replayWatchdog = setTimeout(() => {
+      this.replayWatchdog = undefined
+      if (!this.replayDepth) return
+      console.warn(`pane ${this.id}: replay suppression never balanced — clearing`)
+      this.replayDepth = 0
+    }, REPLAY_SPAN_MAX_MS)
+  }
+
+  /** Drop every open replay span (and its watchdog). A pane that is going away, or starting a
+   *  NEW session life, must not carry suppression into it — the old boolean had no reset path
+   *  at all, which is how one unbalanced span killed OSC 52 for the rest of the session. */
+  private resetReplay(): void {
+    this.replayDepth = 0
+    if (this.replayWatchdog) clearTimeout(this.replayWatchdog)
+    this.replayWatchdog = undefined
+  }
+
   /** THE spawn door — mount rides it with the armed launch run, restart() rides it bare.
    *  Remote/cwd are read at CALL time, so a restart spawns in the pane's current folder
    *  (and a remote pane re-rides ssh), not a snapshot from mount. */
@@ -543,13 +634,27 @@ export class TerminalPane {
     // every workspace the user did not click first had its live agent squeezed to 80 columns,
     // hard-wrapping everything it printed until the tab was first visited. Omitting the dims
     // is the seam's own documented "leave it alone" case.
+    // …and assert the grid we MEASURED, not the one xterm currently carries. Those differ on
+    // the pane the user is actually looking at: the ResizeObserver's first callback lands in
+    // the next frame's rendering steps, while this spawn runs a microtask after construction
+    // (ptyEmulation is cached, so the await is settled-synchronous for every pane after the
+    // first). Reading this.term.cols here therefore sent the constructed 80x24 for a fully
+    // measurable visible pane — F033's own failure mode, narrowed rather than closed, and the
+    // daemon squeezed the surviving agent to 80 columns until the first refit resized it back.
     const measured = proposeGrid(this.term)
-    this.lastSpawnDims = measured ? { cols: this.term.cols, rows: this.term.rows } : null
+    // DEV/GATE seam only (PANEFIT · MULTIPANE) — nothing in production reads it, so nothing
+    // in production allocates it. The field's THREE states survive intact inside the branch:
+    // `undefined` = no spawn ever issued, `null` = spawned and claimed nothing, an object =
+    // claimed that grid (see the field's own doc for why collapsing two of them made a gate
+    // assertion pass on sabotaged bytes).
+    if (import.meta.env.DEV) {
+      this.lastSpawnDims = measured ? { cols: measured.cols, rows: measured.rows } : null
+    }
     const reply = terminalClient.spawn({
       id: this.id,
       cwd,
-      cols: measured ? this.term.cols : undefined,
-      rows: measured ? this.term.rows : undefined,
+      cols: measured?.cols,
+      rows: measured?.rows,
       workspaceId: workspaceIdForPane(this.id),
       agentId: assignmentForPane(this.id),
       remoteHostId: remote?.hostId,
@@ -645,6 +750,7 @@ export class TerminalPane {
     if (!this.dead || this.disposed) return
     this.dead = false
     this.captureEmitted = false // a restarted pane is a NEW session life (revision C)
+    this.resetReplay() // …and a new session life starts with no replay span held open
     this.deadBanner?.remove()
     this.deadBanner = undefined
     if (this.stateDot && this.stateDot.dataset.state === 'exited') {
@@ -2001,9 +2107,21 @@ export class TerminalPane {
     // dead: its handler is `if (cwd)`, so clicking it copied nothing, said nothing, and left
     // the user pasting whatever was on the clipboard before. The menu is rebuilt on open and
     // refreshed live, so it appears the moment a cwd is known.
-    const menuCwd = getPaneCwd(this.id) || getPaneRemote(this.id)?.cwd || ''
-    if (menuCwd) {
-      menu.append(item('folder', 'Copy working directory', () => void this.copyOrWarn(menuCwd)))
+    //
+    // The APPEND is gated; the VALUE is re-read at CLICK time, never captured at build time.
+    // "Refreshed live" is a MutationObserver on headerGrid, so a cwd change with no header
+    // consequence — `cd` into a plain folder outside any repo, where the git chip's text
+    // never changes — fires no record and rebuilds no menu. A captured value would then hand
+    // the user the OLD directory, silently. (The gate closed by the append guard is the row's
+    // ABSENCE when nothing resolves, which CHROMEUX asserts — that stays exactly as it was.)
+    const paneCwdNow = (): string => getPaneCwd(this.id) || getPaneRemote(this.id)?.cwd || ''
+    if (paneCwdNow()) {
+      menu.append(
+        item('folder', 'Copy working directory', () => {
+          const now = paneCwdNow()
+          if (now) void this.copyOrWarn(now)
+        })
+      )
     }
     // Worktree-isolated pane (3/03): guarded removal. Dirty worktrees are refused with
     // an explicit force step — an agent's uncommitted work is never silently destroyed.
@@ -2038,7 +2156,11 @@ export class TerminalPane {
           // no listener — the controller's is on the workspace container — so the retry's
           // promise never settled and "Remove anyway" was a dead button, with the ⋯ entry that
           // was the only other door gone along with the pane. Once there is no pane left to
-          // sequence, go straight down the same backend door the controller uses.
+          // sequence, go straight down the same backend door the controller uses — WITH the
+          // same bounded retry it rides, because bypassing the controller must not bypass the
+          // Windows worktree-lock ladder (see WORKTREE_REMOVE_ATTEMPTS). A single invoke here
+          // reported "Could not remove worktree" on exactly the transient lock the ladder
+          // exists for, with the pane already gone: the dead end this branch was meant to fix.
           const res = eventHost.isConnected
             ? await new Promise<RemoveWorktreeResult>((resolve) => {
                 eventHost.dispatchEvent(
@@ -2048,11 +2170,7 @@ export class TerminalPane {
                   })
                 )
               })
-            : ((await getBridge().invoke(WorktreeChannels.remove, {
-                repo,
-                path: cwd,
-                force
-              })) as RemoveWorktreeResult)
+            : await this.removeWorktreeDirect({ repo, path: cwd, force })
           {
             if (res.ok) {
               showToast({ tone: 'success', title: 'Worktree removed', body: 'Its branch is kept for review.' })
@@ -2130,6 +2248,24 @@ export class TerminalPane {
         )
       }
     }
+  }
+
+  /** The direct backend road for worktree removal, bounded exactly as the workspace
+   *  controller's is (WORKTREE_REMOVE_ATTEMPTS / WORKTREE_REMOVE_RETRY_MS). Stops early on
+   *  success and on any NON-`error` refusal — a `dirty` verdict is an answer, not a lock, and
+   *  retrying it twenty times would only delay the force-step toast. */
+  private async removeWorktreeDirect(req: {
+    repo: string
+    path: string
+    force: boolean
+  }): Promise<RemoveWorktreeResult> {
+    let res: RemoveWorktreeResult = { ok: false, reason: 'error' }
+    for (let attempt = 0; attempt < WORKTREE_REMOVE_ATTEMPTS; attempt++) {
+      if (attempt) await new Promise((resolve) => setTimeout(resolve, WORKTREE_REMOVE_RETRY_MS))
+      res = (await getBridge().invoke(WorktreeChannels.remove, req)) as RemoveWorktreeResult
+      if (res.ok || res.reason !== 'error') break
+    }
+    return res
   }
 
   /** Dev-only debug handle so tooling/smoke can inspect the real terminal. Guarded by
@@ -2248,6 +2384,13 @@ export class TerminalPane {
       },
       term: this.term,
       write: (data: string) => terminalClient.write({ id: this.id, data }),
+      /** MULTIPANE: push bytes down the pane's OWN backend-write door, live or replay-marked,
+       *  exactly as the terminalClient.onData listener does. The seam exists because the
+       *  replay bug is an ORDERING bug — a live chunk still queued when a replay arrives — and
+       *  a real reattach cannot be aimed at that window from a smoke. Everything past this
+       *  call is shipped code: the queue fence, xterm's parse, the OSC 52 handler, copyOrWarn,
+       *  and the real system clipboard. */
+      feed: (data: string, replay = false): void => this.writeFromBackend(data, replay),
       // PANERESTART: the dead flag as the pane itself holds it (banner/menu/input all
       // key on this one field), so the gate asserts the STATE, not a DOM inference.
       dead: (): boolean => this.dead,
@@ -2347,6 +2490,7 @@ export class TerminalPane {
     forgetPane(this.id) // live/reattached marks die with the pane, not with the id
     forgetSpawnRun(this.id) // armed builds/outcomes too — a recycled id must start clean
     if (this.selectionCopyTimer) clearTimeout(this.selectionCopyTimer) // a pane closed mid-drag must not copy after death
+    this.resetReplay() // no span, and no watchdog timer, outlives the pane
     this.dropAbort.abort() // drop the window-scoped drag listeners
     this.menuCleanup?.() // document/window listeners + the body-portaled menu
     this.renameModal?.close()

@@ -8,6 +8,7 @@ import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
 import { getPaneCwd, getPaneCwdProjection, onPaneCwdProjection, setPaneCwd } from '../../core/layout/pane-cwd'
 import { getPaneRemote, setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
+import { paneInstance } from '../../core/terminal/pane-instance-port'
 import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover, type AgentLaunchRequest } from '../../core/agents/launch-port'
 import {
   armSpawnRun,
@@ -424,6 +425,15 @@ export const agentsFeature: UiFeature = {
       profileId?: string
     ): Promise<void> {
       if (paneId < 0 || !provider || provider === 'shell') return
+      // WHICH pane this launch is for, by renderer-session identity rather than by id: ids are
+      // reused (a split takes the lowest free slot), so every await below is a chance for this
+      // pane to be closed and REPLACED under us. Captured here, re-read at each await — the
+      // same stance board/launch.ts holds for a card's first prompt, nuance included: a pane
+      // whose xterm has not mounted yet reports `undefined`, and an undefined capture accepts
+      // the mount (restore requests its lineup before the grid builds the panes).
+      const targetInstance = paneInstance(paneId as PaneId)
+      const stillThisPane = (): boolean =>
+        targetInstance === undefined || paneInstance(paneId as PaneId) === targetInstance
       const remoteTarget = getPaneRemote(paneId as PaneId)
       const remote = !!remoteTarget
       const custom = provider.startsWith('custom:')
@@ -436,6 +446,21 @@ export const agentsFeature: UiFeature = {
       //    building consumes one-shot config overrides (markAgentConfigSessionLaunched)
       //    — a build that might not be typed must not run;
       //  - remote launches: the far-side dialect ride is cheap and the SSH wait dwarfs it.
+      // What the prefetch COSTS, said where it is paid: the build spends main-side state the
+      // moment it lands — `notePaneAgent(paneId, true)` books the pane agent-bearing, and
+      // `markAgentConfigSessionLaunched` DELETES this launch's `ownership:'once'` session
+      // overrides (src/main/agents.ts). Main accepts that as a residual for the gap between
+      // handing the command back and the renderer typing it — a gap its own comment calls
+      // "this microsecond". Starting the build BEFORE the liveness wait stretched exactly that
+      // gap to the length of the wait (up to 15s), so a pane closed while its shell boots
+      // spends both on a launch that never happens. Nothing downstream can refund it: the two
+      // are a repository delete and a Set entry inside main's `agents:command` handler, and the
+      // port carries no un-spend seam — the renderer never even sees the rows.
+      // Nor may the bail below simply move ABOVE this line to pre-empt the spend: `gone` is
+      // per-id and only mark() clears it, so before any wait a recycled id whose new pane has
+      // not spoken yet still reads gone — and restore re-creates panes at precisely the ids it
+      // just closed. Bailing there would drop real launches to save a one-shot override. The
+      // wait is what makes the flag trustworthy: it either marks (clearing gone) or times out.
       const prefetched =
         !remote && !resume && !custom && isAgentCliId(provider)
           ? prepareCliLaunch(paneId, provider, cwd, resume, profileId, undefined, false)
@@ -461,14 +486,26 @@ export const agentsFeature: UiFeature = {
       // resume decision. Wait for the verdict explicitly; the fixed 900ms lineup delay
       // that used to paper over this ordering is gone.
       if (resume && !remote) await whenPaneSpawnSettled(paneId, 15000)
-      // The pane may have been CLOSED while we waited — the waiters above answer false for
-      // "timed out" and for "gone" alike, and only the second means there is nothing left
-      // to launch into. Without this the lineup ran on: it consumed the one-shot restore
-      // intent and the session config overrides, booked a non-existent pane agent-bearing,
-      // and typed `claude --resume <uuid>` into an id the app REUSES (a split takes the
-      // lowest free slot). F018 closed exactly this class for a vanished cwd; this is the
-      // same stance for a vanished pane. Checked here, before anything is spent.
-      if (isPaneGone(paneId)) return
+      // The pane may have been CLOSED — or closed and REPLACED — while we waited. The waiters
+      // above answer false for "timed out" and for "gone" alike, and only the second means
+      // there is nothing left to launch into; and `gone` alone cannot see a replacement,
+      // because the new pane's first sign of life is the very thing that clears it (mark()) —
+      // so the instance identity carries that half. Without both, the lineup ran on: it
+      // consumed the one-shot restore intent and the session config overrides, booked a
+      // non-existent pane agent-bearing, and typed `claude --resume <uuid>` into an id the app
+      // REUSES (a split takes the lowest free slot). F018 closed this class for a vanished
+      // cwd; this is the same stance for a vanished pane.
+      //
+      // What the bail is WORTH differs by path, and the difference is the point:
+      //  - RESUME/REMOTE (never prefetched): nothing has been spent yet. The restore intent,
+      //    the session overrides and the presence booking all live behind the build started
+      //    BELOW, so returning here holds every one of them.
+      //  - FRESH LOCAL CLI (prefetched): main already spent the presence booking and the
+      //    one-shot overrides — see the prefetch note above — and this cannot put them back.
+      //    What it still holds is everything on THIS side: no command typed, no session/label/
+      //    profile/MCP-chip write, no cwd projection, no failover context, no launch telemetry
+      //    for a pane that is gone. Whichever path: never a command into a stranger's pane.
+      if (isPaneGone(paneId) || !stillThisPane()) return
       // RESTORE into a pane the daemon never let die. The PTY outlives the app (ADR 0006),
       // so on the next launch the pane reattaches to a session whose agent is still running
       // — and typing `claude --resume` there does not relaunch it, it types the words into
@@ -516,6 +553,10 @@ export const agentsFeature: UiFeature = {
       const { mine, effectiveProfile, workspaceId, result } = await (
         prefetched ?? prepareCliLaunch(paneId, provider, cwd, resume, profileId, remoteTarget?.hostId, remote)
       )
+      // Closed or replaced DURING the build — the resume/remote paths start theirs right here,
+      // so this is their equivalent of the check above, and the last one before a write. No
+      // toast either: the user closed this pane, they are not owed a failure notice about it.
+      if (isPaneGone(paneId) || !stillThisPane()) return
       if (!result.ok || !result.command) {
         showToast({
           tone: 'danger',

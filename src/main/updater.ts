@@ -14,7 +14,7 @@ import { isNetworkDownMessage } from '@backend/core/net/reachability'
 import { getSettingsStore } from './app-settings'
 import { retireOwnDaemon, endDaemonQuiescence } from './daemon-client'
 import { updateFeedFixture } from './fixture-port'
-import { consumeUpdatePrefsSetFailure } from './updateprefs-audit-faults'
+import { consumeUpdatePrefsSetFailure } from './fault-port'
 
 // App-wiring: auto-update via electron-updater against the signed GitHub Releases feed
 // (electron-builder.yml `publish`). Runs ONLY in a packaged build — never in dev/smokes. It

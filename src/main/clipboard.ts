@@ -348,19 +348,37 @@ export function registerClipboard(): void {
           ? nativeImage.createFromDataURL(entry.imageDataUrl)
           : undefined
       if (!img || img.isEmpty()) return
-      writeClipboardImage(img)
       // F004's read-back, applied to the IMAGE half too — writeClipboardImage carries the
       // very same silent-drop seam, so a locked Windows clipboard made this a no-op that
       // still re-dated the row, floated it to the top, primed lastImageSig and reported
-      // "Copied". Compared by SIZE, deliberately not by fingerprint: the OS DIB round-trip
-      // can move a semi-transparent image's hash, which would refuse honest restores.
-      const back = readClipboardImage()
-      const want = img.getSize()
-      const got = back.getSize()
-      if (back.isEmpty() || got.width !== want.width || got.height !== want.height) {
+      // "Copied".
+      //
+      // Compared by IDENTITY, never by SIZE. The reaching case for image history is two
+      // full-screen screenshots, and "1920x1080 came back" is equally true of the OTHER
+      // one — so a dropped write sailed straight through the guard that exists to catch it.
+      // (The note that used to live here blamed the DIB round-trip for moving a
+      // semi-transparent image's hash. It cannot justify a weaker check: `remove` below
+      // stakes its clear-it-from-the-system-clipboard promise on that very fingerprint
+      // surviving that very round trip, and poll()'s de-dupe does too. If the hash moved,
+      // both would already be broken — every image copy doubling in the ring, every image
+      // delete leaving the image one Ctrl+V away.)
+      //
+      // The rule that needs no such assumption anyway: fingerprint the clipboard BEFORE the
+      // write, then accept if it CHANGED (ours is the only write in flight, so a change is
+      // ours) or if it now reads back AS ours. That accepts everything a bare
+      // `after === ours` compare would and more, so it can never be the thing that refuses
+      // an honest restore — while UNCHANGED AND NOT OURS is precisely a write that did not
+      // take. One extra full read, on a click: a user action, not poll()'s 800 ms tax.
+      const before = imageSignature()
+      writeClipboardImage(img)
+      const ours = signatureOf(img)
+      const after = imageSignature()
+      if (!after || (after === before && after !== ours)) {
         throw new Error('clipboard write did not take')
       }
-      lastImageSig = signatureOf(img)
+      // Prime the watcher from the READ-BACK rather than from the image we handed over:
+      // poll() compares read-back fingerprints, and `after` is one already in hand.
+      lastImageSig = after
     } else {
       writeClipboardText(entry.text)
       // The same read-back the `write` handler does, for the same reason: on Windows the

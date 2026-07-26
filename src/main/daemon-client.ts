@@ -436,8 +436,48 @@ export async function ensureDaemon(daemonEntry: string, host: DaemonHost): Promi
   // And once more after the 15s readiness wait — the same window, at its widest. Retire what
   // we just seated rather than handing it back, so the exe is free for the installer.
   if (quiescing) {
-    clientLog('quiesce-retire-late-spawn', { pid: ep.pid })
-    await retireDaemonEndpoint(ep)
+    // WHOSE daemon is this? `waitForLiveEndpoint` returns whatever endpoint.json NAMES, not
+    // necessarily the child above: that file is written ONCE, in the listen callback of
+    // whichever daemon won the lock — a rival is refused by the still-held lock and nothing
+    // ever rewrites it (probeReachable's comment states the same mechanism). So with two
+    // same-channel instances racing a respawn — the condition this journal's own header
+    // cites, "two same-channel builds stamp-retiring each other's daemons, every pane's live
+    // process dying each round" — `ep` can be the OTHER app's daemon, and
+    // retireDaemonEndpoint authenticates with the token straight out of that file: it would
+    // shut it down and kill every pane in an app we do not own.
+    // Ours is PROVABLE: the daemon records `pid: process.pid` and we spawned it directly on
+    // the helper, so the endpoint is ours exactly when it names our child. When it does not,
+    // fall back to the rule the stamp-war guard already binds this file to — a daemon with
+    // clients attached is never retired out from under them (a stale-but-working daemon
+    // beats a war) — and treat a probe that cannot answer the same way that guard does:
+    // old or wedged code, retired as before.
+    const ours = child.pid !== undefined && ep.pid === child.pid
+    const otherClients = ours ? 0 : await probeOtherClients(ep)
+    if (otherClients !== null && otherClients > 0) {
+      clientLog('quiesce-retire-late-spawn-refused', {
+        pid: ep.pid,
+        childPid: child.pid ?? null,
+        otherClients
+      })
+      throw new Error(
+        `daemon is quiescing for an update — the live daemon (pid ${ep.pid}) is another instance's, ` +
+          `with ${otherClients} client(s) attached: left running, refusing to spawn`
+      )
+    }
+    clientLog('quiesce-retire-late-spawn', { pid: ep.pid, childPid: child.pid ?? null, ours })
+    // The retire's answer is the whole point of returning one: false means the daemon would
+    // NOT die (retireDaemonEndpoint's contract — "callers must degrade … never hang"). Saying
+    // 'refusing to spawn' either way reports the clean quiescing path while a live daemon is
+    // still holding the installed exe — the NSIS "cannot be closed. Please close it manually
+    // and click Retry" stall this machinery exists to prevent — with only a
+    // `daemon-retire-failed` journal line anywhere to tell the two apart.
+    if (!(await retireDaemonEndpoint(ep))) {
+      clientLog('quiesce-retire-late-spawn-failed', { pid: ep.pid })
+      throw new Error(
+        `daemon is quiescing for an update — the daemon it seated (pid ${ep.pid}) would not retire ` +
+          'and still holds the executable'
+      )
+    }
     throw new Error('daemon is quiescing for an update — refusing to spawn')
   }
   return ep

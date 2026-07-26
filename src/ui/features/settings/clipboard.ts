@@ -102,10 +102,17 @@ function entryRow(entry: ClipboardEntry, now: number, refresh: () => void): HTML
           refresh()
         },
         () => {
+          // Say only what the rejection actually establishes. Main refuses when it cannot
+          // PROVE the write landed — usually because another app holds the machine-wide
+          // clipboard open and the write was a silent no-op, but the same refusal covers a
+          // write that DID land whose read-back could not open the clipboard. Naming one
+          // cause as fact, and "Nothing was copied" as fact, is a claim we cannot make: in
+          // that second case it is simply untrue, and it sends the user to re-copy
+          // something that is already there instead of checking what pastes.
           showToast({
             tone: 'danger',
-            title: 'Copy failed',
-            body: 'Another app is holding the system clipboard open. Nothing was copied — try again in a moment.'
+            title: 'Copy not confirmed',
+            body: 'The app could not verify this reached the system clipboard — most often another app is holding it open. Check what pastes before relying on it, then try again.'
           })
         }
       )

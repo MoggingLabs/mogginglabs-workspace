@@ -138,10 +138,34 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
       /* best effort */
     }
   }
+  // Progress ledger for the net below: each act stamps where it got to, and the ring act
+  // (the long tail) stamps every step, so a stall still writes a result file that NAMES it.
+  const marks: Record<string, unknown> = { stage: 'boot' }
+  const mark = <T>(key: string, value: T): T => {
+    marks[key] = value
+    return value
+  }
+  // THE NET MUST BEAT THE GATE. The outer budget (qa-smokes: `run_smoke BRAINCAP … 300`)
+  // covers the whole `npm run dev` — the electron-vite build and the app's boot are spent
+  // before a line of this runs — so a 280s net could never fire first, and an overrun
+  // reported MISSING: no result file, no flags, nothing to diagnose from. 220s leaves ~80s
+  // for build+boot+teardown and still gives this smoke >3x its healthy runtime (~60s).
   setTimeout(() => {
-    write({ pass: false, error: 'TIMEOUT: braincap smoke did not complete' })
+    let stats: unknown = null
+    try {
+      stats = captureStatsForSmoke()
+    } catch {
+      /* the feature may not have initialised — the marks are the evidence that matters */
+    }
+    write({
+      pass: false,
+      error: 'TIMEOUT: braincap smoke did not complete',
+      marks,
+      captureStats: stats,
+      platform: process.platform
+    })
     app.exit(1)
-  }, 280000)
+  }, 220000)
 
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
@@ -191,6 +215,7 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
     let fx: Fixture | null = null
     const clients: PaneMcpSmokeClient[] = []
     try {
+      marks.stage = 'fixture'
       fx = makeFixture()
       const F = fx
       const draftsDir = join(F.repo, '.memory', 'drafts')
@@ -209,6 +234,7 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
       const paneA1 = String(wsA.ordinal * 100 + 1)
       const paneA2 = wsA.ordinal * 100 + 2
 
+      marks.stage = 'rebuild'
       const built = await handleBrainRebuild({ root: F.repo })
       if (!built.ok) throw new Error('fixture rebuild refused: ' + JSON.stringify(built))
 
@@ -224,6 +250,7 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
       const attempts0 = distillAttemptsForSmoke()
 
       // ── The REAL scripted pane: fail → retry → fix, then session end ───────
+      marks.stage = 'arc'
       const sent = await cli(['send', String(paneA2), 'node ../arc.mjs'])
       if (sent.code !== 0) throw new Error('could not drive the arc pane')
       const paneBlocks = `(() => { const p = (window.__mogging.panes || []).find((x) => x.id === ${paneA2}); return p ? p.blocks() : [] })()`
@@ -245,13 +272,16 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
         )
       }
       // Session end = the shell process exits; markDead hands the ladder over.
+      marks.stage = 'session-end'
+      mark('arcTracked', arcTracked)
       await cli(['send', String(paneA2), 'exit'])
-      const sessionLanded = await waitFor(() => draftFiles().some((f) => f.startsWith('session-')))
+      const sessionLanded = mark('sessionLanded', await waitFor(() => draftFiles().some((f) => f.startsWith('session-'))))
       const sessionFile = draftFiles().find((f) => f.startsWith('session-')) ?? ''
       const sessionSlug = sessionFile.replace(/\.md$/, '')
       const sessionBytes = sessionFile ? readFileSync(join(draftsDir, sessionFile), 'utf8') : ''
 
       // ── The board card reaching Done ───────────────────────────────────────
+      marks.stage = 'card'
       const board = boardDebug().ensureForCwd(F.repo)
       const card1 = createCard({ boardId: board.id, title: 'Flumox rollout', notes: 'Rolled the flumox pipeline out.', labels: ['ops'], actor: 'human' })
       if (!card1) throw new Error('card create refused')
@@ -287,6 +317,7 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
       const cleanOk = git(F.repo, ['status', '--porcelain']) === ''
 
       // ── (b) search: drafts BELOW curated, flagged on every hit ─────────────
+      marks.stage = 'search'
       const found = await call(c1, 'search_memories', { query: 'flumox' })
       const hits = mems(found)
       const curatedIdx = hits.findIndex((h) => h.slug === 'flumox-notes')
@@ -303,6 +334,7 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
         hits.filter((h) => h.draft === true).every((h) => h.source === 'session' || h.source === 'card')
 
       // ── (c) quarantined from suggestions AND the recall probe ──────────────
+      marks.stage = 'quarantine'
       const suggest1 = await call(c1, 'suggest_connections', { slug: 'flumox-notes' })
       const suggestClean =
         suggest1.ok && suggestions(suggest1).every((s) => s.slug !== sessionSlug && s.slug !== 'card-flumox-rollout')
@@ -316,6 +348,7 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
         recallHits.every((h) => h.slug !== sessionSlug && h.slug !== 'card-flumox-rollout')
 
       // ── (d) grantless promote refuses; granted promote MOVES the file ──────
+      marks.stage = 'promote'
       const promoteNone = await call(c1, 'promote_memory', { slug: 'card-flumox-rollout' })
       const grantlessOk = !!promoteNone.rpcError && /grant/i.test(promoteNone.rpcError)
       setIntegrationsGrant({ workspaceId: wsA.id, writeTools: 'all', web: 'off', actOrigins: [] })
@@ -346,6 +379,7 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
         JSON.stringify(promotedSuggestion.breakdown.sharedTerms) === JSON.stringify(['flumox'])
 
       // ── (e) discard: promoted refuses; a draft deletes ─────────────────────
+      marks.stage = 'discard'
       const discardPromoted = await call(c1, 'discard_memory', { slug: 'card-flumox-rollout' })
       const discardPromotedOk =
         discardPromoted.isError && /promoted|not a draft/i.test(discardPromoted.text) && existsSync(promotedPath)
@@ -353,6 +387,7 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
       const discardDraftOk = discardDraft.ok && !draftFiles().includes(sessionFile)
 
       // ── (f) distill ON with the FAKE provider: labeled, additive prose ─────
+      marks.stage = 'distill'
       setDistillAllowed(wsA.id, true)
       setDistillModel(wsA.id, 'fake-chat')
       const attempts1 = distillAttemptsForSmoke()
@@ -375,6 +410,7 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
         distillHttpAttemptsForSmoke() === 0 // FAKE = zero real sockets, ever
 
       // ── (g) retention honesty: cap 4, land 9 more → evictions COUNTED ──────
+      marks.stage = 'retention'
       setDraftCapsForSmoke({ maxDrafts: 4 })
       const before = handleBrainDrafts({ root: F.repo })
       const beforeRows = before.ok ? before.drafts.length : -1
@@ -422,7 +458,16 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
       // fill technique) — the vocabulary the tracker reads from a shell — so the ring it
       // saturates is the shipped ring at the shipped cap, and the saturation itself is
       // ASSERTED: a run that failed to overrun the ring goes red, never quietly vacuous.
+      //
+      // Poll budgets here are sized to what each step DOES, not padded: this act is the
+      // gate's long tail and every second of it is spent before any of the seventeen flags
+      // above can be written out. A restart is a real PTY respawn (7.5s), the fill is one
+      // ~13KB xterm write the tracker drains in well under a second (9s), a shell `exit` is
+      // four pokes of 2.4s (the PANERESTART trap: a booting shell drops the first write),
+      // the life-3 arc is two blocks (6s), and the draft is one file write behind the
+      // session-end channel (12s) — 61.2s worst case, against 85.6s before.
       setDraftCapsForSmoke({}) // (g) is measured — retention must not eat this evidence
+      marks.stage = 'ring'
       const RING_CAP = 300 // block-tracker.ts MAX_BLOCKS
       const RING_FILL = 330 // past the cap even with life 1's blocks: the ring MUST shift
       const LIFE3_CMD = 'ringlife3-probe'
@@ -440,7 +485,7 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
         if (clicked !== 1) return false
         return waitFor(
           () => ES<boolean>(`(() => { const p = ${ringPane}; return !!p && !p.dead() })()`).catch(() => false),
-          30, 400
+          25, 300 // 7.5s: one PTY respawn through the daemon
         )
       }
       // Session end is a REAL process exit. A freshly respawned shell can miss the first
@@ -451,7 +496,7 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
           await ES(`(() => { const p = ${ringPane}; if (p) p.write('exit\\r'); return 1 })()`).catch(() => 0)
           const died = await waitFor(
             () => ES<boolean>(`(() => { const p = ${ringPane}; return !!p && p.dead() })()`).catch(() => false),
-            8, 400
+            6, 400 // 2.4s per poke, four pokes: the retries are the coverage, not the window
           )
           if (died) return true
         }
@@ -474,7 +519,7 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
       const emissions0 = captureStatsForSmoke().session
 
       // life 2: flood the ring past its cap, then end the session
-      const life2Alive = await ringRestart()
+      const life2Alive = mark('life2Alive', await ringRestart())
       if (life2Alive) {
         await ES(
           `(() => { const p = ${ringPane}; if (!p) return 0; ` +
@@ -485,12 +530,27 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
             `p.term.write(s); return ${RING_FILL} })()`
         ).catch(() => 0)
       }
-      const ringSaturated = life2Alive && (await waitFor(async () => (await readRing()).n >= RING_CAP, 40, 300))
-      const ringFilled = await readRing()
-      const life2Ended = ringSaturated && (await ringEndLife())
+      // BOTH halves of "the ring really shifted" in ONE predicate. Split across two round
+      // trips they were a race by construction: at the instant `n` first reaches 300 the
+      // last id is EXACTLY 300, and only the poll gap made the follow-up read see 301+.
+      // Waiting on the conjunction is the same claim with the luck taken out — ids outran
+      // indices while the ring sat at its cap, observed together.
+      const ringSaturated = mark(
+        'ringSaturated',
+        life2Alive &&
+          (await waitFor(
+            async () => {
+              const r = await readRing()
+              return r.n >= RING_CAP && r.last > RING_CAP
+            },
+            30, 300 // 9s: one ~13KB xterm write, drained by the tracker
+          ))
+      )
+      const ringFilled = mark('ringFilled', await readRing())
+      const life2Ended = mark('life2Ended', ringSaturated && (await ringEndLife()))
 
       // life 3: one distinct arc, and its draft is the whole claim
-      const life3Alive = life2Ended && (await ringRestart())
+      const life3Alive = mark('life3Alive', life2Ended && (await ringRestart()))
       if (life3Alive) {
         await ES(
           `(() => { const p = ${ringPane}; if (!p) return 0; ` +
@@ -500,13 +560,23 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
             `osc('A') + osc('B') + c + osc('C') + '\\r\\n' + osc('D;0')); return 1 })()`
         ).catch(() => 0)
       }
-      const life3Minted =
-        life3Alive && (await waitFor(async () => (await readRing()).last >= ringFilled.last + 2, 30, 300))
-      const ringAfterLife3 = await readRing()
-      const life3Ended = life3Minted && (await ringEndLife())
-      const life3Landed = life3Ended && (await waitFor(() => life3Draft() !== '', 30, 500))
+      const life3Minted = mark(
+        'life3Minted',
+        life3Alive &&
+          (await waitFor(
+            async () => (await readRing()).last >= ringFilled.last + 2,
+            20, 300 // 6s: two blocks from one xterm write
+          ))
+      )
+      const ringAfterLife3 = mark('ringAfterLife3', await readRing())
+      const life3Ended = mark('life3Ended', life3Minted && (await ringEndLife()))
+      const life3Landed = mark(
+        'life3Landed',
+        life3Ended && (await waitFor(() => life3Draft() !== '', 24, 500)) // 12s: one draft file write
+      )
       const life3Bytes = life3Draft()
-      const ringEmissions = captureStatsForSmoke().session - emissions0
+      const ringEmissions = mark('ringEmissions', captureStatsForSmoke().session - emissions0)
+      marks.stage = 'verdict'
       const ringOk =
         life2Alive &&
         ringSaturated &&
@@ -576,7 +646,7 @@ export function runBrainCapSmoke(win: BrowserWindow): void {
         platform: process.platform
       }
     } catch (e) {
-      result = { pass: false, error: String(e), stage: fx ? 'assertions' : 'fixture' }
+      result = { pass: false, error: String(e), stage: fx ? 'assertions' : 'fixture', marks }
     }
     setDraftCapsForSmoke({})
     for (const c of clients) c.kill()

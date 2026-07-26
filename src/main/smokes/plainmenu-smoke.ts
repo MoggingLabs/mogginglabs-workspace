@@ -34,7 +34,25 @@ import { setAgentDetectOverrideForSmoke } from '../agents'
 // agent session is a replayed detection event (__mogging.agents.detected) — no real CLI, no
 // network. Writes out/plainmenu-result.json, then exits (0=pass, 1=fail).
 export function runPlainMenuSmoke(win: BrowserWindow): void {
-  setTimeout(() => app.exit(1), 90000)
+  const resultFile = join(process.cwd(), 'out', 'plainmenu-result.json')
+  let done = false
+  const writeResult = (o: object): void => {
+    try {
+      writeFileSync(resultFile, JSON.stringify(o, null, 2))
+    } catch {
+      /* best effort */
+    }
+  }
+  // Where the run currently is, so the net below NAMES the stall. A gate that burns its
+  // outer timeout (150s) writes no result file at all and reports MISSING — strictly worse
+  // to diagnose than a FAIL, because there is nothing to read.
+  let stage = 'boot'
+  setTimeout(() => {
+    if (done) return
+    done = true
+    writeResult({ pass: false, error: 'TIMEOUT: plainmenu smoke did not complete', stage })
+    app.exit(1)
+  }, 90000)
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -118,15 +136,18 @@ export function runPlainMenuSmoke(win: BrowserWindow): void {
       await publishInstalled()
 
       // ── plain: a live shell, no session — the entries are offered ──────────────────
+      stage = 'plain'
       const plain = await untilMenu(paneId, (m) => m.opened && m.launch >= 1)
 
       // ── agent: replay the backend's detection verdict — the entries retire, the
       //    Agent CLI fact appears (the menu still tells the truth about the pane) ─────
+      stage = 'agent'
       await ES(`window.__mogging.agents.detected({ id: ${paneId}, agentId: 'codex', cwd: '', sinceMs: 5000 })`)
       const agent = await untilMenu(paneId, (m) => m.opened && m.launch === 0 && m.agentNote)
 
       // ── live: the open menu shows the FULL fact set for a detected agent, and follows
       //    fact changes in place (neither closing nor going stale) ─────────────────────
+      stage = 'live'
       const live0 = await ES<Record<string, boolean>>(`(async () => {
         const sleep = ms => new Promise(r => setTimeout(r, ms))
         const button = document.querySelector('.layout-slot[data-pane-id="${paneId}"] [aria-label="Pane menu"]')
@@ -168,11 +189,13 @@ export function runPlainMenuSmoke(win: BrowserWindow): void {
       }
 
       // ── gone: the agent's exit verdict clears the session — the entries return ─────
+      stage = 'gone'
       await ES(`window.__mogging.agents.detected({ id: ${paneId}, agentId: null })`)
       const gone = await untilMenu(paneId, (m) => m.opened && m.launch >= 1 && !m.agentNote)
 
       // ── dead: kill the shell itself; entries go, the menu (Rename) survives ────────
       // The write must land in a LIVE PTY (a still-spawning one drops it silently).
+      stage = 'dead'
       let paneWasLive = false
       for (let i = 0; i < 60 && !paneWasLive; i++) {
         paneWasLive = Boolean(await ES(`window.__mogging.agents.paneLive(${paneId})`))
@@ -215,6 +238,7 @@ export function runPlainMenuSmoke(win: BrowserWindow): void {
       // The hosts are unknown to the settings store, so the ssh spawn is refused in the
       // main process (daemon-relay) — no session, no cwd event, which is exactly the pane
       // under test. The same fixture CHROMEUX builds its remote pane with.
+      stage = 'copyCwd'
       const remoteBase = await ES<number>(`(() => {
         window.__mogging.workspace.create({
           name: 'RemoteMenu',
@@ -224,13 +248,21 @@ export function runPlainMenuSmoke(win: BrowserWindow): void {
         })
         return window.__mogging.workspace.active().ordinal * 100
       })()`)
-      await sleep(900)
-      // Bounded polls: the menu is rebuilt on every open, so one read is normally the whole
-      // story — the retries only cover the new grid still mounting. Short on purpose, so a
-      // PRE-FIX build fails fast instead of spending the gate's budget waiting for an
-      // absence that can never arrive.
-      const remoteNoCwd = await untilMenu(remoteBase + 2, (m) => m.opened && m.rename && !m.copyCwd, 8)
-      const remoteWithCwd = await untilMenu(remoteBase + 3, (m) => m.opened && m.rename && m.copyCwd, 8)
+      // Settle-then-confirm rather than a guessed mount time: wait for the LAST of the three
+      // slots to exist, which is the only thing the old fixed sleep was standing in for.
+      let remoteMounted = false
+      for (let i = 0; i < 40 && !remoteMounted; i++) {
+        remoteMounted = await ES<boolean>(
+          `!!document.querySelector('.layout-slot[data-pane-id="${remoteBase + 3}"]')`
+        )
+        if (!remoteMounted) await sleep(150)
+      }
+      // The menu is rebuilt on every open, so one read is normally the whole story — these
+      // polls only cover a JUST-created 3-pane workspace still coming up. Same cap as every
+      // other menu poll in this file: the old 8 (~2s) saved a pre-fix build ~8s of a 150s
+      // budget and paid for it with the mount-latency margin a correct build needs.
+      const remoteNoCwd = await untilMenu(remoteBase + 2, (m) => m.opened && m.rename && !m.copyCwd)
+      const remoteWithCwd = await untilMenu(remoteBase + 3, (m) => m.opened && m.rename && m.copyCwd)
       const copyCwd = {
         // The absence is only meaningful on a menu that provably BUILT (Rename + Clear
         // terminal) for the provably REMOTE pane (its own "Remote: …" fact row).
@@ -241,6 +273,7 @@ export function runPlainMenuSmoke(win: BrowserWindow): void {
           remoteWithCwd.opened && remoteWithCwd.rename && remoteWithCwd.clear &&
           remoteWithCwd.remoteFact && remoteWithCwd.copyCwd,
         local: plain.copyCwd,
+        remoteMounted, // diagnostics: the grid really built before either menu was read
         noCwd: remoteNoCwd,
         withCwd: remoteWithCwd
       }
@@ -254,17 +287,16 @@ export function runPlainMenuSmoke(win: BrowserWindow): void {
         dead.opened && dead.launch === 0 && dead.rename &&
         stillInstalled &&
         copyCwd.ok
+      stage = 'done'
       result = { pass, plain, agent, live, gone, dead, paneWasLive, exited, stillInstalled, copyCwd }
     } catch (error) {
-      result = { pass: false, error: String(error) }
+      result = { pass: false, error: String(error), stage }
     } finally {
       setAgentDetectOverrideForSmoke(null)
     }
-    try {
-      writeFileSync(join(process.cwd(), 'out', 'plainmenu-result.json'), JSON.stringify(result, null, 2))
-    } catch {
-      /* best effort */
-    }
+    if (done) return // the net already wrote its verdict and is on its way out
+    done = true
+    writeResult(result)
     app.exit(result.pass ? 0 : 1)
   }
 

@@ -32,7 +32,15 @@ const reattached = new Set<number>()
  *  the session config overrides on a pane that no longer exists, booking it agent-bearing
  *  and typing `claude --resume <uuid>` into an id the app reuses. F018's stance, for a
  *  vanished PANE rather than a vanished cwd. Cleared by mark(), so a recycled id starts
- *  clean the moment its new pane shows any sign of life. */
+ *  clean the moment its new pane shows any sign of life.
+ *
+ *  Bounded twice, and a caller must say which bound it leans on:
+ *   - it is per-ID, so it answers "this id was closed", never "this pane is still yours" —
+ *     a replacement pane's first sign of life is exactly what clears it. Identity ACROSS a
+ *     reuse belongs to the pane-instance port, and the launch path reads both;
+ *   - it can only hold back what its reader has not started yet. A launch that prefetched
+ *     its command build before waiting has already spent that build's main-side state, and
+ *     no read of this flag refunds it — it stops the typing, not the spend. */
 const gone = new Set<number>()
 /** When each pane went live (performance.now()) — the LAUNCHNOW gate's evidence
  *  that lineup commands land immediately after the first output, never on a timer. */

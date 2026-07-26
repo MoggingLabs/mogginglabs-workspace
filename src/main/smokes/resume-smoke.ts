@@ -29,16 +29,26 @@ import { paneHasAgent } from '../agent-presence'
 //   (7) EXACT RESUME the relaunched claude pane is TYPED `claude --resume <THE uuid>` —
 //                    observed in the pane's own PTY echo — and the armed intent is
 //                    consumed (empty map afterwards; consume-once).
-// Plus three REFUSALS, each one a launch that must NOT be spent, and isn't: a vanished cwd
-// (F018), a save that cannot re-derive its sessions (it HOLDS them rather than erasing them),
-// and a pane CLOSED under a waiting lineup (the launch bails before consuming its intent).
+// Plus five REFUSALS: a vanished cwd (F018), a save that cannot re-derive its sessions (it
+// HOLDS them rather than erasing them), a pane CLOSED under a waiting lineup (the launch bails
+// before consuming its intent), the same lineup when a SPLIT hands its id to a brand-new pane
+// (identity, not the id, decides — nothing is typed into the stranger), and a held session
+// whose SLOT has since been re-let to a moved pane (the graft is refused, rather than arming
+// one pane's conversation inside another).
 // Writes out/resume-result.json, then exits (0=pass, 1=fail).
 
 const UUID_A = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
 // The session armed on the SHELL slot for the cancel-mid-flight act — a second uuid, so the
 // intent that must survive is provably that act's own and not step (2)'s leftover.
 const UUID_B = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff'
+// ...and a third for the moved-pane act, so the session that must NOT travel is provably the
+// one Delta recorded and not a leftover of either act above.
+const UUID_C = 'cccccccc-dddd-4eee-8fff-aaaaaaaaaaaa'
 const CLOSED_PANE = 102 // Alpha slot 2: a shell, so nothing else ever books it agent-bearing
+const MOVED_PANE = 205 // born in Bravo (ordinal 2), dragged into Delta's slot 1
+
+/** One workspace's row in the stored snapshot — meta plus the per-slot sessions. */
+type SnapshotRow = NonNullable<ReturnType<typeof lastSessionSnapshotForSmoke>>['workspaces'][number]
 
 const stripAnsi = (s: string): string =>
   s
@@ -278,9 +288,133 @@ export function runResumeSmoke(win: BrowserWindow): void {
         armedAfterCancel.some((i) => i.paneId === CLOSED_PANE && i.sessionId === UUID_B) &&
         paneHasAgent(CLOSED_PANE) === false
 
+      // ── row 26 "recycled-id": a lineup parked on a CLOSED pane must not type into the
+      // pane that takes its id ─────────────────────────────────────────────────────────
+      // The far side of row 25. `gone` is per-ID and any mark() clears it, so the stranger
+      // pane's own first sign of life is what un-flags the id: the new pane's spawn reply
+      // both clears `gone` AND resolves the waiter the parked lineup is sitting on, TRUE.
+      // isPaneGone then reads false and the lineup ran on and typed `claude --resume <the
+      // DEAD pane's uuid>` into a terminal the user had just split open — someone else's
+      // conversation, in a pane that never asked for one. Identity across a reuse belongs to
+      // the pane-instance port, not to the id, and the launch path now reads both.
+      //
+      // Row 25 left pane 102 closed, so seed a real one first: an xterm that has not mounted
+      // reports NO instance, and an undefined capture rightly accepts the mount (restore asks
+      // for its lineup before the grid builds the panes) — which would make this act vacuous.
+      await ES(`window.__mogging.layout.split('h'); 1`)
+      const recycledSeeded = await waitTrue(
+        `window.__mogging.layout.paneIds().includes(${CLOSED_PANE}) && window.__mogging.agents.paneLive(${CLOSED_PANE})`,
+        60,
+        250
+      )
+      setPaneSessionLogOverrideForSmoke(CLOSED_PANE, { provider: 'claude', file: sessionFileB })
+      await save([wsA, wsB], 'resume-a') // same count: mirrors, and slot 2 carries UUID_B again
+      await ES(`window.bridge.invoke('workspace:restoreSession')`)
+      const recycledArmed = resumeIntentsForSmoke().some(
+        (i) => i.paneId === CLOSED_PANE && i.sessionId === UUID_B
+      )
+      setPaneSessionLogOverrideForSmoke(CLOSED_PANE, null)
+      // The spy the shipped client already feeds (agents.client's devSpy) — planted before the
+      // launch, so a typed line has nowhere to hide.
+      await ES(`window.__mogging.ptyWrites = []; 1`)
+      // Park the lineup, take its pane away, and hand the id straight to a stranger: the split
+      // takes the lowest free slot, which is the one just vacated.
+      const recycledCloseIds = await ES<string>(
+        `(() => {
+          const before = window.__mogging.layout.paneIds().join(',')
+          window.__mogging.agents.launchIn(${CLOSED_PANE}, 'claude', ${JSON.stringify(cwdA)}, undefined, true).catch(() => {})
+          window.__mogging.layout.close(${CLOSED_PANE})
+          const afterClose = window.__mogging.layout.paneIds().join(',')
+          window.__mogging.layout.split('h')
+          return before + '|' + afterClose
+        })()`
+      )
+      // Wait for the RECYCLE itself rather than a clock: the new pane speaking is the moment
+      // `gone` is cleared and the moment the parked waiter is released, so past it the old
+      // bytes had nothing left standing between them and the write.
+      const recycledLive = await waitTrue(
+        `window.__mogging.layout.paneIds().includes(${CLOSED_PANE}) && window.__mogging.agents.paneLive(${CLOSED_PANE})`,
+        60,
+        250
+      )
+      // ...then poll for the defect's own signature, which exits the moment it appears — a
+      // pre-fix run spends only the one command-build round trip getting here.
+      const recycledTyped = await waitTrue(
+        `(window.__mogging.ptyWrites || []).some((w) => w.id === ${CLOSED_PANE})`,
+        40,
+        250
+      )
+      const recycledWrites = await ES<Array<{ id: number; data: string }>>(
+        `(window.__mogging.ptyWrites || []).filter((w) => w.id === ${CLOSED_PANE}).map((w) => ({ id: w.id, data: String(w.data).slice(0, 200) }))`
+      )
+      const recycledSession = await ES<{ provider?: string } | null>(
+        `window.__mogging.agents.session(${CLOSED_PANE}) || null`
+      )
+      // The intent is the other half: unspent, so the pane that OWNS it can still be restored.
+      const recycledIntentHeld = resumeIntentsForSmoke().some(
+        (i) => i.paneId === CLOSED_PANE && i.sessionId === UUID_B
+      )
+      const recycledIds = recycledCloseIds.split('|')
+      const recycledIdRefused =
+        recycledSeeded &&
+        recycledArmed &&
+        (recycledIds[0]?.split(',') ?? []).includes(String(CLOSED_PANE)) &&
+        !(recycledIds[1]?.split(',') ?? []).includes(String(CLOSED_PANE)) &&
+        recycledLive && // the id really was re-let, so the guard really was under test
+        !recycledTyped &&
+        recycledWrites.length === 0 &&
+        !recycledWrites.some((w) => w.data.includes(UUID_B)) &&
+        recycledIntentHeld &&
+        recycledSession?.provider !== 'claude'
+
+      // ── the hold above is keyed by PANE, not by slot ─────────────────────────────────
+      // A held array is a list of SLOTS, and armResumeIntents resolves it through the meta it
+      // rides — so grafting one onto a meta whose `paneIds` have MOVED re-keys every session
+      // onto the new occupant. Delta records a session on its slot 1 (the formula's pane 401);
+      // the lock then goes away, exactly as in the blind save above, so the graft is the ONLY
+      // path a session can still reach the snapshot. Two blind saves follow. The first leaves
+      // the pane map alone and must still HOLD (else the refusal below proves nothing but a
+      // disabled fallback); the second hands slot 1 to pane 205, dragged in from Bravo, and
+      // must refuse — pane 401 left and took its conversation with it. Pre-fix the session
+      // follows the SLOT, and restoring types Delta's conversation into Bravo's terminal while
+      // the pane that owns it resumes nothing.
+      const sessionFileC = join(tmpdir(), 'mog-resume-home', 'projects', 'x', `${UUID_C}.jsonl`)
+      const wsD = {
+        id: 'resume-d',
+        name: 'Delta',
+        color: '#f5a524',
+        cwd: cwdB,
+        ordinal: 4,
+        paneCount: 2,
+        assignments: ['claude', 'shell']
+      }
+      const deltaRow = (): SnapshotRow | undefined =>
+        lastSessionSnapshotForSmoke()?.workspaces.find((w) => w.id === 'resume-d')
+      setPaneSessionLogOverrideForSmoke(401, { provider: 'claude', file: sessionFileC })
+      await save([wsA, wsB, wsD], 'resume-a') // growth: mirrors, and Delta records slot 1
+      const movedRecorded = deltaRow()?.paneSessions?.[0]?.sessionId === UUID_C
+      setPaneSessionLogOverrideForSmoke(401, null) // blind from here — only the hold can answer
+      const movedColor = '#7c5cff' // the witness that each blind save really rewrote Delta's row
+      await save([wsA, wsB, { ...wsD, color: movedColor }], 'resume-a')
+      const unmovedRow = deltaRow()
+      const movedHeldWhenUnmoved =
+        unmovedRow?.color === movedColor && unmovedRow?.paneSessions?.[0]?.sessionId === UUID_C
+      await save([wsA, wsB, { ...wsD, color: movedColor, paneIds: [MOVED_PANE, null] }], 'resume-a')
+      const movedRow = deltaRow()
+      await ES(`window.bridge.invoke('workspace:restoreSession')`) // arms an intent per slot
+      const armedAfterMove = resumeIntentsForSmoke()
+      const movedPaneNotArmed =
+        movedRecorded &&
+        movedHeldWhenUnmoved &&
+        movedRow?.paneIds?.[0] === MOVED_PANE && // the moved meta really landed in the snapshot
+        !armedAfterMove.some((i) => i.paneId === MOVED_PANE) &&
+        !armedAfterMove.some((i) => i.sessionId === UUID_C)
+
       const pass =
         missingCwdRefused &&
         cancelMidFlightRefused &&
+        recycledIdRefused &&
+        movedPaneNotArmed &&
         blindSaveHeldSessions &&
         noSnapshot &&
         emptyOffered &&
@@ -303,6 +437,20 @@ export function runResumeSmoke(win: BrowserWindow): void {
         cancelArmed,
         cancelCloseIds,
         armedAfterCancel,
+        recycledIdRefused,
+        recycledWrites,
+        recycledIntentHeld,
+        recycledSession,
+        recycledSeeded,
+        recycledArmed,
+        recycledCloseIds,
+        recycledLive,
+        recycledTyped,
+        movedPaneNotArmed,
+        movedRecorded,
+        movedHeldWhenUnmoved,
+        movedSessions: movedRow?.paneSessions ?? null,
+        armedAfterMove,
         blindSaveHeldSessions,
         blindSaveSessions: snapAfterBlind?.workspaces[0]?.paneSessions ?? null,
         noSnapshot,
@@ -326,6 +474,7 @@ export function runResumeSmoke(win: BrowserWindow): void {
     } finally {
       setPaneSessionLogOverrideForSmoke(101, null)
       setPaneSessionLogOverrideForSmoke(CLOSED_PANE, null)
+      setPaneSessionLogOverrideForSmoke(401, null)
     }
     try {
       writeFileSync(join(process.cwd(), 'out', 'resume-result.json'), JSON.stringify(result, null, 2))
