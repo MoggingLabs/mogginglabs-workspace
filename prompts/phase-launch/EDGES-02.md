@@ -302,3 +302,38 @@ rubric exists to prevent: 1 · 11 · 16 · 22 · 23 · 24 · 25 · 26 · 27 · 2
   1007ms this run (far worse), and F019's diff runs only in `dispose()`, never in the 16-pane
   render/stress path, so it cannot move the budget. The machine is heavily loaded after a long
   gate session; the band matches the recorded 187-229ms signature that passes CI soft-GPU.
+
+## Perf, settled on CI (2026-07-26) — the load question, answered without a quiet box
+
+The local box never quieted: five OTHER Claude sessions held 59-71% of a core each, all
+session, and nothing inside this session may stop them. So the measurement was moved to
+machines that are quiet by construction — `gh workflow run ci.yml -f sweeps=linux,macos,windows`
+(run `30181446242`, commit `5b14cea`).
+
+Every load-bound gate passed on every platform:
+
+| gate | linux | macos-26 | windows-latest |
+| --- | --- | --- | --- |
+| MILESTONE | PASS | PASS | PASS |
+| PERCEPTION | PASS | PASS | PASS |
+| FLICKER | PASS | PASS | PASS |
+
+Whole-sweep verdicts were 198/200 (linux), 198/200 (macos), 199/200 (windows). The failures
+were PRODARTIFACT on all three (F047, since fixed and re-proven green on all three), PANERESTART
+on linux alone, and BRAINMILESTONE on macos alone — none of them a frame budget.
+
+**What this settles:** the local 187-229ms MILESTONE band is this box, not this diff. That was
+already argued from a stashed-HEAD baseline measuring WORSE than the change (298.7ms vs 215.3ms);
+three independent quiet machines now agree, and FLICKER — the third member of the load-bound
+family, and the CPU-heaviest thing the app does — is green alongside.
+
+**What this does NOT settle, stated plainly:** all three sweep jobs run `MOGGING_CI_GPU=soft`,
+a SOFTWARE renderer. MILESTONE's budget is a frame-gap budget, which is exactly the quantity a
+software renderer changes. So a real-GPU idle-box run remains unobtained, and the CHECKLIST's
+OPERATOR box stays `[~]` rather than being ticked on evidence that does not reach it. The open
+question is now the GPU profile alone, not machine load.
+
+**Method worth keeping:** a perf gate blocked on a busy box is not blocked — CI's
+`workflow_dispatch` takes a `gates` subset and a `sweeps` OS list, so one gate on one clean
+runner is a minute's dispatch. It also reaches what this box structurally cannot: FUSES passes
+on CI while failing locally as an AV condition, and the POSIX signal act only ever executes there.
