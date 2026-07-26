@@ -355,6 +355,15 @@ export function runResumeSmoke(win: BrowserWindow): void {
         (i) => i.paneId === CLOSED_PANE && i.sessionId === UUID_B
       )
       const recycledIds = recycledCloseIds.split('|')
+      // Count TYPING, not bytes. A pane that takes focus answers the wire on its own:
+      // xterm writes CSI I / CSI O for focus tracking, and CPR and DA replies arrive the
+      // same way. None of it is a launch. Asserting zero WRITES red a CORRECT build on
+      // Windows CI for exactly that reason, and this repo has been here before - terminal
+      // auto-replies once cleared the attention latch on the same mistake. Reuses this
+      // file's own stripAnsi rather than a second copy of the escape grammar.
+      const recycledTypedBytes = recycledWrites.filter(
+        (w) => stripAnsi(String(w.data)).trim() !== ''
+      )
       const recycledIdRefused =
         recycledSeeded &&
         recycledArmed &&
@@ -362,7 +371,15 @@ export function runResumeSmoke(win: BrowserWindow): void {
         !(recycledIds[1]?.split(',') ?? []).includes(String(CLOSED_PANE)) &&
         recycledLive && // the id really was re-let, so the guard really was under test
         !recycledTyped &&
-        recycledWrites.length === 0 &&
+        // Count TYPING, not bytes. A pane that takes focus answers the wire on its own:
+        // xterm's focus tracking writes CSI I / CSI O, and CPR and DA replies arrive the same
+        // way — none of it is a launch. Asserting `recycledWrites.length === 0` therefore red
+        // a CORRECT build on Windows CI, where the fresh pane focused and reported it
+        // (`[{"id":102,"data":"[O"},{"id":102,"data":"[I"}]`). This repo has been
+        // here before: terminal auto-replies once cleared the attention latch for the same
+        // reason. The claim is that the parked lineup typed nothing into a pane it no longer
+        // owns, so the assertion is over payload — anything that is not a bare control reply.
+        recycledTypedBytes.length === 0 &&
         !recycledWrites.some((w) => w.data.includes(UUID_B)) &&
         recycledIntentHeld &&
         recycledSession?.provider !== 'claude'
@@ -439,6 +456,7 @@ export function runResumeSmoke(win: BrowserWindow): void {
         armedAfterCancel,
         recycledIdRefused,
         recycledWrites,
+        recycledTypedBytes, // the same list with the terminal's own answerbacks removed
         recycledIntentHeld,
         recycledSession,
         recycledSeeded,

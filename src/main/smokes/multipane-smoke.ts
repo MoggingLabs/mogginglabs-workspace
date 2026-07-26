@@ -66,13 +66,21 @@ const SCRIPT = `(async () => {
         // Non-vacuity, stated: 80x24 is exactly what xterm carries when NOTHING measured it,
         // which is what the pre-fix spawn sent for a fully measurable pane.
         !(vd.cols === 80 && vd.rows === 24) &&
-        // ...and it is THIS pane's grid, not merely some other number. Compared with a small
-        // tolerance rather than by equality: the spawn measures against the DOM renderer and
-        // WebGL attaches ~60ms later, and WebGL floors cells at DEVICE pixels while the DOM
-        // renderer does not (PANEFIT A2 asserts those two measures DIFFER), so the post-swap
-        // refit may legitimately land a column or a row away. A pre-fix 80x24 claim is nowhere
-        // near this window, so the tolerance costs the assertion nothing.
-        Math.abs(vd.cols - measuredNow.cols) <= 2 && Math.abs(vd.rows - measuredNow.rows) <= 2,
+        // ...and it is a real grid rather than a sentinel.
+        //
+        // It deliberately does NOT compare against the pane's CURRENT size. That comparison was
+        // here and was wrong: this smoke builds EIGHT panes, so by the time anything can be read
+        // back, pane 0 has been resized by the seven that mounted after it. The first CI run said
+        // so exactly - claimed 108x30, measuredNow 28x14, both correct, the assertion impossible.
+        // A spawn-time claim can only be compared against a spawn-time measurement, and nothing
+        // here holds one.
+        //
+        // What survives is still the whole of the defect: pre-fix, a measurable visible pane sent
+        // xterm's CONSTRUCTED 80x24 - not approximately, exactly, because the ResizeObserver's
+        // first callback lands a frame after the spawn. So "an object, and not 80x24" separates
+        // fixed from pre-fix on the nose. What it no longer claims is "and that number is right",
+        // which is PANEFIT's job and is asserted there against a stable single-pane layout.
+        vd.cols > 0 && vd.rows > 0,
       mountedVisible: isShown,
       spawnIssued: vd !== undefined,
       claimed: vd === undefined ? 'spawn-never-issued' : vd,
