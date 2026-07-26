@@ -337,3 +337,40 @@ question is now the GPU profile alone, not machine load.
 `workflow_dispatch` takes a `gates` subset and a `sweeps` OS list, so one gate on one clean
 runner is a minute's dispatch. It also reaches what this box structurally cannot: FUSES passes
 on CI while failing locally as an AV condition, and the POSIX signal act only ever executes there.
+
+## THE IDLE-BOX RUN HAPPENED — and MILESTONE still fails (2026-07-26)
+
+The box finally went quiet (zero non-self `claude` processes above 40% of a core; a full-system
+census showed nothing above 25% once a stray `node` exited). Both gates were run on it.
+
+**PERCEPTION — PASS, comfortably.** `switchMax` **33.6 ms** against a 100 ms budget (samples
+28.1 / 19.8 / 25.7 / 22.5 / 33.6 / 30.8), `homeMax` 22.8, `zoomMax` 22.7, `echoMedian` **1.9 ms**
+against 60, and **zero** frames over 100 ms in churn, size-churn and torrent alike. This is the
+real cert for PERCEPTION: an idle machine, a real GPU, everything inside budget with room.
+
+**MILESTONE — FAIL, three times out of three.** Not machine load, and this is the point:
+
+| run | maxGapMs (budget 150) | longFrames100 | avgFps | idle-phase maxGap |
+| --- | --- | --- | --- | --- |
+| 1 | **270.7** | 1 | 125.5 | 7.1 |
+| 2 | **180.6** | 1 | 135.0 | — |
+| 3 | **215.2** | 1 | 133.0 | — |
+
+Heap 50 MB / 300, `webglVisible` 16/16, `mounted` 16, the idle phase spotless at 7.1 ms. So the
+whole failure is ONE frame in the 16-pane stress phase, every time, on a quiet machine.
+
+**Three things this changes.** First, the earlier attribution was incomplete: the loaded-box
+reading of 215.3 ms was treated as the load's doing, and a quiet box produces the SAME band
+(180-271). Load was never the whole story. Second, it is still not the classic regression
+signature — one long frame with `avgFps` 125-135 and a clean idle phase, which is this repo's
+recorded shape for a stall, not for a renderer that got slower. Third, and most usefully: this
+same commit PASSES MILESTONE on linux, macos-26 AND windows-latest under `MOGGING_CI_GPU=soft`.
+Soft-renders pass; this box's REAL GPU does not. That points at the real-GPU path for 16 live
+WebGL contexts — a shader compile, a texture upload, or a context-creation stall inside the
+stress window — rather than at anything the sweep's software renderer ever exercises.
+
+**Nothing is ticked on the strength of this.** The CHECKLIST's OPERATOR box stays `[~]`: the run
+it asked for has now HAPPENED, and it came back red, which is a finding to investigate rather
+than a box to check. A baseline probe against `origin/main` on this same quiet box is the
+obvious next step and was not run — it needs the working tree overwritten from another ref,
+which is the operator's call, not something to do unattended.
