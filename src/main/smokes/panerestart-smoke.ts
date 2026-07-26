@@ -172,27 +172,59 @@ export function runPaneRestartSmoke(win: BrowserWindow): void {
       // already reads in $?). Kept OUT of the win32 run entirely: there is no WIFSIGNALED
       // there, and a skip that reported itself as a passing assert would be a lie the
       // result file could not distinguish from the real thing.
+      // 128+9. Named once so the assertion and the message cannot drift apart again.
+      const SIGKILL_CODE = 137
       let signalDeathNamed = true
       let signalExitCode = -1
       let signalEpitaph =
         'skipped: POSIX-only — win32 has no WIFSIGNALED (ConPTY names a real exit code for every death)'
       if (process.platform !== 'win32') {
-        // -1 when the buffer holds no epitaph at all; the poll waits for a POSITIVE code,
-        // which the surviving "(code 0)" from the clean exit can never satisfy.
+        // -1 when the buffer holds no epitaph at all.
         const lastEpitaphCode =
           '(() => { let last = -1; ' +
           `for (const m of (${joined(paneId)}).matchAll(/\\[process exited \\(code (\\d+)\\)\\]/g)) last = Number(m[1]); ` +
           'return last })()'
+        // COUNT, not just the last value. The original guard waited for "last > 0" on the
+        // theory that the only epitaph above was the clean exit's "(code 0)" — untrue on
+        // Linux, where the Ctrl-U/Ctrl-C that clears the typed probe can itself KILL the
+        // shell (SIGINT), leaving a 130 epitaph in scrollback. "> 0" was then satisfied
+        // the instant the act began, by a death it did not stage, and the act proved
+        // nothing while reporting green. A delta cannot be satisfied by history.
+        const epitaphCount =
+          `((${joined(paneId)}).match(/\\[process exited \\(code \\d+\\)\\]/g) || []).length`
+        const beforeKill = await ES<number>(epitaphCount).catch(() => 0)
         try {
           await ES(`(() => { ${pane(paneId)}.write('kill -9 $$\\r'); return 1 })()`)
           // Short budget on purpose: a SIGKILL epitaph lands in well under a second, and
           // the gate's wall clock is shared with a fully-red run of every stage above.
-          signalDeathNamed = await until(`${lastEpitaphCode} > 0`, 24, 250)
+          //
+          // Two claims, deliberately separated — conflating them is what made this act green
+          // while proving nothing. `landed` says a death HAPPENED here (a new epitaph, not a
+          // stale one); the code says WHICH death. CI reported 130 (=128+2, SIGINT) against an
+          // epitaph string that hard-coded "SIGKILL = 128+9 = 137": the rule had fired, for a
+          // signal the act never staged. The number IS the claim, so it is asserted.
+          const landed = await until(`${epitaphCount} > ${beforeKill}`, 24, 250)
           signalExitCode = await ES<number>(lastEpitaphCode).catch(() => -1)
-          signalEpitaph = signalDeathNamed
-            ? 'signal death named: last epitaph code ' + signalExitCode + ' (SIGKILL = 128+9 = 137)'
-            : 'last epitaph code ' + signalExitCode +
-              ' — a SIGKILL is reported as a clean exit (the 128+signal rule is gone)'
+          signalDeathNamed = landed && signalExitCode === SIGKILL_CODE
+          if (!landed) {
+            signalEpitaph =
+              `the kill produced NO new epitaph (count still ${beforeKill}) — the act staged ` +
+              `nothing. A bare "last code > 0" here would have read a stale epitaph as a pass.`
+          } else if (signalExitCode === SIGKILL_CODE) {
+            signalEpitaph = `signal death named: epitaph code ${signalExitCode} (SIGKILL = 128+9)`
+          } else if (signalExitCode > 128) {
+            signalEpitaph =
+              `the 128+signal rule fired, but the staged death was NOT SIGKILL: epitaph code ` +
+              `${signalExitCode} = 128+${signalExitCode - 128}, expected ${SIGKILL_CODE}. ` +
+              `Something reached the shell before "kill -9 $$" did.`
+          } else if (signalExitCode > 0) {
+            signalEpitaph =
+              `epitaph code ${signalExitCode} is not a signal death at all (expected ${SIGKILL_CODE})`
+          } else {
+            signalEpitaph =
+              `epitaph code ${signalExitCode} — a SIGKILL is reported as a clean exit ` +
+              `(the 128+signal rule is gone)`
+          }
         } catch (error) {
           // Never let this act erase the diagnostics of the stages above it.
           signalDeathNamed = false
