@@ -9,10 +9,10 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 202 gates: 29 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 203 gates: 29 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
 # GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
-# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED · RESTEXEC · RESTIMPORT · FONTCOVER) + 173 app-boot
+# GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED · RESTEXEC · RESTIMPORT · FONTCOVER) + 174 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -615,6 +615,7 @@ run_smoke AGENTCFG     MOGGING_AGENTCFG 1 180 agentsettings
 run_smoke DEFAULTSTORE MOGGING_DEFAULTSTORE 1 120 defaultstore
 run_smoke PROFILEDEFAULTS MOGGING_PROFILEDEFAULTS 1 240 profiledefaults
 run_smoke DEFAULTSUX   MOGGING_DEFAULTSUX 1 240 defaultsux
+run_smoke DEFAULTSMILESTONE MOGGING_DEFAULTSMILESTONE 1 180 defaultsmilestone
 run_smoke FSLIST       MOGGING_FSLIST    1 120 fslist
 run_smoke FILETREE     MOGGING_FILETREE  1 300 filetree
 run_smoke EXPLORER     MOGGING_EXPLORER  1 240 explorer

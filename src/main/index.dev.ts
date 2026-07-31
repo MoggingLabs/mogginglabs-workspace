@@ -10,6 +10,7 @@ import { runAgentSettingsSmoke } from './smokes/agentsettings-smoke'
 import { runDefaultStoreSmoke } from './smokes/defaultstore-smoke'
 import { runProfileDefaultsSmoke } from './smokes/profiledefaults-smoke'
 import { runDefaultsUxSmoke } from './smokes/defaultsux-smoke'
+import { runDefaultsMilestoneSmoke } from './smokes/defaultsmilestone-smoke'
 import { runSetAgentConfigSmoke } from './smokes/setagentcfg-smoke'
 import { runCwdSmoke } from './smokes/cwd-smoke'
 import { runMcpSmoke } from './smokes/mcp-smoke'
@@ -233,7 +234,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_FSLIST', 'MOGGING_FILETREE', 'MOGGING_EXPLORER', 'MOGGING_EXPLORERRACE', 'MOGGING_TREELIVE', 'MOGGING_TREEGIT',
   'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE', 'MOGGING_AGENTCFG', 'MOGGING_GLOBALHOOKS',
   // Shared account defaults (ADR 0022, the phase-defaults pack).
-  'MOGGING_DEFAULTSTORE', 'MOGGING_PROFILEDEFAULTS', 'MOGGING_DEFAULTSUX',
+  'MOGGING_DEFAULTSTORE', 'MOGGING_PROFILEDEFAULTS', 'MOGGING_DEFAULTSUX', 'MOGGING_DEFAULTSMILESTONE',
   // ALERTAGREE pack (2026-07-18): the shipped notify artifacts' parity corpus.
   'MOGGING_NOTIFYPARITY'
 ]
@@ -373,6 +374,14 @@ async function beforeAppSettings(): Promise<boolean> {
   // pins, implicit pins, honest snapshot labels, the secret wall. Zero network.
   if (process.env.MOGGING_PROFILEDEFAULTS) {
     await runProfileDefaultsSmoke()
+    return true
+  }
+
+  // Windowless composed milestone (ADR 0022 step 05): THE authority on
+  // "phase-defaults done" — set → pin → change → adopt → drift-restore → reset →
+  // release → deny-secret, one story on four claude homes, zero network.
+  if (process.env.MOGGING_DEFAULTSMILESTONE) {
+    await runDefaultsMilestoneSmoke()
     return true
   }
 
