@@ -9,6 +9,7 @@ import { runGlobalHooksSmoke } from './smokes/globalhooks-smoke'
 import { runAgentSettingsSmoke } from './smokes/agentsettings-smoke'
 import { runDefaultStoreSmoke } from './smokes/defaultstore-smoke'
 import { runProfileDefaultsSmoke } from './smokes/profiledefaults-smoke'
+import { runDefaultsUxSmoke } from './smokes/defaultsux-smoke'
 import { runSetAgentConfigSmoke } from './smokes/setagentcfg-smoke'
 import { runCwdSmoke } from './smokes/cwd-smoke'
 import { runMcpSmoke } from './smokes/mcp-smoke'
@@ -232,7 +233,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_FSLIST', 'MOGGING_FILETREE', 'MOGGING_EXPLORER', 'MOGGING_EXPLORERRACE', 'MOGGING_TREELIVE', 'MOGGING_TREEGIT',
   'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE', 'MOGGING_AGENTCFG', 'MOGGING_GLOBALHOOKS',
   // Shared account defaults (ADR 0022, the phase-defaults pack).
-  'MOGGING_DEFAULTSTORE', 'MOGGING_PROFILEDEFAULTS',
+  'MOGGING_DEFAULTSTORE', 'MOGGING_PROFILEDEFAULTS', 'MOGGING_DEFAULTSUX',
   // ALERTAGREE pack (2026-07-18): the shipped notify artifacts' parity corpus.
   'MOGGING_NOTIFYPARITY'
 ]
@@ -639,6 +640,8 @@ function afterWindow(win: BrowserWindow): void {
     runSetShellSmoke(win) // env-gated settings-shell smoke: grouped nav, cards, measured spacing + AA (Phase-8.5/04)
   } else if (process.env.MOGGING_SETAGENTCFG) {
     runSetAgentConfigSmoke(win) // five-provider settings catalog, typed controls, real scope writes, remote honesty
+  } else if (process.env.MOGGING_DEFAULTSUX) {
+    runDefaultsUxSmoke(win) // ADR 0022 defaults face: Applies-to, once-only consent, promote chip, pin + reset (phase-defaults/04)
   } else if (process.env.MOGGING_SETINTEG) {
     runSetIntegSmoke(win) // env-gated integrations smoke: disclosure, attention-through-fold, hit targets (Phase-8.5/05)
   } else if (process.env.MOGGING_CONNLIVE) {

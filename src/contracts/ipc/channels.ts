@@ -75,6 +75,9 @@ export const AgentConfigChannels = {
   set: 'agentConfig:set',
   release: 'agentConfig:release',
   refresh: 'agentConfig:refresh',
+  setDefault: 'agentConfig:setDefault',
+  clearDefault: 'agentConfig:clearDefault',
+  promotable: 'agentConfig:promotable',
   changed: 'agentConfig:changed'
 } as const
 

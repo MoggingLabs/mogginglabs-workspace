@@ -34,6 +34,7 @@ import {
 } from './sources'
 import { agentConfigValueContainsSecretKey, validateAgentConfigMutation } from './validation'
 import { managedKeys, resolveDefault } from './account-defaults'
+import { redactSecrets } from '../review/redact'
 import { prepareAgentSessionOverlay, type PreparedAgentSessionOverlay } from './session-overlay'
 import type { CodexConfigObservation, CodexConfigResolverPort, CodexConfigSettingObservation } from './codex-app-server'
 
@@ -649,6 +650,70 @@ export class AgentSettingsService {
     }, delayMs)
     timer.unref?.()
     this.applyTimers.set(provider, timer)
+  }
+
+  /**
+   * The smart-promote scan (ADR 0022 step 04): keys with NO default that ≥2 account
+   * homes already hold at the SAME value — sameness that already exists, offered
+   * back as a one-click default. Suggestion data only: nothing is written here, and
+   * secret-shaped values never leave this method. Cost: one file read per home.
+   */
+  async promotableDefaults(provider: AgentConfigProviderId): Promise<Array<{
+    settingId: string
+    surface: AgentConfigOverrideRecord['surface']
+    value: AgentConfigValue
+    homes: number
+  }>> {
+    const catalog = this.catalog(provider)
+    const homes = this.providerHomes(provider)
+    if (!catalog || homes.length < 2) return []
+    const authored = this.options.repository.listAccountDefaults(provider)
+    const hasDefault = new Set(
+      authored.filter((row) => row.tier === 'default').map((row) => `${row.surface} ${row.settingId}`)
+    )
+    const texts: Array<Partial<Record<AgentConfigOverrideRecord['surface'], { text: string | null; format: string }>>> = []
+    for (const home of homes) {
+      const bySurface: (typeof texts)[number] = {}
+      for (const surface of ['runtime', 'tui'] as const) {
+        try {
+          const context = await this.options.resolveContext(provider, home.target)
+          const source = selectAgentConfigSource(provider, home.target, surface, context.paths)
+          if (!source?.file) continue
+          bySurface[surface] = { text: (await this.coordinator.read(source.file)).text, format: source.format }
+        } catch {
+          // An unreadable home simply cannot vote.
+        }
+      }
+      texts.push(bySurface)
+    }
+    const out: Array<{ settingId: string; surface: AgentConfigOverrideRecord['surface']; value: AgentConfigValue; homes: number }> = []
+    for (const setting of catalog.settings) {
+      if (out.length >= 40) break // suggestion list, not an inventory
+      if (!setting.writable || setting.sensitive || setting.editor === 'read-only' || setting.editor === 'dedicated') continue
+      if (!setting.scopes.includes('user') && !setting.scopes.includes('profile')) continue
+      if (hasDefault.has(`${setting.surface} ${setting.id}`)) continue
+      const values: AgentConfigValue[] = []
+      for (const bySurface of texts) {
+        const loaded = bySurface[setting.surface]
+        if (!loaded || loaded.text === null) continue
+        try {
+          const read = codecFor(loaded.format as Parameters<typeof codecFor>[0]).read(loaded.text, setting.path)
+          if (read.present) values.push(read.value as AgentConfigValue)
+        } catch {
+          // A malformed home cannot vote either.
+        }
+      }
+      if (values.length < 2) continue
+      const first = JSON.stringify(values[0])
+      if (!values.every((value) => JSON.stringify(value) === first)) continue
+      if (agentConfigValueContainsSecretKey(values[0])) continue
+      // String-shaped secrets (sk-…, ghp_…) never become suggestions either — the
+      // same redactor wall the store save would refuse them with, applied earlier.
+      if (redactSecrets(JSON.stringify(values[0])).redactions > 0) continue
+      if (!validateAgentConfigMutation(setting, values[0], 'set').ok) continue
+      out.push({ settingId: setting.id, surface: setting.surface, value: values[0], homes: values.length })
+    }
+    return out
   }
 
   /** The primary home's profile identity — the provider's pointer-less profile row. */
