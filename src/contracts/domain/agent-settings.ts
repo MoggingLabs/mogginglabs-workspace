@@ -18,6 +18,17 @@ export type AgentConfigScope =
 export type AgentConfigSurface = 'runtime' | 'tui'
 
 export type AgentConfigOwnership = 'once' | 'enforce'
+
+/** The cross-account tier (ADR 0022). `'default'` is a provider-level value that fans
+ *  out to EVERY account home; `'pin'` is one account's exception, which wins for its
+ *  own key only. Absent ⇒ a legacy scoped override, unchanged in meaning. The tier is
+ *  orthogonal to `AgentConfigScope` — it compiles into the real provider layers and
+ *  never widens that union. */
+export type AgentConfigTier = 'default' | 'pin'
+
+/** Sentinel `targetId` for `tier: 'default'` rows: they name every account of a
+ *  provider, not one home. Never a valid workspace or profile id (see ID shapes). */
+export const AGENT_CONFIG_ALL_ACCOUNTS = '__all__'
 export type AgentConfigIntentOperation = 'set' | 'unset'
 export type AgentConfigReleaseBehavior = 'keep' | 'restore'
 export type AgentConfigStability = 'stable' | 'experimental' | 'deprecated' | 'internal'
@@ -201,6 +212,10 @@ export interface AgentConfigOverrideRecord {
   provider: AgentConfigProviderId
   scope: AgentConfigScope
   targetId: string
+  /** ADR 0022: `'default'` (targetId `__all__`) or `'pin'` (targetId = profileId).
+   *  Tier rows are desired-state INPUT only — the legacy override listing never
+   *  returns them, so the enforce machinery stays blind until fan-out compiles them. */
+  tier?: AgentConfigTier
   surface: AgentConfigSurface
   settingId: string
   path: string[]

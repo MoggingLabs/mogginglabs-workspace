@@ -7,18 +7,24 @@
 import { randomUUID } from 'node:crypto'
 import type BetterSqlite3 from 'better-sqlite3'
 import { requireNative } from '@backend/platform/native-require'
+// Leaf imports only (the precedent: integrations/registry.ts, brain/capture.ts) — the
+// ADR-0022 deny-list reuses THE house secret detectors instead of growing a third one.
+import { redactSecrets } from '../review/redact'
+import { agentConfigValueContainsSecretKey } from '../agent-settings/validation'
 import { addColumnIfMissing } from './db-migrate'
 import { parseJsonCell, workspaceMetaToRow, workspaceRowToMeta, type WorkspaceRowCells } from './workspace-rows'
 import { boardRowToBoard, cardRowToCard, type BoardCardRowCells, type BoardRowCells } from './board-rows'
 
 const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 import {
+  AGENT_CONFIG_ALL_ACCOUNTS,
   BOARD_LIMITS,
   type AgentConfigOverrideRecord,
   type AgentConfigProviderId,
   type AgentConfigScope,
   type AgentConfigSurface,
   type AgentConfigSyncState,
+  type AgentConfigTier,
   type AgentConfigValue,
   type AgentProfile,
   type Board,
@@ -31,6 +37,19 @@ import {
   type WorkspaceState,
   type WorkspaceStateMeta
 } from '@contracts'
+
+/** The ADR-0022 deny-list: secret-shaped map KEYS (the agent-settings detector) and
+ *  secret-shaped string VALUES (the review redactor — the same patterns that refuse a
+ *  profile pointer env like `FAKE_KEY=sk-…`). Depth is already bounded by the IPC
+ *  shape guard (12) and validateShape; this walk mirrors those limits defensively. */
+function valueLooksSecret(value: AgentConfigValue | undefined, depth = 0): boolean {
+  if (value === undefined || value === null || depth > 12) return false
+  if (typeof value === 'string') return redactSecrets(value).redactions > 0
+  if (typeof value !== 'object') return false
+  if (agentConfigValueContainsSecretKey(value)) return true
+  const children = Array.isArray(value) ? value : Object.values(value)
+  return children.some((child) => valueLooksSecret(child, depth + 1))
+}
 
 export class SettingsStore {
   private readonly db: BetterSqlite3.Database
@@ -180,6 +199,11 @@ export class SettingsStore {
     // No CHECK constraint here — an old db must be able to hold a windows host later.
     addColumnIfMissing(this.db, 'app_remotes', 'platform', 'TEXT')
     addColumnIfMissing(this.db, 'app_remotes', 'shell', 'TEXT')
+    // ADR 0022: the cross-account tier. NULL = legacy scoped override, unchanged in
+    // meaning; 'default'/'pin' rows are desired-state INPUT that the legacy listing
+    // below deliberately never returns (the enforce machinery stays blind to them
+    // until fan-out compiles resolved values into real per-home rows).
+    addColumnIfMissing(this.db, 'app_agent_config_overrides', 'tier', 'TEXT')
   }
 
   load(): WorkspaceState {
@@ -255,7 +279,10 @@ export class SettingsStore {
     scope?: AgentConfigScope
     targetId?: string
   }): AgentConfigOverrideRecord[] {
-    const clauses: string[] = []
+    // The blindness law (ADR 0022): authored tier rows never reach the legacy
+    // machinery — reconcileAll must not try to enforce a row whose targetId is a
+    // sentinel, not a home.
+    const clauses: string[] = ["(tier IS NULL OR tier NOT IN ('default', 'pin'))"]
     const args: unknown[] = []
     if (filter?.provider) {
       clauses.push('provider = ?')
@@ -269,10 +296,14 @@ export class SettingsStore {
       clauses.push('target_id = ?')
       args.push(filter.targetId)
     }
+    return this.queryOverrideRows(clauses, args)
+  }
+
+  private queryOverrideRows(clauses: string[], args: unknown[]): AgentConfigOverrideRecord[] {
     const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : ''
     const rows = this.db
       .prepare(
-        `SELECT provider, scope, target_id AS targetId, surface, setting_id AS settingId,
+        `SELECT provider, scope, target_id AS targetId, tier, surface, setting_id AS settingId,
                 path, operation, desired_value AS desiredValue, ownership,
                 baseline_present AS baselinePresent, baseline_value AS baselineValue,
                 catalog_version AS catalogVersion, last_applied_value AS lastAppliedValue,
@@ -285,6 +316,7 @@ export class SettingsStore {
       provider: AgentConfigProviderId
       scope: AgentConfigScope
       targetId: string
+      tier: string | null
       surface: AgentConfigSurface
       settingId: string
       path: string
@@ -323,6 +355,7 @@ export class SettingsStore {
         provider: row.provider,
         scope: row.scope,
         targetId: row.targetId,
+        ...(row.tier === 'default' || row.tier === 'pin' ? { tier: row.tier } : {}),
         surface: row.surface,
         settingId: row.settingId,
         path,
@@ -348,17 +381,18 @@ export class SettingsStore {
     this.db
       .prepare(
         `INSERT INTO app_agent_config_overrides (
-           provider, scope, target_id, surface, setting_id, path, operation, desired_value,
+           provider, scope, target_id, tier, surface, setting_id, path, operation, desired_value,
            ownership, baseline_present, baseline_value, catalog_version,
            last_applied_value, last_applied_hash, status, last_error,
            created_at, updated_at, applied_at
          ) VALUES (
-           @provider, @scope, @targetId, @surface, @settingId, @path, @operation, @desiredValue,
+           @provider, @scope, @targetId, @tier, @surface, @settingId, @path, @operation, @desiredValue,
            @ownership, @baselinePresent, @baselineValue, @catalogVersion,
            @lastAppliedValue, @lastAppliedHash, @status, @lastError,
            @createdAt, @updatedAt, @appliedAt
          )
          ON CONFLICT(provider, scope, target_id, surface, setting_id) DO UPDATE SET
+           tier = excluded.tier,
            path = excluded.path,
            operation = excluded.operation,
            desired_value = excluded.desired_value,
@@ -375,6 +409,7 @@ export class SettingsStore {
       )
       .run({
         ...row,
+        tier: row.tier ?? null,
         path: JSON.stringify(row.path),
         // Keep a JSON null sentinel for `unset`; it also tolerates a pre-release
         // table whose desired_value column was created NOT NULL.
@@ -408,6 +443,70 @@ export class SettingsStore {
     this.db
       .prepare('DELETE FROM app_agent_config_overrides WHERE scope = ? AND target_id = ?')
       .run(scope, targetId)
+  }
+
+  // ── Shared account defaults (ADR 0022) ─────────────────────────────────────
+  // The cross-account tier: a 'default' row is a provider-level value keyed by
+  // (provider, settingId) under the `__all__` sentinel; a 'pin' row is one
+  // profile's exception. Both are desired-state INPUT — resolution/fan-out (the
+  // engine) compiles them into real per-home rows; nothing here touches a file.
+  // Unlike profiles/board rows (sanitized above this layer), the refusal lives
+  // HERE: every save path shares one boundary, so a secret-shaped default is
+  // impossible to persist, not just discouraged (the phase-4/04 guardrail).
+
+  listAccountDefaults(provider?: AgentConfigProviderId, tier?: AgentConfigTier): AgentConfigOverrideRecord[] {
+    const clauses: string[] = [tier ? 'tier = ?' : "tier IN ('default', 'pin')"]
+    const args: unknown[] = tier ? [tier] : []
+    if (provider) {
+      clauses.push('provider = ?')
+      args.push(provider)
+    }
+    return this.queryOverrideRows(clauses, args)
+  }
+
+  saveAccountDefault(row: AgentConfigOverrideRecord): void {
+    if (row.tier !== 'default' && row.tier !== 'pin') {
+      throw new Error('An account-default row must carry tier "default" or "pin".')
+    }
+    if (row.tier === 'default' && (row.targetId !== AGENT_CONFIG_ALL_ACCOUNTS || row.scope !== 'user')) {
+      throw new Error('A tier "default" row is keyed by the __all__ sentinel at the user scope — it has no home of its own.')
+    }
+    if (row.tier === 'pin' && (row.scope !== 'profile' || !row.targetId || row.targetId === AGENT_CONFIG_ALL_ACCOUNTS)) {
+      throw new Error('A tier "pin" row names exactly one profile.')
+    }
+    if (row.operation === 'set' && valueLooksSecret(row.desiredValue)) {
+      throw new Error('Secret-shaped values cannot be saved as account defaults. Credentials stay provider-owned (ADR 0002).')
+    }
+    // Tier rows never captured a file baseline and never carry apply history — they
+    // are not homes. Normalizing here keeps a caller from smuggling either in.
+    this.saveAgentConfigOverride({
+      ...row,
+      baselinePresent: false,
+      baselineValue: undefined,
+      lastAppliedValue: undefined,
+      lastAppliedHash: undefined,
+      appliedAt: undefined
+    })
+  }
+
+  removeAccountDefault(
+    provider: AgentConfigProviderId,
+    settingId: string,
+    key?: { tier?: AgentConfigTier; targetId?: string; surface?: AgentConfigSurface }
+  ): void {
+    const clauses = ['provider = ?', 'setting_id = ?', 'tier = ?']
+    const args: unknown[] = [provider, settingId, key?.tier ?? 'default']
+    if (key?.targetId) {
+      clauses.push('target_id = ?')
+      args.push(key.targetId)
+    }
+    if (key?.surface) {
+      clauses.push('surface = ?')
+      args.push(key.surface)
+    }
+    this.db
+      .prepare(`DELETE FROM app_agent_config_overrides WHERE ${clauses.join(' AND ')}`)
+      .run(...args)
   }
 
   // --- Telemetry consent + anonymous install id (observability/00, ADR 0005) -----

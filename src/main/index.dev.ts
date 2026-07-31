@@ -7,6 +7,7 @@ import { runShot } from './smokes/shot'
 import { runFsListSmoke } from './smokes/fslist-smoke'
 import { runGlobalHooksSmoke } from './smokes/globalhooks-smoke'
 import { runAgentSettingsSmoke } from './smokes/agentsettings-smoke'
+import { runDefaultStoreSmoke } from './smokes/defaultstore-smoke'
 import { runSetAgentConfigSmoke } from './smokes/setagentcfg-smoke'
 import { runCwdSmoke } from './smokes/cwd-smoke'
 import { runMcpSmoke } from './smokes/mcp-smoke'
@@ -229,6 +230,8 @@ const SMOKE_ENV: readonly string[] = [
   // Phase 11 — Files: the explorer's seven.
   'MOGGING_FSLIST', 'MOGGING_FILETREE', 'MOGGING_EXPLORER', 'MOGGING_EXPLORERRACE', 'MOGGING_TREELIVE', 'MOGGING_TREEGIT',
   'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE', 'MOGGING_AGENTCFG', 'MOGGING_GLOBALHOOKS',
+  // Shared account defaults (ADR 0022, the phase-defaults pack).
+  'MOGGING_DEFAULTSTORE',
   // ALERTAGREE pack (2026-07-18): the shipped notify artifacts' parity corpus.
   'MOGGING_NOTIFYPARITY'
 ]
@@ -352,6 +355,14 @@ async function beforeAppSettings(): Promise<boolean> {
   // Windowless agent-settings smoke: the catalog + codecs + scope writers, no daemon, no window.
   if (process.env.MOGGING_AGENTCFG) {
     await runAgentSettingsSmoke()
+    return true
+  }
+
+  // Windowless default-tier store smoke (ADR 0022 step 01): tier rows round-trip,
+  // the legacy listing stays blind, secret-shaped defaults are refused at the
+  // persistence boundary. Store only — no config home is touched.
+  if (process.env.MOGGING_DEFAULTSTORE) {
+    await runDefaultStoreSmoke()
     return true
   }
 
