@@ -290,6 +290,17 @@ export function markAgentConfigSessionLaunched(req: AgentCommandRequest): void {
   settings?.markSessionLaunched(req.agentId, req.workspaceId ?? 'default')
 }
 
+/**
+ * The profiles feature's door into fan-out (ADR 0022 step 03): a profile saved,
+ * removed, or discovered re-reaches every home for its provider — debounced in the
+ * service, one apply per burst. A no-op until registerAgentSettings has run, and
+ * for any provider string that is not a real agent CLI id.
+ */
+export function scheduleAccountDefaultsApply(provider: string): void {
+  if (!isAgentCliId(provider)) return
+  settings?.scheduleApplyAccountDefaults(provider)
+}
+
 export async function refreshAgentSettingsForCli(provider: AgentCliId): Promise<void> {
   if (offlineMode || !catalogs || !settings) return
   versionCache.delete(provider)
@@ -379,6 +390,12 @@ export async function registerAgentSettings(getWin: () => BrowserWindow | null, 
   await catalogs.initialize({}, false)
   const reconciled = await settings.reconcileAll()
   if (!reconciled.ok) console.warn(`[agent-settings] startup reconciliation incomplete: ${reconciled.reason}`)
+  // ADR 0022 step 03: heal any adoption a closed app missed (an account that
+  // appeared while we weren't watching). Debounced + unref'd — post-boot, never
+  // the critical path; providers without authored tiers schedule nothing.
+  for (const { id } of AGENT_CLI_REGISTRY) {
+    if (store.listAccountDefaults(id).length) settings.scheduleApplyAccountDefaults(id)
+  }
   if (!offlineMode) {
     const refreshInstalledCatalogs = async (forceDetection: boolean): Promise<void> => {
       const versions: Partial<Record<AgentConfigProviderId, string>> = {}
@@ -417,6 +434,7 @@ export function disposeAgentSettings(): void {
   if (catalogTimer) clearInterval(catalogTimer)
   catalogTimer = undefined
   settingsWindow = undefined
+  settings?.dispose()
   settings = null
   catalogs = null
   offlineMode = false

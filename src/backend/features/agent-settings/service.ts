@@ -160,10 +160,17 @@ function recordKey(row: Pick<AgentConfigOverrideRecord, 'provider' | 'scope' | '
 export class AgentSettingsService {
   private readonly coordinator: ConfigMutationCoordinator
   private readonly now: () => number
+  private readonly applyTimers = new Map<AgentConfigProviderId, ReturnType<typeof setTimeout>>()
 
   constructor(private readonly options: AgentSettingsServiceOptions) {
     this.coordinator = options.coordinator ?? configMutationCoordinator
     this.now = options.now ?? Date.now
+  }
+
+  /** Cancel pending debounced fan-outs — call when the app tears the service down. */
+  dispose(): void {
+    for (const timer of this.applyTimers.values()) clearTimeout(timer)
+    this.applyTimers.clear()
   }
 
   catalog(provider: AgentConfigProviderId, installedVersion?: string): AgentConfigCatalog | null {
@@ -619,6 +626,29 @@ export class AgentSettingsService {
     const result = await this.reconcileRows(toReconcile)
     if (!result.ok) failure ??= result.reason
     return failure ? { ok: false, reason: failure } : { ok: true }
+  }
+
+  /**
+   * The lifecycle trigger (ADR 0022 step 03): one debounced fan-out per provider,
+   * coalescing bursts — a profile save, a discovery reconcile, and a settings edit
+   * arriving together cost ONE apply, never a loop. Async and off every critical
+   * path; a provider with no authored tiers resolves to a cheap no-op inside apply.
+   */
+  scheduleApplyAccountDefaults(provider: AgentConfigProviderId, delayMs = 400): void {
+    const pending = this.applyTimers.get(provider)
+    if (pending) clearTimeout(pending)
+    const timer = setTimeout(() => {
+      this.applyTimers.delete(provider)
+      void this.applyAccountDefaults(provider)
+        .then((result) => {
+          if (result.ok) this.options.changed?.(provider)
+        })
+        .catch(() => {
+          // The next tick (reconcileAll / another trigger) retries; never a loop here.
+        })
+    }, delayMs)
+    timer.unref?.()
+    this.applyTimers.set(provider, timer)
   }
 
   /** The primary home's profile identity — the provider's pointer-less profile row. */

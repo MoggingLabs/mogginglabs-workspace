@@ -1,4 +1,9 @@
-// MOGGING_PROFILEDEFAULTS — resolution + fan-out (ADR 0022, phase-defaults/02).
+// MOGGING_PROFILEDEFAULTS — resolution + fan-out (ADR 0022, phase-defaults/02),
+// EXTENDED by phase-defaults/03 with the lifecycle bites (8–12): live default
+// propagation to every unpinned home, a NEW account adopting current defaults off
+// the debounced trigger, hand-edit drift restored by the existing reconcile,
+// pin-clear re-inheriting live, and default removal RELEASING keys (values kept,
+// never blanked). Same gate id — the assertion set grew, the count did not.
 //
 // The heart of the phase, proven on provider `claude` with THREE isolated homes:
 // two pointer profiles (CLAUDE_CONFIG_DIR → tmpA/tmpB) and the PRIMARY user home
@@ -158,7 +163,62 @@ export async function runProfileDefaultsSmoke(): Promise<void> {
     assert.equal(refused.ok, false, 'a secret-shaped default value must be refused')
     assert.equal(store.listAccountDefaults('claude').filter((row) => row.settingId === freeText.id).length, 0)
 
-    // 7) Values stay out of the result JSON — ids and booleans only.
+    // ── The lifecycle (phase-defaults/03) ──────────────────────────────────────
+    // State walking in: default='plan'; pin A='acceptEdits'; B carries a
+    // user-authored override 'default' (the implicit pin); primary='plan'.
+
+    // 8) Changing the default re-reaches every unpinned home LIVE; both kinds of
+    // pin (authored A, implicit B) hold their ground.
+    const changed = await service.setAccountDefault('claude', mode.id, 'set', 'bypassPermissions', 'default')
+    assert.equal(changed.ok, true, changed.reason)
+    assert.equal(modeIn(files.primary), 'bypassPermissions')
+    assert.equal(modeIn(files.a), 'acceptEdits')
+    assert.equal(modeIn(files.b), 'default')
+
+    // 9) A NEW account adopts the current defaults through the DEBOUNCED trigger —
+    // the same scheduleApplyAccountDefaults the profiles feature fires on
+    // save/discovery. Two rapid schedules coalesce into one settled apply.
+    const homeC = join(root, 'claude-third')
+    mkdirSync(homeC, { recursive: true })
+    const PROFILE_C = 'profile-third'
+    store.saveProfile({ id: PROFILE_C, name: 'Third', provider: 'claude', env: { CLAUDE_CONFIG_DIR: homeC }, order: 3 })
+    service.scheduleApplyAccountDefaults('claude', 60)
+    service.scheduleApplyAccountDefaults('claude', 60)
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    const fileC = join(homeC, 'settings.json')
+    assert.equal(modeIn(fileC), 'bypassPermissions', 'a new account must adopt the current default on the announce')
+
+    // 10) Keep-in-sync: a hand-edit that drifts a default-managed key is restored
+    // by the EXISTING reconcile tick — no second drift detector exists.
+    writeFileSync(files.primary, codec.set(readFileSync(files.primary, 'utf8'), mode.path, 'plan')!)
+    assert.equal(modeIn(files.primary), 'plan', 'the hand-edit must land before reconcile proves the restore')
+    const reconciled = await service.reconcileAll()
+    assert.equal(reconciled.ok, true, reconciled.reason)
+    assert.equal(modeIn(files.primary), 'bypassPermissions', 'reconcile must restore the resolved default')
+
+    // 11) Clearing A's pin re-inherits the shared default LIVE.
+    const cleared = await service.clearAccountDefault('claude', mode.id, 'pin', PROFILE_A)
+    assert.equal(cleared.ok, true, cleared.reason)
+    assert.equal(modeIn(files.a), 'bypassPermissions', 'a cleared pin must re-inherit the default')
+    assert.equal(store.listAccountDefaults('claude', 'pin').length, 0)
+
+    // 12) Removing the default RELEASES every managed key — files keep their last
+    // value (never blanked), compiled rows are gone, and a fresh reconcile no
+    // longer enforces anything (a hand-edit now sticks).
+    const removed = await service.clearAccountDefault('claude', mode.id, 'default')
+    assert.equal(removed.ok, true, removed.reason)
+    assert.equal(modeIn(files.primary), 'bypassPermissions', 'release keeps the last value')
+    assert.equal(modeIn(fileC), 'bypassPermissions')
+    assert.equal(
+      store.listAgentConfigOverrides({ provider: 'claude' }).filter((row) => row.tier === 'compiled').length,
+      0,
+      'released keys leave no compiled rows behind'
+    )
+    writeFileSync(files.primary, codec.set(readFileSync(files.primary, 'utf8'), mode.path, 'plan')!)
+    await service.reconcileAll()
+    assert.equal(modeIn(files.primary), 'plan', 'after release, the user owns the key again')
+
+    // 13) Values stay out of the result JSON — ids and booleans only.
     store.close()
     result = {
       pass: true,
@@ -170,7 +230,12 @@ export async function runProfileDefaultsSmoke(): Promise<void> {
       pinOverridesOneHome: true,
       snapshotLabelsHonest: true,
       implicitPinRespected: true,
-      secretDefaultRefused: true
+      secretDefaultRefused: true,
+      liveDefaultPropagation: true,
+      newAccountAdopts: true,
+      driftRestored: true,
+      pinClearReinherits: true,
+      releaseKeepsValues: true
     }
   } catch (error) {
     result = { pass: false, error: error instanceof Error ? error.stack ?? error.message : String(error) }
