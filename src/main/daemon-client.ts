@@ -386,6 +386,22 @@ export interface DaemonClientOptions {
  *  emphatically not dead, and must never be shot for being busy. */
 const HEARTBEAT_STALE_FACTOR = 2.5
 
+/**
+ * What a spawn's scrollback replay should do to a renderer that is ALREADY PAINTED — the
+ * relay's reconnect replay, where every pane's xterm still holds the content the replay
+ * would re-deliver. Default (undefined) forwards the replay verbatim: correct for every
+ * fresh-xterm spawn (pane mount, renderer reload, app restart).
+ *
+ *   'suppress' — the SAME daemon survived a connection flap: the renderer's buffer is
+ *     already exactly this content. Forwarding it appended a second full copy of the
+ *     conversation, spliced by the history's own cursor sequences (the double-paint).
+ *   'reset'    — a DIFFERENT daemon answered (the old one died; this one restored from
+ *     the store): the renderer's buffer belongs to a dead generation. A full-reset
+ *     prefix repaints from clean — the replayed ring already carries the history, so
+ *     nothing the store kept is lost.
+ */
+export type SpawnReplayMode = 'suppress' | 'reset'
+
 export class DaemonClient {
   private sock: net.Socket | null = null
   private approvalWaiters: Array<(list: Approval[]) => void> = []
@@ -395,7 +411,7 @@ export class DaemonClient {
   /** Pane id -> resolvers waiting for that pane's `spawned` reply (`existing` + the pty it got). */
   private spawnWaiters = new Map<
     string,
-    Array<{ resolve: (res: SpawnResult) => void; reject: (err: Error) => void }>
+    Array<{ resolve: (res: SpawnResult) => void; reject: (err: Error) => void; replay?: SpawnReplayMode }>
   >()
   // THE HEARTBEAT (the missing half of ADR 0006's reconnect story). The relay reacts to a
   // socket CLOSE within milliseconds — but a daemon that wedges with the socket still open
@@ -499,10 +515,28 @@ export class DaemonClient {
         // Gen FIRST: consumers gate every pane event on (id, gen), and the scrollback
         // replay below must be accepted by the generation it belongs to.
         this.events.onGen?.(m.id, m.gen)
-        if (m.scrollback) this.events.onData?.(m.id, m.scrollback, m.gen)
+        // The replay's disposition is the SPAWNER's to choose (see SpawnReplayMode): the
+        // reconnect path knows the renderer is already painted; every other caller has a
+        // fresh xterm and takes the verbatim default. Only a unanimous verdict from the
+        // pending waiters overrides — mixed callers fall back to verbatim.
+        const waiters = this.spawnWaiters.get(m.id)
+        const replay =
+          waiters && waiters.length && waiters.every((w) => w.replay === waiters[0].replay)
+            ? waiters[0].replay
+            : undefined
+        if (replay !== 'suppress') {
+          // The reset replay lands MID-SESSION (a daemon death, not a pane mount), so the
+          // renderer's replay-time OSC 52 grace cannot cover it: strip the agent's old
+          // copies here, or repainting history silently overwrites the user's clipboard.
+          const reset = replay === 'reset' ? '\x1bc' : ''
+          const sb =
+            replay === 'reset' && m.scrollback
+              ? m.scrollback.replace(/\x1b\]52;[^\x07\x1b]*(?:\x07|\x1b\\)?/g, '')
+              : m.scrollback ?? ''
+          if (sb || reset) this.events.onData?.(m.id, reset + sb, m.gen)
+        }
         // `existing` is how a caller learns the daemon reattached us to a session that
         // was already running (it is detached — ADR 0006). Nothing else can tell them.
-        const waiters = this.spawnWaiters.get(m.id)
         if (waiters) {
           this.spawnWaiters.delete(m.id)
           for (const waiter of waiters) {
@@ -579,7 +613,7 @@ export class DaemonClient {
    *  within the timeout — the safe default, matching a cold spawn. */
   /** Resolves with the daemon's own answer. REJECTS on timeout: a pane whose pty never reported
    *  its emulation cannot be rendered correctly, and `resolve(false)` used to invent one. */
-  spawn(id: string, spec?: SpawnSpec, timeoutMs = 5000): Promise<SpawnResult> {
+  spawn(id: string, spec?: SpawnSpec, timeoutMs = 5000, replay?: SpawnReplayMode): Promise<SpawnResult> {
     return new Promise<SpawnResult>((resolve, reject) => {
       const list = this.spawnWaiters.get(id) ?? []
       this.spawnWaiters.set(id, list)
@@ -600,7 +634,8 @@ export class DaemonClient {
         reject: (err: Error): void => {
           clearTimeout(timer)
           reject(err)
-        }
+        },
+        replay
       }
       list.push(waiter)
       this.send({ t: 'spawn', id, spec })

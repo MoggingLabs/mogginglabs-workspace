@@ -175,6 +175,16 @@ export function createPaneAnchor(term: Terminal, body: HTMLElement): PaneAnchorH
       clearTimeout(settle) // an explicit "follow again" outranks the gesture still settling
       settle = undefined
     }
+    // Same mid-frame rule as repin: while DEC 2026 holds a TUI's atomic repaint, an
+    // immediate scroll would tear the very frame the mode protects — and stick() rides
+    // every non-modifier keystroke plus the jump pill, so this path is HOT while a TUI
+    // repaints. `follow` is already true, so deferring to pin() is lossless: the ESU
+    // that ends the frame requests a refresh, its onRender calls pin, and repin lands
+    // the viewport on the COMPLETED frame.
+    if (term.modes.synchronizedOutputMode) {
+      pin()
+      return
+    }
     if (!atBottom()) term.scrollToBottom()
   }
 

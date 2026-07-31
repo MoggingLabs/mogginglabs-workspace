@@ -119,6 +119,10 @@ export class TerminalPane {
   /** When we last told the user a copy failed. A locked clipboard fails EVERY drag, and
    *  copy-on-select fires on every one of them — the warning must inform, not pile up. */
   private lastCopyWarnAt = 0
+  /** OSC 52 copies are IGNORED until this instant — armed at mount and re-armed when a
+   *  spawn reply lands, the two moments a scrollback replay (with every OSC 52 the agent
+   *  ever emitted) can reach the parser. See the handler registration. */
+  private replayCopyGraceUntil = Date.now() + 1500
   private stateDot?: HTMLSpanElement
   /** The pane's process is gone (exit or failed spawn — the markDead paths). The state
    *  dot only records this when it is VISIBLE, so untracked plain panes need this flag:
@@ -189,11 +193,15 @@ export class TerminalPane {
       isVisible: () => this.visible,
       isDisposed: () => this.disposed,
       // A renderer swap is a metrics event (WebGL floors cells at device pixels, the
-      // DOM renderer doesn't): re-derive the grid through the same coalescer resizes
-      // use, so a rapid show/hide flip still costs one fit and one ConPTY repaint.
-      // Guarded: release() is also the dispose path.
+      // DOM renderer doesn't) and a DISCRETE one — it must never ride the burst
+      // coalescer: mid-burst the leading edge is spent, so scheduleRefit would only
+      // push the trailing timer out and the NEW renderer would paint against the OLD
+      // renderer's grid for up to REFIT_SETTLE_MS (dead strip + partial row on every
+      // workspace reveal at fractional display scaling). Fit NOW; applyGrid dedupes,
+      // so an unchanged grid still costs nothing. Guarded: release() is also the
+      // dispose path.
       onRendererChanged: () => {
-        if (!this.disposed) this.scheduleRefit()
+        if (!this.disposed) this.refit(true)
       }
     })
 
@@ -279,6 +287,13 @@ export class TerminalPane {
     // are this terminal's OSC 52 authority. Works for every provider, and across ssh, by
     // construction — it is the universal protocol, not a Claude Code special case.
     this.osc52 = this.term.parser.registerOscHandler(52, (data) => {
+      // Replay guard: a reattach/restore replays the ring's raw bytes — INCLUDING every
+      // OSC 52 the agent ever emitted — and re-executing those would silently overwrite
+      // the user's system clipboard with a stale copy on every app restart (the last one
+      // in the ring wins). Same shape as the OSC 133 grace below: sequences arriving
+      // inside the replay window are consumed, never performed. A LIVE copy is a human
+      // acting seconds after they can see the pane, safely past the window.
+      if (Date.now() < this.replayCopyGraceUntil) return true
       const req = parseOsc52(data)
       if (req?.kind === 'copy') void this.copyOrWarn(req.text)
       return true
@@ -531,7 +546,9 @@ export class TerminalPane {
         if (!this.disposed) markPaneSpawnSettled(this.id)
         // The reattach/restore REPLAY arrives right after this: thousands of scrollback
         // lines in a burst, into a grid that is about to be refitted. Land at the end of
-        // the conversation, which is the only place it makes sense to land.
+        // the conversation, which is the only place it makes sense to land — and hold
+        // the OSC 52 guard through it (replayed copies must not touch the clipboard).
+        this.replayCopyGraceUntil = Date.now() + 1500
         this.anchor?.pin()
         // Second stateSync pull: the spawn just registered/reattached the session, so
         // the backend now KNOWS this pane's state (the mountChrome pull may have run
@@ -684,7 +701,15 @@ export class TerminalPane {
   private refit(force = false): void {
     try {
       const d = proposeGrid(this.term)
-      if (!d) return // hidden, not yet opened, or xterm moved its internals
+      if (!d) {
+        // Hidden, not yet opened, or xterm moved its internals — nothing was fitted, so
+        // GIVE THE LEADING EDGE BACK. scheduleRefit consumed it before calling here; left
+        // consumed, a hide's unmeasurable tick would burn it and the REVEAL inside the
+        // next 120 ms would wait the full trailing settle — the exact "reveal must not
+        // wait on a timer" case the coalescer's contract forbids.
+        this.refitLeading = true
+        return
+      }
       if (applyGrid(this.term, d)) {
         terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
         // A fit REFLOWS the buffer under a viewport nobody asked to move (a reveal, a
@@ -703,6 +728,12 @@ export class TerminalPane {
   /** Invalidate xterm's cached character metrics (the option must CHANGE to trigger a
    *  re-measure) and refit — run once the document's fonts are fully active. */
   private remeasureFont(): void {
+    // The fonts-active promise is the ONE refit trigger with no disposer to detach: a
+    // lazily-loaded face can settle seconds after this pane was disposed — and its id
+    // reused — so an unguarded refit here put a resize on the wire for a pane object
+    // that no longer owns the id (ConPTY repaints the SUCCESSOR session at a dead
+    // pane's grid). The guard is the whole fix; everything else already checks.
+    if (this.disposed) return
     try {
       const fam = this.term.options.fontFamily ?? ''
       this.term.options.fontFamily = fam + ', monospace' // metric-identical, string differs

@@ -29,9 +29,17 @@ export const terminalClient = {
   spawn: (req: SpawnRequest): Promise<SpawnResult> =>
     getBridge().invoke(TerminalChannels.spawn, req) as Promise<SpawnResult>,
   /** How this platform's ptys grow — knowable BEFORE spawn, so a pane can set xterm's
-   *  windowsPty ahead of any byte (a reattach replay arrives with the spawn reply). */
+   *  windowsPty ahead of any byte (a reattach replay arrives with the spawn reply).
+   *  A REJECTION clears the cache before propagating: `??=` memoizes whatever settled,
+   *  and a single boot-race failure here used to leave windowsPty unset on EVERY pane
+   *  for the rest of the session — the documented resize-smear config, silently. */
   ptyEmulation: (): Promise<PtyEmulation> =>
-    (ptyEmulationCache ??= getBridge().invoke(TerminalChannels.ptyEmulation) as Promise<PtyEmulation>),
+    (ptyEmulationCache ??= (getBridge().invoke(TerminalChannels.ptyEmulation) as Promise<PtyEmulation>).catch(
+      (err) => {
+        ptyEmulationCache = undefined
+        throw err
+      }
+    )),
   write: (cmd: WriteCommand): void => {
     // DEV-only observation seam (tree-shaken in prod): every byte the UI sends to a PTY
     // funnels through here, so a smoke that plants `__mogging.ptyWrites = []` sees exactly

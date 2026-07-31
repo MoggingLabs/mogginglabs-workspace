@@ -8,7 +8,7 @@
 import * as crypto from 'node:crypto'
 import { spawnPty, type IPty } from '@backend/platform/pty-host'
 import { paneShellLaunch } from '@backend/platform/shell'
-import { SCROLLBACK_CHARS, pickCwd, trimTornStart } from '@backend/features/terminal/pane-shared'
+import { RESTORE_MODE_RESET, SCROLLBACK_CHARS, pickCwd, trimTornStart } from '@backend/features/terminal/pane-shared'
 import { aiderLogPath } from '@backend/features/context'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { PANE_CWD_MAX, normalizeRemoteConnection, notifyEventToState } from '@contracts'
@@ -336,7 +336,6 @@ export function remoteBootstrapCommand(cwd?: string): string {
   return `exec /bin/sh -c ${posixLiteral(bootstrap)}`
 }
 
-export interface PaneSubscriber {
 /**
  * How long a DEFERRED typed launch (a restore's resume, or a run into a dims-less spawn)
  * waits for a client to confirm the pane's grid before typing anyway. THE INVARIANT this
@@ -354,6 +353,7 @@ const LAUNCH_DIMS_GRACE_MS = Math.min(
 )
 
   send(data: string): void
+export interface PaneSubscriber {
   exit(code: number): void
   state(state: AgentState): void
   cwd(location: PaneCwdSnapshot): void
@@ -422,12 +422,12 @@ class PaneSession {
   private readonly hooks: PaneHooks
   /** One breadcrumb per pane when the pty refuses writes — never one per keystroke. */
   private writeFailLogged = false
-  /** True while this session is an UNTOUCHED cold-start restore: a fresh shell repainting
   /** A typed launch waiting for the pane's grid to be CONFIRMED by a client (see
    *  LAUNCH_DIMS_GRACE_MS — the invariant lives on that constant's doc). */
   private pendingLaunch?: { cmd: string; cancelOnInput: boolean }
   private launchGraceTimer?: NodeJS.Timeout
    *  persisted scrollback, with no live agent in it and nothing typed since. The app reads
+  /** True while this session is an UNTOUCHED cold-start restore: a fresh shell repainting
    *  it (via `spawned.restored`) to decide that resume must TYPE — the opposite of a true
    *  reattach. Cleared by the first client input, and never set when the daemon itself
    *  typed a resume command (that pane is already handling its own continuity). */
@@ -469,7 +469,14 @@ class PaneSession {
     this.remoteName = spec.remote?.name
     this.remote = spec.remote ? { ...spec.remote } : undefined
     this.cwdState = new PaneCwdState(spec.remote?.cwd ?? this.cwd, this.remoteName ? 'remote' : 'local', restore?.reported)
-    if (restore?.scrollback) this.buffer = restore.scrollback // seed prior output for repaint
+    // Seed prior output for repaint. Trimmed HERE, at consumption: the persisted tail was
+    // cut by a blind slice(-PERSISTED_SCROLLBACK_CHARS) with no tear guard (a second,
+    // independent cut point from the live ring's), so a row can begin mid-sequence or on
+    // a lone surrogate. Then ground the modes: the dead process may have held alt-screen/
+    // mouse/bracketed-paste when persisted, but the FRESH shell behind this pane holds
+    // none of them — without the reset, its output paints into a buffer stuck in a mode
+    // no live process owns (see RESTORE_MODE_RESET).
+    if (restore?.scrollback) this.buffer = trimTornStart(restore.scrollback) + RESTORE_MODE_RESET
     // Pristine only when the daemon is NOT typing the resume itself (see field doc) —
     // and never when the cwd fell back to home: `restored: true` cues the app to TYPE
     // the resume command, which must not happen in the wrong directory (an agent
@@ -704,13 +711,13 @@ class PaneSession {
       hooks.onChange()
     })
     this.proc.onExit(({ exitCode }) => {
+      this.gitContext?.dispose()
       this.tracker.dispose()
       this.pendingLaunch = undefined
       if (this.launchGraceTimer) {
         clearTimeout(this.launchGraceTimer)
         this.launchGraceTimer = undefined
       }
-      this.gitContext?.dispose()
       for (const s of this.subs) s.exit(exitCode)
       this.subs.clear()
       hooks.onExit()
@@ -732,13 +739,13 @@ class PaneSession {
       }
     }
     // A restore whose cwd fell back to home must NOT resume: `claude --resume` typed in
+    // its scrollback; the real cwd stays persisted (requestedCwd) for the next start.
     // the home directory resumes the wrong project's sessions. The shell restores with
     //
     // ALWAYS deferred: the persisted grid this pane spawned at is a guess about a layout
     // the app has not shown yet — only an attach makes it a fact (LAUNCH_DIMS_GRACE_MS).
     // Cancelled by real input: a human typing into the restored shell owns it now, and a
     // resume spliced after their keystrokes would compose a different command.
-    // its scrollback; the real cwd stays persisted (requestedCwd) for the next start.
     else if (restore?.resumeCommand && !this.cwdFellBack) {
       this.deferLaunch(restore.resumeCommand, true)
     }
@@ -755,6 +762,7 @@ class PaneSession {
   private flushPendingLaunch(): void {
     if (this.launchGraceTimer) {
       clearTimeout(this.launchGraceTimer)
+    }
       this.launchGraceTimer = undefined
     const pending = this.pendingLaunch
     if (!pending) return
@@ -767,7 +775,6 @@ class PaneSession {
    *  an explicit same-size resize). The size is now a FACT — release a waiting launch. */
   confirmDims(): void {
     this.flushPendingLaunch()
-    }
   }
 
   /** Every byte headed for the pty goes through here. node-pty's write THROWS once the pty is
@@ -955,6 +962,7 @@ class PaneSession {
     if (isTerminalReply(data)) {
       this.writePty(data)
       return
+    this.pristineRestore = false // touched: from here on it's a live shell, not a restore
     }
     // A human typed into the restored shell first: they own the pane now. A deferred
     // resume spliced in AFTER their keystrokes would compose a different command line —
@@ -966,7 +974,6 @@ class PaneSession {
         this.launchGraceTimer = undefined
       }
     }
-    this.pristineRestore = false // touched: from here on it's a live shell, not a restore
     // A SUBMIT or a PRINTABLE key answers a blocked agent (every permission dialog takes
     // single-key answers; see isEngagedInput). Navigation and signals — arrows, ^C, mouse
     // reports — still clear nothing: they claimed "working" about panes that sat blocked.
@@ -1002,20 +1009,20 @@ class PaneSession {
     }
     // The grid is persisted state now (snapshot): a resize with no output in its wake
     // (a quiet pane dragged to a new layout) must still reach the store, or the next
+    this.hooks.onChange()
     // cold start restores at the size before the drag.
     // AFTER the pty holds the measured size, never before: the launch this releases is
     // the agent reading its width once at boot.
     this.flushPendingLaunch()
-    this.hooks.onChange()
   }
   kill(): void {
+    this.gitContext?.dispose()
     this.tracker.dispose()
     this.pendingLaunch = undefined
     if (this.launchGraceTimer) {
       clearTimeout(this.launchGraceTimer)
       this.launchGraceTimer = undefined
     }
-    this.gitContext?.dispose()
     try {
       this.proc.kill()
     } catch {
@@ -1184,13 +1191,13 @@ export class SessionManager {
       // Size reconciliation, BEFORE the caller snapshots scrollback: ConPTY's answering
       // repaint then rides the same delivery burst as the replay, so the client's first
       // settled frame is already at the attach width (no visible narrow→wide snap).
+      if (dims) existing.resize(dims.cols, dims.rows)
       const dims = attachDims(normalizedSpec, existing)
       // An attach whose measured dims EQUAL the session's applies nothing — but it turns
       // the restore's persisted-size guess into a fact, which is what a deferred resume
       // waits on (resize() confirms the changed case itself). A dims-less attach (an
       // unmeasured hidden pane) confirms nothing: the guess stays a guess.
       else if (specDimsUsable(normalizedSpec)) existing.confirmDims()
-      if (dims) existing.resize(dims.cols, dims.rows)
       return { pane: existing, existed: true }
     }
     // A legacy/corrupt restore may have lost SSH identity. The app's resolved remote spec is

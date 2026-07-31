@@ -111,6 +111,11 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
    *  its reconnect-replay spec. Gens are learned from `welcome`/`spawned` and compared on
    *  every pane event; a mismatch is a dead generation talking, and it is dropped. */
   const gens = new Map<string, number | 'killed'>()
+  /** The pid behind the live endpoint — reconnect compares it to decide what the replay
+   *  means: same pid = a connection flap over a surviving daemon (renderer content is
+   *  current → suppress the replay); new pid = the daemon died and this one restored
+   *  (renderer content is a dead generation's → reset-and-repaint). */
+  let daemonPid = 0
   const current = (id: string, gen: number): boolean => gens.get(id) === gen
   const cwdRevisions = new Map<string, { connection: number; gen: number; revision: number }>()
   let nextConnection = 0
@@ -123,6 +128,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
 
   const makeClient = async (): Promise<DaemonClient> => {
     const endpoint = await ensureDaemon(daemonEntry, helperRuntime())
+    daemonPid = endpoint.pid // reconnect reads this to tell a flap from a daemon death
     const connection = ++nextConnection
     activeConnection = connection
     cwdRevisions.clear()
@@ -260,15 +266,22 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     let delayMs = 500
     while (!disposed) {
       try {
+        const prevPid = daemonPid
         const next = await makeClient() // re-runs discovery: spawns a fresh daemon if none is live
         client = next
         activeClient = next
+        // The renderer's xterms are ALREADY PAINTED — this replay is not the fresh-mount
+        // case. Same daemon (a connection flap): its ring is exactly what the panes show,
+        // so forwarding it would append a second spliced copy of every conversation —
+        // suppress. New daemon (the old one died; this one restored): the panes show a
+        // dead generation's content — reset-and-repaint from the restored ring.
+        const replayMode = daemonPid === prevPid ? 'suppress' : 'reset'
         for (const [id, spec] of specs) {
-          // Repaint rides the reply's scrollback. Role state lives in the daemon's
-          // mailbox and may have vanished with a restarted daemon, so replay it only
-          // after spawn/attach is acknowledged; absent-session role writes are refused.
+          // Role state lives in the daemon's mailbox and may have vanished with a
+          // restarted daemon, so replay it only after spawn/attach is acknowledged;
+          // absent-session role writes are refused.
           void next
-            .spawn(id, spec)
+            .spawn(id, spec, undefined, replayMode)
             .then(async () => {
               const role = appRoles.get(id)?.role
               if (role) await bindRole(id, role)

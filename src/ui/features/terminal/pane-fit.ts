@@ -57,13 +57,30 @@ function activeCell(term: Terminal): RendererCell | null {
   return cell && typeof cell.width === 'number' && typeof cell.height === 'number' ? cell : null
 }
 
+/** Warned once per session: the cell-metrics seam is private API, and its silent failure
+ *  mode is the WORST one — every pane frozen at xterm's 80×24 default forever, with no
+ *  resize ever sent (the pane "keeps its grid" claim below is only survivable if someone
+ *  can see it happened). */
+let warnedCellSeam = false
+
 /** Propose the grid for the terminal's current container, or null when unmeasurable
  *  (not yet opened, hidden, or xterm moved its internals). */
 export function proposeGrid(term: Terminal): { cols: number; rows: number } | null {
   const parent = term.element?.parentElement
   if (!parent) return null
   const cell = activeCell(term)
-  if (!cell) return null
+  if (!cell) {
+    // Distinguish "hidden" from "the seam broke": a hidden pane's PARENT is unmeasurable
+    // too (display:none computes width 'auto'), while a broken seam leaves a measurable
+    // parent with no cell. Only the latter is a defect worth shouting about.
+    if (!warnedCellSeam && Number.isFinite(parseFloat(window.getComputedStyle(parent).width))) {
+      warnedCellSeam = true
+      console.warn(
+        'pane-fit: xterm renderer cell metrics unavailable (_renderService seam moved?) — panes cannot fit their container'
+      )
+    }
+    return null
+  }
   // getComputedStyle width/height resolve to the CONTENT box — .pane-body's padding
   // (the slide-bar lane) is already excluded, which is what makes the lane real and
   // the rest of the box the terminal's to fill completely.
