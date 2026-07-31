@@ -8,6 +8,7 @@ import { runFsListSmoke } from './smokes/fslist-smoke'
 import { runGlobalHooksSmoke } from './smokes/globalhooks-smoke'
 import { runAgentSettingsSmoke } from './smokes/agentsettings-smoke'
 import { runDefaultStoreSmoke } from './smokes/defaultstore-smoke'
+import { runProfileDefaultsSmoke } from './smokes/profiledefaults-smoke'
 import { runSetAgentConfigSmoke } from './smokes/setagentcfg-smoke'
 import { runCwdSmoke } from './smokes/cwd-smoke'
 import { runMcpSmoke } from './smokes/mcp-smoke'
@@ -231,7 +232,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_FSLIST', 'MOGGING_FILETREE', 'MOGGING_EXPLORER', 'MOGGING_EXPLORERRACE', 'MOGGING_TREELIVE', 'MOGGING_TREEGIT',
   'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE', 'MOGGING_AGENTCFG', 'MOGGING_GLOBALHOOKS',
   // Shared account defaults (ADR 0022, the phase-defaults pack).
-  'MOGGING_DEFAULTSTORE',
+  'MOGGING_DEFAULTSTORE', 'MOGGING_PROFILEDEFAULTS',
   // ALERTAGREE pack (2026-07-18): the shipped notify artifacts' parity corpus.
   'MOGGING_NOTIFYPARITY'
 ]
@@ -363,6 +364,14 @@ async function beforeAppSettings(): Promise<boolean> {
   // persistence boundary. Store only — no config home is touched.
   if (process.env.MOGGING_DEFAULTSTORE) {
     await runDefaultStoreSmoke()
+    return true
+  }
+
+  // Windowless fan-out smoke (ADR 0022 step 02): one authored default reaches three
+  // isolated claude homes (primary included) through the existing enforce writer;
+  // pins, implicit pins, honest snapshot labels, the secret wall. Zero network.
+  if (process.env.MOGGING_PROFILEDEFAULTS) {
+    await runProfileDefaultsSmoke()
     return true
   }
 

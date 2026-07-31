@@ -5,21 +5,24 @@ import {
   type ConfigFileSnapshot,
   type ConfigMutationCoordinator
 } from '../../core/config-files'
-import type {
-  AgentConfigCatalog,
-  AgentConfigMutationResult,
-  AgentConfigObservedValue,
-  AgentConfigOverrideRecord,
-  AgentConfigProviderId,
-  AgentConfigProviderSummary,
-  AgentConfigReleaseBehavior,
-  AgentConfigScopeOption,
-  AgentConfigSetting,
-  AgentConfigSettingState,
-  AgentConfigSnapshot,
-  AgentConfigSyncState,
-  AgentConfigTarget,
-  AgentConfigValue
+import {
+  AGENT_CONFIG_ALL_ACCOUNTS,
+  type AgentConfigCatalog,
+  type AgentConfigMutationResult,
+  type AgentConfigObservedValue,
+  type AgentConfigOverrideRecord,
+  type AgentConfigProviderId,
+  type AgentConfigProviderSummary,
+  type AgentConfigReleaseBehavior,
+  type AgentConfigScopeOption,
+  type AgentConfigSetting,
+  type AgentConfigSettingState,
+  type AgentConfigSnapshot,
+  type AgentConfigSyncState,
+  type AgentConfigTarget,
+  type AgentConfigTier,
+  type AgentConfigValue,
+  type AgentProfile
 } from '@contracts'
 import { resolve } from 'node:path'
 import { codecFor, type ConfigCodec, type JsonValue } from './codecs'
@@ -30,6 +33,7 @@ import {
   type AgentConfigSource
 } from './sources'
 import { agentConfigValueContainsSecretKey, validateAgentConfigMutation } from './validation'
+import { managedKeys, resolveDefault } from './account-defaults'
 import { prepareAgentSessionOverlay, type PreparedAgentSessionOverlay } from './session-overlay'
 import type { CodexConfigObservation, CodexConfigResolverPort, CodexConfigSettingObservation } from './codex-app-server'
 
@@ -46,6 +50,25 @@ export interface AgentConfigRepository {
   }): AgentConfigOverrideRecord[]
   saveAgentConfigOverride(row: AgentConfigOverrideRecord): void
   removeAgentConfigOverride(key: Pick<AgentConfigOverrideRecord, 'provider' | 'scope' | 'targetId' | 'surface' | 'settingId'>): void
+  // ── ADR 0022: the shared account-defaults tier ──
+  listAccountDefaults(provider?: AgentConfigProviderId, tier?: AgentConfigTier): AgentConfigOverrideRecord[]
+  saveAccountDefault(row: AgentConfigOverrideRecord): void
+  removeAccountDefault(
+    provider: AgentConfigProviderId,
+    settingId: string,
+    key?: { tier?: AgentConfigTier; targetId?: string; surface?: AgentConfigOverrideRecord['surface'] }
+  ): void
+  /** Account enumeration for fan-out — the same rows the profiles feature owns. */
+  listProfiles(): AgentProfile[]
+}
+
+/** One enforceable account home: the real layer target fan-out compiles into, plus
+ *  the profile identity pins resolve against. The PRIMARY home (`user`/`default`)
+ *  is a full member — its profileId is the provider's pointer-less profile row. */
+export interface ProviderAccountHome {
+  target: AgentConfigTarget
+  profileId?: string
+  label: string
 }
 
 export interface AgentConfigResolvedContext {
@@ -201,7 +224,7 @@ export class AgentSettingsService {
     } else {
       effectiveMessage = 'Effective values reflect observable local layers. Provider-managed remote policy, MDM, environment variables, or external launch flags may still override them.'
     }
-    const states = catalog.settings.map((setting) =>
+    let states = catalog.settings.map((setting) =>
       this.settingState(
         setting,
         target,
@@ -211,6 +234,20 @@ export class AgentSettingsService {
         effectiveMessage
       )
     )
+    // ADR 0022: a key whose desired row was COMPILED from the cross-account tier is
+    // labeled with its true source — "Account default", or this account's pin.
+    if (target.scope === 'user' || target.scope === 'profile') {
+      const authoredTiers = this.options.repository.listAccountDefaults(provider)
+      if (authoredTiers.length) {
+        const profileId = target.scope === 'profile' ? target.targetId : this.primaryProfileId(provider)
+        states = states.map((state) => {
+          const row = byKey.get(recordKey({ provider, scope: target.scope, targetId: target.targetId, surface: state.setting.surface, settingId: state.setting.id }))
+          if (row?.tier !== 'compiled') return state
+          const resolved = resolveDefault(authoredTiers, profileId, state.setting.id, state.setting.surface)
+          return resolved ? { ...state, managedBy: resolved.source } : state
+        })
+      }
+    }
     return {
       provider,
       providerName: definition.name,
@@ -384,6 +421,209 @@ export class AgentSettingsService {
       if (row.ownership === 'once') this.options.repository.removeAgentConfigOverride(row)
       else this.options.repository.saveAgentConfigOverride({ ...row, status: 'synced', appliedAt: this.now(), updatedAt: this.now() })
     }
+  }
+
+  // ── ADR 0022: shared account defaults — resolution + fan-out ────────────────
+
+  /** The authored tier rows (defaults + pins) — never compiled rows. */
+  accountDefaults(provider: AgentConfigProviderId): AgentConfigOverrideRecord[] {
+    return this.options.repository.listAccountDefaults(provider)
+  }
+
+  /** Every enforceable account home for the provider: each pointer profile, plus
+   *  the PRIMARY user home as a full member (its profileId is the pointer-less
+   *  profile row, so a pin on the primary account resolves like any other). */
+  providerHomes(provider: AgentConfigProviderId): ProviderAccountHome[] {
+    const definition = findAgentCliDefinition(provider)
+    if (!definition) return []
+    const local = { kind: 'local' } as const
+    const profiles = this.options.repository.listProfiles().filter((profile) => profile.provider === provider)
+    const pointer = definition.config.pointerEnv
+    const pointered = (profile: AgentProfile): boolean =>
+      !!pointer && (!!profile.env[pointer] || provider === 'gemini' && !!profile.env.GEMINI_CONFIG_DIR)
+    const homes: ProviderAccountHome[] = []
+    if (definition.config.scopes.includes('user')) {
+      homes.push({
+        target: { scope: 'user', targetId: 'default', execution: local },
+        ...(profiles.find((profile) => !pointered(profile)) ? { profileId: profiles.find((profile) => !pointered(profile))!.id } : {}),
+        label: 'All projects'
+      })
+    }
+    if (definition.config.scopes.includes('profile')) {
+      for (const profile of profiles.filter(pointered)) {
+        homes.push({
+          target: { scope: 'profile', targetId: profile.id, execution: local },
+          profileId: profile.id,
+          label: `Profile — ${profile.name}`
+        })
+      }
+    }
+    return homes
+  }
+
+  /** Author a default or a pin, then fan the resolved values out. The same
+   *  validation wall as `set()`; the store re-refuses secret shapes on save. */
+  async setAccountDefault(
+    provider: AgentConfigProviderId,
+    settingId: string,
+    operation: 'set' | 'unset',
+    value: AgentConfigValue | undefined,
+    tier: AgentConfigTier,
+    profileId?: string
+  ): Promise<AgentConfigMutationResult> {
+    const catalog = this.catalog(provider)
+    const setting = catalog?.settings.find((candidate) => candidate.id === settingId)
+    if (!catalog || !setting) return { ok: false, reason: 'This setting is not in the validated provider catalog.' }
+    if (!setting.scopes.includes('user') && !setting.scopes.includes('profile')) {
+      return { ok: false, reason: 'The provider does not support this setting at an account-wide layer.' }
+    }
+    const valid = validateAgentConfigMutation(setting, value, operation)
+    if (!valid.ok) return { ok: false, reason: valid.reason }
+    if (tier === 'pin') {
+      const profile = this.options.repository.listProfiles().find((candidate) => candidate.id === profileId && candidate.provider === provider)
+      if (!profile) return { ok: false, reason: 'A pin names one of this provider’s accounts.' }
+    }
+    const at = this.now()
+    const prior = this.options.repository
+      .listAccountDefaults(provider, tier)
+      .find((row) => row.settingId === settingId && row.surface === setting.surface && (tier === 'default' || row.targetId === profileId))
+    try {
+      this.options.repository.saveAccountDefault({
+        provider,
+        scope: tier === 'default' ? 'user' : 'profile',
+        targetId: tier === 'default' ? AGENT_CONFIG_ALL_ACCOUNTS : profileId!,
+        tier,
+        surface: setting.surface,
+        settingId: setting.id,
+        path: [...setting.path],
+        operation,
+        ...(operation === 'set' ? { desiredValue: value as AgentConfigValue } : {}),
+        ownership: 'enforce',
+        baselinePresent: false,
+        catalogVersion: catalog.catalogVersion,
+        status: 'pending',
+        createdAt: prior?.createdAt ?? at,
+        updatedAt: at
+      })
+    } catch (error) {
+      return { ok: false, reason: safeError(error) }
+    }
+    const applied = await this.applyAccountDefaults(provider)
+    this.options.changed?.(provider)
+    return applied
+  }
+
+  /** Remove a default (every unpinned home releases the key, keeping its value) or
+   *  a pin (that home re-inherits the default live). One idempotent re-apply. */
+  async clearAccountDefault(
+    provider: AgentConfigProviderId,
+    settingId: string,
+    tier: AgentConfigTier,
+    profileId?: string
+  ): Promise<AgentConfigMutationResult> {
+    this.options.repository.removeAccountDefault(provider, settingId, {
+      tier,
+      ...(tier === 'pin' && profileId ? { targetId: profileId } : {})
+    })
+    const applied = await this.applyAccountDefaults(provider)
+    this.options.changed?.(provider)
+    return applied
+  }
+
+  /**
+   * Fan-out: reconcile the COMPILED row set to the authored tiers. For every home
+   * × managed key, `resolveDefault` decides what the home should hold; the row it
+   * produces is an ordinary enforce row driven through the ONE existing writer
+   * (`reconcileRows`) — this method decides WHAT, never HOW. Idempotent: a key
+   * that no longer resolves releases its compiled row (the file keeps its last
+   * value); a user-authored scoped override at the same key is an implicit pin
+   * and is never touched (more specific intent wins).
+   */
+  async applyAccountDefaults(provider: AgentConfigProviderId): Promise<AgentConfigMutationResult> {
+    const catalog = this.catalog(provider)
+    if (!catalog) return { ok: false, reason: 'No validated settings catalog is available.' }
+    const authored = this.options.repository.listAccountDefaults(provider)
+    const keys = managedKeys(authored)
+    const homes = this.providerHomes(provider)
+    const toReconcile: AgentConfigOverrideRecord[] = []
+    let failure: string | undefined
+
+    for (const home of homes) {
+      const homeRows = this.options.repository.listAgentConfigOverrides({
+        provider,
+        scope: home.target.scope,
+        targetId: home.target.targetId
+      })
+      // Release: a compiled row whose key the tier no longer manages (or no longer
+      // resolves for THIS home) is removed — enforce stops, the file keeps its value.
+      for (const row of homeRows) {
+        if (row.tier !== 'compiled') continue
+        if (!resolveDefault(authored, home.profileId, row.settingId, row.surface)) {
+          this.options.repository.removeAgentConfigOverride(row)
+        }
+      }
+      for (const key of keys) {
+        const resolved = resolveDefault(authored, home.profileId, key.settingId, key.surface)
+        if (!resolved) continue
+        const setting = catalog.settings.find((candidate) => candidate.id === key.settingId && candidate.surface === key.surface)
+        const requiredScope = home.target.scope
+        if (!setting || !setting.scopes.includes(requiredScope)) continue
+        const prior = homeRows.find((row) => row.settingId === key.settingId && row.surface === key.surface)
+        if (prior && prior.tier !== 'compiled') continue // the implicit pin: hands off
+        let baselinePresent = prior?.baselinePresent ?? false
+        let baselineValue = prior?.baselineValue
+        if (!prior) {
+          try {
+            const context = await this.options.resolveContext(provider, home.target)
+            const source = selectAgentConfigSource(provider, home.target, setting.surface, context.paths)
+            if (!source?.file || !source.writable) {
+              failure ??= source?.reason || `The ${home.label} layer is unavailable.`
+              continue
+            }
+            const current = await this.coordinator.read(source.file)
+            const observed = codecFor(source.format).read(current.text, setting.path)
+            baselinePresent = observed.present
+            baselineValue = observed.value as AgentConfigValue | undefined
+            if (baselinePresent && agentConfigValueContainsSecretKey(baselineValue)) {
+              failure ??= 'This structured value contains provider-owned authentication fields and cannot be captured as an app baseline.'
+              continue
+            }
+          } catch (error) {
+            failure ??= safeError(error)
+            continue
+          }
+        }
+        const at = this.now()
+        const row: AgentConfigOverrideRecord = {
+          provider,
+          scope: home.target.scope,
+          targetId: home.target.targetId,
+          tier: 'compiled',
+          surface: setting.surface,
+          settingId: setting.id,
+          path: [...setting.path],
+          operation: resolved.operation,
+          ...(resolved.operation === 'set' ? { desiredValue: resolved.value as AgentConfigValue } : {}),
+          ownership: 'enforce',
+          baselinePresent,
+          ...(baselinePresent ? { baselineValue } : {}),
+          catalogVersion: catalog.catalogVersion,
+          status: 'pending',
+          createdAt: prior?.createdAt ?? at,
+          updatedAt: at
+        }
+        this.options.repository.saveAgentConfigOverride(row)
+        toReconcile.push(row)
+      }
+    }
+    const result = await this.reconcileRows(toReconcile)
+    if (!result.ok) failure ??= result.reason
+    return failure ? { ok: false, reason: failure } : { ok: true }
+  }
+
+  /** The primary home's profile identity — the provider's pointer-less profile row. */
+  private primaryProfileId(provider: AgentConfigProviderId): string | undefined {
+    return this.providerHomes(provider).find((home) => home.target.scope === 'user')?.profileId
   }
 
   private async reconcileRows(rows: AgentConfigOverrideRecord[]): Promise<AgentConfigMutationResult> {

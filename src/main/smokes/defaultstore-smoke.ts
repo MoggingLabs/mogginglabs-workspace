@@ -71,6 +71,18 @@ export async function runDefaultStoreSmoke(): Promise<void> {
     assert.equal(store.listAccountDefaults('claude', 'pin')[0]?.targetId, 'profile-work')
     assert.equal(store.listAgentConfigOverrides().length, 0)
 
+    // 3b) The collision that ate the first pin: a COMPILED enforce row for the
+    // same home shares the pin's logical key — the `__pin__:` storage namespace
+    // must keep BOTH alive (the authored pin listed, the compiled row enforced),
+    // and a profile-targeted purge must reap the pin alongside the home's rows.
+    store.saveAgentConfigOverride(tierRow({ tier: 'compiled', scope: 'profile', targetId: 'profile-work', desiredValue: 'COMPILED_Y_4242', status: 'synced' }))
+    assert.equal(store.listAccountDefaults('claude', 'pin').length, 1, 'the compiled row must not swallow the authored pin')
+    assert.equal(store.listAgentConfigOverrides({ provider: 'claude' }).filter((row) => row.tier === 'compiled').length, 1)
+    store.removeAgentConfigTarget('profile', 'profile-work')
+    assert.equal(store.listAccountDefaults('claude', 'pin').length, 0, 'a deleted profile must not leave an orphan pin')
+    assert.equal(store.listAgentConfigOverrides({ provider: 'claude' }).length, 0)
+    store.saveAccountDefault(tierRow({ tier: 'pin', scope: 'profile', targetId: 'profile-work', desiredValue: 'PIN_Y_4242' }))
+
     // 4) Secret-shaped values are REFUSED at the boundary — string shapes (the
     // review redactor) and secret-shaped map keys (the agent-settings detector).
     const refused = (value: AgentConfigValue): void => {

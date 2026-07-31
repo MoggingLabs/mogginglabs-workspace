@@ -42,6 +42,9 @@ import {
  *  secret-shaped string VALUES (the review redactor — the same patterns that refuse a
  *  profile pointer env like `FAKE_KEY=sk-…`). Depth is already bounded by the IPC
  *  shape guard (12) and validateShape; this walk mirrors those limits defensively. */
+/** Storage namespace for authored pin rows — see the ADR 0022 block below. */
+const PIN_TARGET_PREFIX = '__pin__:'
+
 function valueLooksSecret(value: AgentConfigValue | undefined, depth = 0): boolean {
   if (value === undefined || value === null || depth > 12) return false
   if (typeof value === 'string') return redactSecrets(value).redactions > 0
@@ -355,7 +358,7 @@ export class SettingsStore {
         provider: row.provider,
         scope: row.scope,
         targetId: row.targetId,
-        ...(row.tier === 'default' || row.tier === 'pin' ? { tier: row.tier } : {}),
+        ...(row.tier === 'default' || row.tier === 'pin' || row.tier === 'compiled' ? { tier: row.tier } : {}),
         surface: row.surface,
         settingId: row.settingId,
         path,
@@ -443,6 +446,13 @@ export class SettingsStore {
     this.db
       .prepare('DELETE FROM app_agent_config_overrides WHERE scope = ? AND target_id = ?')
       .run(scope, targetId)
+    // A deleted profile's PINS must not outlive it either (they live under the
+    // `__pin__:` storage namespace, which the plain delete above cannot see).
+    if (scope === 'profile') {
+      this.db
+        .prepare("DELETE FROM app_agent_config_overrides WHERE tier = 'pin' AND target_id = ?")
+        .run(PIN_TARGET_PREFIX + targetId)
+    }
   }
 
   // ── Shared account defaults (ADR 0022) ─────────────────────────────────────
@@ -453,6 +463,12 @@ export class SettingsStore {
   // Unlike profiles/board rows (sanitized above this layer), the refusal lives
   // HERE: every save path shares one boundary, so a secret-shaped default is
   // impossible to persist, not just discouraged (the phase-4/04 guardrail).
+  //
+  // The `__pin__:` target namespace: an authored pin for profile P would otherwise
+  // share its PRIMARY KEY (provider, 'profile', P, surface, settingId) with the
+  // COMPILED enforce row fan-out writes for that same home — and the apply would
+  // silently swallow the pin. The prefix is a storage encoding only: written on
+  // save, stripped on read, mapped on remove — no consumer ever sees it.
 
   listAccountDefaults(provider?: AgentConfigProviderId, tier?: AgentConfigTier): AgentConfigOverrideRecord[] {
     const clauses: string[] = [tier ? 'tier = ?' : "tier IN ('default', 'pin')"]
@@ -461,7 +477,11 @@ export class SettingsStore {
       clauses.push('provider = ?')
       args.push(provider)
     }
-    return this.queryOverrideRows(clauses, args)
+    return this.queryOverrideRows(clauses, args).map((row) =>
+      row.tier === 'pin' && row.targetId.startsWith(PIN_TARGET_PREFIX)
+        ? { ...row, targetId: row.targetId.slice(PIN_TARGET_PREFIX.length) }
+        : row
+    )
   }
 
   saveAccountDefault(row: AgentConfigOverrideRecord): void {
@@ -481,6 +501,7 @@ export class SettingsStore {
     // are not homes. Normalizing here keeps a caller from smuggling either in.
     this.saveAgentConfigOverride({
       ...row,
+      ...(row.tier === 'pin' ? { targetId: PIN_TARGET_PREFIX + row.targetId } : {}),
       baselinePresent: false,
       baselineValue: undefined,
       lastAppliedValue: undefined,
@@ -494,11 +515,12 @@ export class SettingsStore {
     settingId: string,
     key?: { tier?: AgentConfigTier; targetId?: string; surface?: AgentConfigSurface }
   ): void {
+    const tier = key?.tier ?? 'default'
     const clauses = ['provider = ?', 'setting_id = ?', 'tier = ?']
-    const args: unknown[] = [provider, settingId, key?.tier ?? 'default']
+    const args: unknown[] = [provider, settingId, tier]
     if (key?.targetId) {
       clauses.push('target_id = ?')
-      args.push(key.targetId)
+      args.push(tier === 'pin' ? PIN_TARGET_PREFIX + key.targetId : key.targetId)
     }
     if (key?.surface) {
       clauses.push('surface = ?')
