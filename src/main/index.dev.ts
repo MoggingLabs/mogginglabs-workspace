@@ -103,6 +103,7 @@ import { runFlickerSmoke } from './smokes/flicker-smoke'
 import { runPaneScrollSmoke } from './smokes/panescroll-smoke'
 import { runPaneFitSmoke } from './smokes/panefit-smoke'
 import { runReattachFitSmoke } from './smokes/reattachfit-smoke'
+import { runRestoreDimsSmoke } from './smokes/restoredims-smoke'
 import { runAppScrollSmoke } from './smokes/appscroll-smoke'
 import { runConptySmoke } from './smokes/conpty-smoke'
 import { runPaneOpsSmoke } from './smokes/paneops-smoke'
@@ -220,7 +221,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_EQUALIZE', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
-  'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL', 'MOGGING_PANEFIT', 'MOGGING_REATTACHFIT',
+  'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL', 'MOGGING_PANEFIT', 'MOGGING_REATTACHFIT', 'MOGGING_RESTOREDIMS',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_RUNTIMESPLIT', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
   'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_BRAINDOCS', 'MOGGING_MEMGRAPH', 'MOGGING_BRAINSEM', 'MOGGING_BRAINPROPS', 'MOGGING_BRAINCAP', 'MOGGING_BRAINRECALL', 'MOGGING_BRAINUX', 'MOGGING_BRAINMILESTONE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_UPDATEOFFLINE', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_PANERESTART', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
   'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
@@ -332,6 +333,15 @@ async function beforeAppSettings(): Promise<boolean> {
   // process level (the in-pane probe sees the resize), with dimension-idempotence.
   if (process.env.MOGGING_REATTACHFIT) {
     await runReattachFitSmoke()
+    return true
+  }
+
+  // Windowless restore-dims smoke: THE DIMS INVARIANT across daemon generations — a
+  // restore respawns at the persisted grid, a typed resume waits for a client to
+  // MEASURE the pane (dims-less spawns neither resize nor release it), and the
+  // headless grace still types it when no app ever comes (the smeared-restore fix).
+  if (process.env.MOGGING_RESTOREDIMS) {
+    await runRestoreDimsSmoke()
     return true
   }
 

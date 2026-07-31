@@ -361,6 +361,10 @@ run_smoke CONTROL2    MOGGING_CONTROL2  1 180 control2
 # RUNTIMESPLIT (ADR 0016): daemon/house-MCP/`mogging` all hosted by the standalone Node
 # helper, shims env-free, runAsNode:false declared. Release blocks on SURVIVE + CONTROL +
 # this (release.yml); the FUSES gate proves the same flip on the packaged artifact.
+# The dims invariant (smeared-restore root cause): restore respawns at the persisted
+# grid; a typed resume waits for a MEASURED attach (dims-less spawns neither resize nor
+# release it); the headless grace still types it when no client ever measures.
+run_smoke RESTOREDIMS MOGGING_RESTOREDIMS 1 180 restoredims
 run_smoke RUNTIMESPLIT MOGGING_RUNTIMESPLIT 1 240 runtimesplit
 run_smoke WORKTREE    MOGGING_WORKTREE  1 240 worktree
 run_smoke REVIEW      MOGGING_REVIEW    1 240 review
