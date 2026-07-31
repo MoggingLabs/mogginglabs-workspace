@@ -14,6 +14,8 @@ const LOCAL: PersistedPane = {
   reportedCwdAt: 1_700_000_000_000,
   command: 'claude',
   scrollback: 'hello\n',
+  cols: 133,
+  rows: 41,
   updatedAt: 1_700_000_000_500
 }
 
@@ -46,6 +48,24 @@ describe('session pane row mapping', () => {
   it('drops an unknown persisted shell dialect rather than inventing one', () => {
     const pane = rowToPane({ ...paneToRow(REMOTE), remoteShell: 'tcsh' })
     expect(pane?.remote?.shell).toBeUndefined()
+  })
+
+  it('restores without dims on a pre-migration row (grid columns null)', () => {
+    const pane = rowToPane({ ...paneToRow(LOCAL), gridCols: null, gridRows: null })
+    expect(pane?.cols).toBeUndefined()
+    expect(pane?.rows).toBeUndefined()
+  })
+
+  it('drops a corrupt or torn grid whole rather than restoring half a size', () => {
+    // Below the pty floors (2 cols / 1 row) — the values node-pty would throw on.
+    expect(rowToPane({ ...paneToRow(LOCAL), gridCols: 0 })?.cols).toBeUndefined()
+    expect(rowToPane({ ...paneToRow(LOCAL), gridRows: -3 })?.rows).toBeUndefined()
+    // A torn pair (cols without rows) falls back together: half a grid is not a size.
+    const torn = rowToPane({ ...paneToRow(LOCAL), gridRows: null })
+    expect(torn?.cols).toBeUndefined()
+    expect(torn?.rows).toBeUndefined()
+    // Non-integer dims never reach node-pty.
+    expect(rowToPane({ ...paneToRow(LOCAL), gridCols: 80.5 })?.cols).toBeUndefined()
   })
 
   it('caps the persisted scrollback tail at PERSISTED_SCROLLBACK_CHARS', () => {

@@ -829,6 +829,11 @@ class PaneSession {
       remote: this.remote ? { ...this.remote } : undefined,
       command: this.command,
       scrollback: this.buffer,
+      // The grid, so a cold-start restore spawns at the pane's real size — a resume
+      // typed into the 80×24 default drew its TUI at the wrong width, and the attach
+      // resize then spliced ConPTY's repaint over it (the smeared-restore bug).
+      cols: this.cols,
+      rows: this.rows,
       updatedAt: Date.now()
     }
   }
@@ -917,6 +922,10 @@ class PaneSession {
     } catch {
       /* pane may be exiting */
     }
+    // The grid is persisted state now (snapshot): a resize with no output in its wake
+    // (a quiet pane dragged to a new layout) must still reach the store, or the next
+    // cold start restores at the size before the drag.
+    this.hooks.onChange()
   }
   kill(): void {
     this.tracker.dispose()
@@ -1140,6 +1149,13 @@ export class SessionManager {
       const spec: SpawnSpec = {
         cwd: p.remote ? p.cwd : (reportedCwd ?? p.cwd),
         run: p.command,
+        // The persisted grid: the resume typed below boots the agent's TUI at the pane's
+        // real size. Without it every restore spawned at 80×24 and the app's attach
+        // resized mid-frame — ConPTY's answering repaint spliced stale rows over the
+        // live TUI (the smeared-restore bug). Absent on a pre-migration row: the
+        // constructor's default stands, and the first persist writes the truth.
+        cols: p.cols,
+        rows: p.rows,
         remote: p.remote
           ? { ...p.remote, platform: 'posix', cwd: reportedCwd ?? restoredRemoteCwd ?? undefined }
           : undefined

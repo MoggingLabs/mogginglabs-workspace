@@ -17,6 +17,13 @@ export interface PersistedPane {
   remote?: RemotePaneTarget
   command?: string // launch label (e.g. "claude") — NEVER a credential
   scrollback: string // raw PTY output for repaint (local terminal content)
+  /** The pane's grid at last persist. A cold-start restore spawns at THIS size — not the
+   *  80×24 default — so a typed resume (`claude --resume`) boots its TUI at the pane's
+   *  real width. Un-persisted, the agent drew at 80 cols, the app attached with the true
+   *  grid, and the attach resize landed mid-frame: ConPTY's full repaint spliced stale
+   *  rows over the live TUI and the 80-col scrollback re-wrapped — the smeared-pane bug. */
+  cols?: number
+  rows?: number
   updatedAt: number
 }
 

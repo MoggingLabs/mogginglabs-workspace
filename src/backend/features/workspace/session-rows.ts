@@ -34,8 +34,17 @@ export interface PaneRowCells {
   remoteShell: string | null
   command: string | null
   scrollback: string
+  gridCols: number | null
+  gridRows: number | null
   updatedAt: number
 }
+
+/** Grid floors, matching the renderer's fit minimums and attachDims': below these a
+ *  value is not a terminal grid, and node-pty throws on non-positive sizes. A row that
+ *  carries corrupt dims restores WITHOUT them (spawn falls back to its default) rather
+ *  than failing the pane — wrong-sized is recoverable, unrestored is not. */
+const asGridDim = (value: number | null, floor: number): number | undefined =>
+  value !== null && Number.isInteger(value) && value >= floor ? value : undefined
 
 export function paneToRow(p: PersistedPane): PaneRowCells {
   return {
@@ -53,6 +62,8 @@ export function paneToRow(p: PersistedPane): PaneRowCells {
     remoteShell: p.remote?.shell ?? null,
     command: p.command ?? null,
     scrollback: p.scrollback.slice(-PERSISTED_SCROLLBACK_CHARS),
+    gridCols: p.cols ?? null,
+    gridRows: p.rows ?? null,
     updatedAt: p.updatedAt
   }
 }
@@ -78,6 +89,10 @@ export function rowToPane(r: PaneRowCells): PersistedPane | null {
       })
     : null
   if (hasRemoteFields && !remote) return null
+  // A grid restores whole or not at all — half a grid (cols without rows) is not a size
+  // a pty can spawn at, so a torn pair falls back to the spawn default together.
+  const cols = asGridDim(r.gridCols, 2)
+  const rows = asGridDim(r.gridRows, 1)
   return {
     id: r.id,
     workspaceId: r.workspaceId,
@@ -89,6 +104,7 @@ export function rowToPane(r: PaneRowCells): PersistedPane | null {
     remote: remote ? { ...remote, cwd: r.remoteCwd ?? undefined, shell: asRemoteShell(r.remoteShell) } : undefined,
     command: r.command ?? undefined,
     scrollback: r.scrollback,
+    ...(cols !== undefined && rows !== undefined ? { cols, rows } : {}),
     updatedAt: r.updatedAt
   }
 }

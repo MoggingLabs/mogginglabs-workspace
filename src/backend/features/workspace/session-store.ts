@@ -19,11 +19,11 @@ import { paneToRow, rowToPane, type PaneRowCells } from './session-rows'
 const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 
 const PANE_COLUMNS =
-  'id, workspace_id AS workspaceId, cwd, reported_cwd AS reportedCwd, reported_cwd_at AS reportedCwdAt, remote_name AS remoteName, remote_host AS remoteHost, remote_user AS remoteUser, remote_port AS remotePort, remote_cwd AS remoteCwd, remote_platform AS remotePlatform, remote_shell AS remoteShell, command, scrollback, updated_at AS updatedAt'
+  'id, workspace_id AS workspaceId, cwd, reported_cwd AS reportedCwd, reported_cwd_at AS reportedCwdAt, remote_name AS remoteName, remote_host AS remoteHost, remote_user AS remoteUser, remote_port AS remotePort, remote_cwd AS remoteCwd, remote_platform AS remotePlatform, remote_shell AS remoteShell, command, scrollback, grid_cols AS gridCols, grid_rows AS gridRows, updated_at AS updatedAt'
 
 const PANE_UPSERT =
-  `INSERT INTO panes (id, workspace_id, cwd, reported_cwd, reported_cwd_at, remote_name, remote_host, remote_user, remote_port, remote_cwd, remote_platform, remote_shell, command, scrollback, updated_at)
-   VALUES (@id, @workspaceId, @cwd, @reportedCwd, @reportedCwdAt, @remoteName, @remoteHost, @remoteUser, @remotePort, @remoteCwd, @remotePlatform, @remoteShell, @command, @scrollback, @updatedAt)
+  `INSERT INTO panes (id, workspace_id, cwd, reported_cwd, reported_cwd_at, remote_name, remote_host, remote_user, remote_port, remote_cwd, remote_platform, remote_shell, command, scrollback, grid_cols, grid_rows, updated_at)
+   VALUES (@id, @workspaceId, @cwd, @reportedCwd, @reportedCwdAt, @remoteName, @remoteHost, @remoteUser, @remotePort, @remoteCwd, @remotePlatform, @remoteShell, @command, @scrollback, @gridCols, @gridRows, @updatedAt)
    ON CONFLICT(id) DO UPDATE SET
      workspace_id = excluded.workspace_id, cwd = excluded.cwd,
      reported_cwd = excluded.reported_cwd, reported_cwd_at = excluded.reported_cwd_at,
@@ -31,7 +31,8 @@ const PANE_UPSERT =
      remote_user = excluded.remote_user, remote_port = excluded.remote_port,
      remote_cwd = excluded.remote_cwd, remote_platform = excluded.remote_platform,
      remote_shell = excluded.remote_shell, command = excluded.command,
-     scrollback = excluded.scrollback, updated_at = excluded.updated_at`
+     scrollback = excluded.scrollback, grid_cols = excluded.grid_cols,
+     grid_rows = excluded.grid_rows, updated_at = excluded.updated_at`
 
 export class SessionStore {
   private readonly db: BetterSqlite3.Database
@@ -55,6 +56,8 @@ export class SessionStore {
         remote_shell TEXT,
         command TEXT,
         scrollback TEXT NOT NULL,
+        grid_cols INTEGER,
+        grid_rows INTEGER,
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS workspaces (
@@ -84,7 +87,12 @@ export class SessionStore {
       // The persisted shell dialect (PersistedPane.remote.shell) — the contract has
       // always promised "a restored pane comes back speaking the same language", but
       // no column existed, so the field silently dropped on every persist.
-      ['remote_shell', 'TEXT']
+      ['remote_shell', 'TEXT'],
+      // The pane's grid (PersistedPane.cols/rows) — restore spawns at this size so a
+      // typed resume boots its TUI at the pane's real width, not the 80×24 default
+      // (the cold-start smear; see the contract's field doc).
+      ['grid_cols', 'INTEGER'],
+      ['grid_rows', 'INTEGER']
     ] as const) {
       addColumnIfMissing(this.db, 'panes', column, type)
     }

@@ -127,7 +127,12 @@ function readPersistedPanes(dir: string): PersistedPane[] {
 
 /** Everything learned from a live old daemon: its pane set with live scrollback. */
 export interface LiveCapture {
-  panes: Array<{ info: Pick<PaneInfo, 'id' | 'cwd' | 'title' | 'remoteName'>; scrollback: string | null }>
+  // Grid dims are Partial: an OLD daemon's wire may predate them, and the merge below
+  // falls back to the persisted row's dims (then to none — spawn default) when absent.
+  panes: Array<{
+    info: Pick<PaneInfo, 'id' | 'cwd' | 'title' | 'remoteName'> & Partial<Pick<PaneInfo, 'cols' | 'rows'>>
+    scrollback: string | null
+  }>
 }
 
 function matchedPersistedRemote(
@@ -216,6 +221,10 @@ export function mergeLiveCaptureRows(
         : undefined,
       command: info.title ?? oldForIdentity?.command,
       scrollback: scrollback ?? oldForIdentity?.scrollback ?? '',
+      // The live grid beats a lagging persisted one: the restore after this hand-off
+      // spawns (and types its resume) at whatever size lands here.
+      cols: info.cols ?? oldForIdentity?.cols,
+      rows: info.rows ?? oldForIdentity?.rows,
       updatedAt
     }]
   })
@@ -269,7 +278,7 @@ function captureAndRetireOldDaemon(
       if (retireStarted || settled) return
       const result: LiveCapture = {
         panes: (panes ?? []).map((p) => ({
-          info: { id: p.id, cwd: p.cwd, title: p.title, remoteName: p.remoteName },
+          info: { id: p.id, cwd: p.cwd, title: p.title, remoteName: p.remoteName, cols: p.cols, rows: p.rows },
           scrollback: captured.get(p.id) ?? null
         }))
       }
