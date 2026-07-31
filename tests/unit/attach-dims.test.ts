@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attachDims } from '../../src/pty-daemon/attach-dims'
+import { attachDims, specDimsUsable } from '../../src/pty-daemon/attach-dims'
 
 // The attach-size reconciliation rule (the "pane renders half its width" root cause):
 // the attaching client's viewport is authoritative, tmux-style. ensure() applies what
@@ -31,5 +31,24 @@ describe('attachDims', () => {
 
   it('accepts the minimum viable grid', () => {
     expect(attachDims({ cols: 2, rows: 1 }, { cols: 80, rows: 24 })).toEqual({ cols: 2, rows: 1 })
+  })
+})
+
+// The confirmation predicate a deferred launch waits on: equal-to-current dims apply
+// nothing (attachDims null) yet still turn a restore's persisted-size GUESS into a fact.
+describe('specDimsUsable', () => {
+  it('true for a whole measured grid, including equal-to-current and the minimum', () => {
+    expect(specDimsUsable({ cols: 80, rows: 24 })).toBe(true)
+    expect(specDimsUsable({ cols: 2, rows: 1 })).toBe(true)
+  })
+
+  it('false for absent, torn, sub-floor, or non-integer dims', () => {
+    expect(specDimsUsable({})).toBe(false)
+    expect(specDimsUsable({ cols: 100 })).toBe(false)
+    expect(specDimsUsable({ rows: 30 })).toBe(false)
+    expect(specDimsUsable({ cols: 1, rows: 24 })).toBe(false)
+    expect(specDimsUsable({ cols: 80, rows: 0 })).toBe(false)
+    expect(specDimsUsable({ cols: 80.5, rows: 24 })).toBe(false)
+    expect(specDimsUsable({ cols: NaN, rows: 24 })).toBe(false)
   })
 })

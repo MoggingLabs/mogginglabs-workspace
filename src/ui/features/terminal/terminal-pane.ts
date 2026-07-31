@@ -483,12 +483,18 @@ export class TerminalPane {
     // app's install folder, whatever the wizard picked. A REMOTE pane sends none: the path
     // is local and would mean nothing on the far side (publishPaneCwds skips those slots).
     const cwd = remote ? '' : (getPaneCwd(this.id) ?? '')
+    // Dims only when this pane has actually MEASURED (a hidden background workspace
+    // mounts display:none — proposeGrid can't see a cell). Unmeasured, xterm still
+    // holds its own 80×24 default, and sending THAT resized a surviving agent session
+    // to the wrong grid on every app restart; absent dims tell the daemon to keep the
+    // session's size (attachDims), and the reveal's refit sends the real ones.
+    const measured = proposeGrid(this.term) !== null
     return terminalClient
       .spawn({
         id: this.id,
         cwd,
-        cols: this.term.cols,
-        rows: this.term.rows,
+        cols: measured ? this.term.cols : undefined,
+        rows: measured ? this.term.rows : undefined,
         workspaceId: workspaceIdForPane(this.id),
         agentId: assignmentForPane(this.id),
         remoteHostId: remote?.hostId,

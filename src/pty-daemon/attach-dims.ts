@@ -11,13 +11,22 @@
  * match (a same-size resize forwarded to ConPTY costs a full spurious repaint — see
  * PaneSession.resize). Floors mirror the renderer's fit minimums (2 cols / 1 row).
  */
+/** Does the spec carry a USABLE grid — a real client measurement, whole and above the
+ *  floors? Distinct from attachDims' verdict: equal-to-current dims apply nothing but
+ *  still CONFIRM the size (a deferred restore launch waits on exactly that — see
+ *  PaneSession.confirmDims). */
+export function specDimsUsable(spec: { cols?: number; rows?: number }): boolean {
+  const { cols, rows } = spec
+  if (typeof cols !== 'number' || typeof rows !== 'number') return false
+  return Number.isInteger(cols) && Number.isInteger(rows) && cols >= 2 && rows >= 1
+}
+
 export function attachDims(
   spec: { cols?: number; rows?: number },
   current: { cols: number; rows: number }
 ): { cols: number; rows: number } | null {
-  const { cols, rows } = spec
-  if (typeof cols !== 'number' || typeof rows !== 'number') return null
-  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || rows < 1) return null
+  if (!specDimsUsable(spec)) return null
+  const { cols, rows } = spec as { cols: number; rows: number }
   if (cols === current.cols && rows === current.rows) return null
   return { cols, rows }
 }

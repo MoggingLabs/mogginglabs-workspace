@@ -6,8 +6,13 @@ import type { PaneId } from '../domain/pane'
 export interface SpawnRequest {
   id: PaneId
   cwd: string
-  cols: number
-  rows: number
+  /** The pane's MEASURED grid — absent when the pane could not measure (a hidden
+   *  background workspace mounts display:none; its cells are unmeasurable). Dims flow
+   *  one way, from a real measurement to the PTY: an invented 80×24 here resized a
+   *  SURVIVING agent session to the wrong grid on every app restart (attachDims treats
+   *  absent dims as "leave the session alone" — this is the field honoring it). */
+  cols?: number
+  rows?: number
   /** Trusted renderer context for least-privilege pane environment materialization.
    *  Missing/unknown values fail closed: no workspace-scoped secrets are injected. */
   workspaceId?: string

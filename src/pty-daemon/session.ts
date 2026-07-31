@@ -13,7 +13,7 @@ import { aiderLogPath } from '@backend/features/context'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { PANE_CWD_MAX, normalizeRemoteConnection, notifyEventToState } from '@contracts'
 import { log } from './lifecycle'
-import { attachDims } from './attach-dims'
+import { attachDims, specDimsUsable } from './attach-dims'
 import {
   ActivityTracker,
   AgentProcessDetector,
@@ -337,6 +337,22 @@ export function remoteBootstrapCommand(cwd?: string): string {
 }
 
 export interface PaneSubscriber {
+/**
+ * How long a DEFERRED typed launch (a restore's resume, or a run into a dims-less spawn)
+ * waits for a client to confirm the pane's grid before typing anyway. THE INVARIANT this
+ * serves: an agent CLI must never be launched into a pty whose size no client has
+ * measured — it reads its width once at boot, draws its TUI at it, and the correcting
+ * resize then lands mid-frame (ConPTY answers with a stale full repaint spliced over the
+ * live TUI: the smeared-restore artifact). Persisted dims make the spawn a good GUESS;
+ * only an attach makes it a fact. The grace bound keeps the daemon's headless
+ * self-recovery (ADR 0006): with no app in sight, the resume still types — at the
+ * persisted size, which is no worse than what shipped before. Env seam for gates only.
+ */
+const LAUNCH_DIMS_GRACE_MS = Math.min(
+  60_000,
+  Math.max(500, Number(process.env.MOGGING_LAUNCH_DIMS_GRACE_MS) || 15_000)
+)
+
   send(data: string): void
   exit(code: number): void
   state(state: AgentState): void
@@ -407,6 +423,10 @@ class PaneSession {
   /** One breadcrumb per pane when the pty refuses writes — never one per keystroke. */
   private writeFailLogged = false
   /** True while this session is an UNTOUCHED cold-start restore: a fresh shell repainting
+  /** A typed launch waiting for the pane's grid to be CONFIRMED by a client (see
+   *  LAUNCH_DIMS_GRACE_MS — the invariant lives on that constant's doc). */
+  private pendingLaunch?: { cmd: string; cancelOnInput: boolean }
+  private launchGraceTimer?: NodeJS.Timeout
    *  persisted scrollback, with no live agent in it and nothing typed since. The app reads
    *  it (via `spawned.restored`) to decide that resume must TYPE — the opposite of a true
    *  reattach. Cleared by the first client input, and never set when the daemon itself
@@ -685,24 +705,68 @@ class PaneSession {
     })
     this.proc.onExit(({ exitCode }) => {
       this.tracker.dispose()
+      this.pendingLaunch = undefined
+      if (this.launchGraceTimer) {
+        clearTimeout(this.launchGraceTimer)
+        this.launchGraceTimer = undefined
+      }
       this.gitContext?.dispose()
       for (const s of this.subs) s.exit(exitCode)
       this.subs.clear()
       hooks.onExit()
     })
-    // Fresh panes run their launch command. RESTORED panes repaint prior scrollback in a fresh
-    // shell at the same cwd, and relaunch a known agent via its own resume (step 4) — never a
-    // frozen process; a pane with no resumable agent just restores its shell.
+    // Fresh panes run their launch command — immediately ONLY when the spawn spec carried
+    // a measured grid (the client sized this pty; the agent boots at the truth). RESTORED
+    // panes repaint prior scrollback in a fresh shell at the same cwd, and relaunch a known
+    // agent via its own resume (step 4) — never a frozen process; a pane with no resumable
+    // agent just restores its shell.
     if (spec.run && !restore) {
-      this.cwdState.acceptCommandStart()
-      this.writePty(spec.run + '\r')
+      if (specDimsUsable(spec)) {
+        this.cwdState.acceptCommandStart()
+        this.writePty(spec.run + '\r')
+      } else {
+        // A dims-less spawn (an unmeasured pane — hidden workspace) with a launch: defer
+        // until a client confirms the grid, so the agent never boots at an invented size.
+        // Never cancelled by input: the app already reported this run as delivered.
+        this.deferLaunch(spec.run, false)
+      }
     }
     // A restore whose cwd fell back to home must NOT resume: `claude --resume` typed in
     // the home directory resumes the wrong project's sessions. The shell restores with
+    //
+    // ALWAYS deferred: the persisted grid this pane spawned at is a guess about a layout
+    // the app has not shown yet — only an attach makes it a fact (LAUNCH_DIMS_GRACE_MS).
+    // Cancelled by real input: a human typing into the restored shell owns it now, and a
+    // resume spliced after their keystrokes would compose a different command.
     // its scrollback; the real cwd stays persisted (requestedCwd) for the next start.
     else if (restore?.resumeCommand && !this.cwdFellBack) {
-      this.cwdState.acceptCommandStart()
-      this.writePty(restore.resumeCommand + '\r')
+      this.deferLaunch(restore.resumeCommand, true)
+    }
+  }
+
+  /** Arm a typed launch to fire when the pane's grid is CONFIRMED by a client (or on the
+   *  grace timeout — headless self-recovery must not wait forever). One launch per pane. */
+  private deferLaunch(cmd: string, cancelOnInput: boolean): void {
+    this.pendingLaunch = { cmd, cancelOnInput }
+    this.launchGraceTimer = setTimeout(() => this.flushPendingLaunch(), LAUNCH_DIMS_GRACE_MS)
+  }
+
+  /** Type the deferred launch NOW (dims confirmed, or grace expired). Idempotent. */
+  private flushPendingLaunch(): void {
+    if (this.launchGraceTimer) {
+      clearTimeout(this.launchGraceTimer)
+      this.launchGraceTimer = undefined
+    const pending = this.pendingLaunch
+    if (!pending) return
+    this.pendingLaunch = undefined
+    this.cwdState.acceptCommandStart()
+    this.writePty(pending.cmd + '\r')
+  }
+
+  /** A client measured this pane at exactly its current grid (attach with equal dims, or
+   *  an explicit same-size resize). The size is now a FACT — release a waiting launch. */
+  confirmDims(): void {
+    this.flushPendingLaunch()
     }
   }
 
@@ -892,6 +956,16 @@ class PaneSession {
       this.writePty(data)
       return
     }
+    // A human typed into the restored shell first: they own the pane now. A deferred
+    // resume spliced in AFTER their keystrokes would compose a different command line —
+    // cancel it (restore resumes only; a fresh run's delivery was already reported).
+    if (this.pendingLaunch?.cancelOnInput) {
+      this.pendingLaunch = undefined
+      if (this.launchGraceTimer) {
+        clearTimeout(this.launchGraceTimer)
+        this.launchGraceTimer = undefined
+      }
+    }
     this.pristineRestore = false // touched: from here on it's a live shell, not a restore
     // A SUBMIT or a PRINTABLE key answers a blocked agent (every permission dialog takes
     // single-key answers; see isEngagedInput). Navigation and signals — arrows, ^C, mouse
@@ -913,8 +987,12 @@ class PaneSession {
     // Idempotent by dimension, not by call: ConPTY answers EVERY resize it receives
     // with a full-viewport repaint (see the renderer's REFIT_SETTLE_MS rationale), so
     // a same-size resize is never a harmless no-op to forward — it is a spurious
-    // repaint replayed over whatever the agent is drawing.
-    if (cols === this.cols && rows === this.rows) return
+    // repaint replayed over whatever the agent is drawing. It IS still a client
+    // measurement, though — the fact a deferred launch waits on — so it confirms.
+    if (cols === this.cols && rows === this.rows) {
+      this.flushPendingLaunch()
+      return
+    }
     this.cols = cols
     this.rows = rows
     try {
@@ -925,10 +1003,18 @@ class PaneSession {
     // The grid is persisted state now (snapshot): a resize with no output in its wake
     // (a quiet pane dragged to a new layout) must still reach the store, or the next
     // cold start restores at the size before the drag.
+    // AFTER the pty holds the measured size, never before: the launch this releases is
+    // the agent reading its width once at boot.
+    this.flushPendingLaunch()
     this.hooks.onChange()
   }
   kill(): void {
     this.tracker.dispose()
+    this.pendingLaunch = undefined
+    if (this.launchGraceTimer) {
+      clearTimeout(this.launchGraceTimer)
+      this.launchGraceTimer = undefined
+    }
     this.gitContext?.dispose()
     try {
       this.proc.kill()
@@ -1099,6 +1185,11 @@ export class SessionManager {
       // repaint then rides the same delivery burst as the replay, so the client's first
       // settled frame is already at the attach width (no visible narrow→wide snap).
       const dims = attachDims(normalizedSpec, existing)
+      // An attach whose measured dims EQUAL the session's applies nothing — but it turns
+      // the restore's persisted-size guess into a fact, which is what a deferred resume
+      // waits on (resize() confirms the changed case itself). A dims-less attach (an
+      // unmeasured hidden pane) confirms nothing: the guess stays a guess.
+      else if (specDimsUsable(normalizedSpec)) existing.confirmDims()
       if (dims) existing.resize(dims.cols, dims.rows)
       return { pane: existing, existed: true }
     }
