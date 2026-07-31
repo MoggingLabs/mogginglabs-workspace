@@ -69,6 +69,19 @@ counts derived at 203 (13 claims agree).
 - The step-02/03 smokes merged into ONE growing gate (`PROFILEDEFAULTS`), as the
   pack itself prescribed ("no new gate id — the assertion set grows").
 
+## Live validation (2026-07-31, operator-approved)
+
+Before any allowlist widening, the whole arc ran against the operator's REAL
+`~/.claude` (their live Claude Code home, notify-hooks wired) plus one disposable
+pointer home, via a temporary MOGGING_LIVEDEFAULTS smoke (a verify-skill temp
+edit, reverted after evidence — deliberately NOT a committed gate, since gates
+never touch real homes). Key: `cleanupPeriodDays` (inert, non-danger, absent
+beforehand). All seven bites green — lands-everywhere · pin-differs ·
+change-follows · drift-restored-on-the-real-file · pin-cleared · released ·
+clean-restore (the file ended semantically identical to how the run found it,
+hooks intact; the key removed again). The operator launched the run themselves.
+**Claude Code is validated live; `DEFAULTS_PROVIDERS` may widen.**
+
 ## Environment notes (this execution)
 
 - Fresh clone, no MSVC/Python toolchain: natives satisfied via prebuilds —
