@@ -5,6 +5,7 @@ import {
   ConnectionsChannels,
   enrichmentTargetsSameGrant,
   connectionEnrichmentPatch,
+  firstPartyClientFor,
   sanitizeAccountNote,
   type Connection,
   type ConnectionAuthKind,
@@ -21,9 +22,13 @@ import {
   commitLandedGrant,
   createPkce,
   createState,
+  deviceEndpointFor,
   discoverAccount,
   discoverAuthServer,
   exchangeCode,
+  oauthAuthorizationParamsFor,
+  pollDeviceToken,
+  requestDeviceCode,
   mergeRefreshedTokens,
   pickScopes,
   probeConnection,
@@ -278,10 +283,34 @@ function endFlow(): void {
   pending = null
 }
 
+/**
+ * A device sign-in in flight (RFC 8628). It owns no port and no timer — the poll
+ * loop IS the flow — so the only thing to hold is the id and a cancelled flag the
+ * loop reads between polls. Kept in its own slot rather than folded into
+ * `PendingFlow`, because `endFlow()` closes a server this flow never opened.
+ */
+let pendingDevice: { serviceId: string; cancelled: boolean } | null = null
+
+/** Stop a device poll and clear the card's code panel. Safe to call for a service
+ *  that has no device flow running. */
+function endDeviceFlow(serviceId?: string): void {
+  if (!pendingDevice) return
+  if (serviceId && pendingDevice.serviceId !== serviceId) return
+  pendingDevice.cancelled = true
+  pendingDevice = null
+}
+
 /** Abandon a pending consent — the user's Cancel, and the supersede path. Without
  *  this, a superseded or cancelled flow left its card saying "connecting…" forever
  *  (there was no timer left to demote it, and nothing else ever would). */
 function abandonFlow(reason?: string): void {
+  // Either shape of flow may be the live one; a Connect on a second card must
+  // supersede whichever was running.
+  if (pendingDevice) {
+    const abandoned = pendingDevice.serviceId
+    endDeviceFlow()
+    setState(abandoned, { state: 'disconnected', lastError: reason, device: undefined })
+  }
   if (!pending) return
   const abandoned = pending.serviceId
   endFlow()
@@ -415,6 +444,35 @@ export async function connect(serviceId: string, baseUrl?: string): Promise<{ ok
   // in order to read an issue. pickScopes adds identity scopes and nothing else.
   const { metadata, resource } = disco
   const scopes = pickScopes(disco.resourceScopes, metadata)
+  // ── THE ONE-BUTTON ROUTE (RFC 8628) ───────────────────────────────────────
+  // Before opening a port or minting a PKCE pair: if this service declares a
+  // device endpoint AND a client id resolves without paperwork, take the device
+  // flow. It needs no redirect URI (so no loopback port, no firewall prompt, no
+  // "your client must accept 127.0.0.1"), and no client secret. That is the
+  // whole difference between a button and a form.
+  const deviceEndpoint = deviceEndpointFor(serviceId)
+  if (deviceEndpoint) {
+    const shipped = firstPartyClientFor(metadata.issuer, process.env)
+    const stored = loadClient(metadata.issuer)
+    const deviceClient: OAuthClientRecord | null = stored
+      ? stored
+      : shipped
+        ? { authServer: metadata.issuer, clientId: shipped.clientId, registeredAt: Date.now(), source: 'first-party' }
+        : null
+    if (deviceClient) {
+      const device = await beginDeviceFlow(serviceId, preset.label, deviceEndpoint, metadata, deviceClient, scopes, resource)
+      // DEVICE FLOW OFF AT THE VENDOR: GitHub ships OAuth Apps with "Enable Device
+      // Flow" unchecked, so a perfectly good client can refuse this route. Falling
+      // through to the code flow means such a user is never WORSE off than before
+      // this feature existed — the same client, the same browser consent, connected.
+      // Only the one-step nicety is lost, and the console toggle restores it.
+      if (!device.deviceFlowDisabled) return device
+      console.info(`connections: ${serviceId} has device sign-in disabled at the provider — using the browser redirect flow.`)
+    }
+    // No client for the device route — fall through to the code flow, which ends
+    // in the paste form. One button is the goal, not a promise we cannot keep.
+  }
+
   let loop: { server: Server; redirectUri: string }
   try {
     loop = await startLoopback((params, res) => void onCallback(params, res))
@@ -423,7 +481,7 @@ export async function connect(serviceId: string, baseUrl?: string): Promise<{ ok
     return { ok: false, reason: 'Could not open a local port to receive the sign-in.' }
   }
 
-  const client = await resolveClient(metadata, loop.redirectUri, clientStore)
+  const client = await resolveClient(metadata, loop.redirectUri, clientStore, { env: process.env })
   if (!client.ok) {
     try {
       loop.server.close()
@@ -468,6 +526,130 @@ export async function connect(serviceId: string, baseUrl?: string): Promise<{ ok
       scopes
     })
   )
+  return { ok: true }
+}
+
+/**
+ * The device sign-in (RFC 8628), end to end.
+ *
+ * Resolves as soon as the code is on the card and the browser is opening — the
+ * POLL runs on after it, exactly like the code flow resolves at `openExternal`
+ * and finishes in `onCallback`. The card is the progress indicator; the IPC call
+ * is not held open for the minute a human takes to click Approve.
+ */
+async function beginDeviceFlow(
+  serviceId: string,
+  label: string,
+  endpoint: string,
+  metadata: AuthServerMetadata,
+  client: OAuthClientRecord,
+  scopes: string[],
+  resource: string
+): Promise<{ ok: boolean; reason?: string; deviceFlowDisabled?: true }> {
+  const asked = await requestDeviceCode({
+    endpoint,
+    clientId: client.clientId,
+    scopes,
+    extraParams: oauthAuthorizationParamsFor(serviceId)
+  })
+  if (!asked.ok) {
+    // Device sign-in switched off at the vendor is NOT a failed connect — the
+    // caller retries on the code flow. Leave the card exactly as we found it:
+    // writing `error` here would flash a red state over a sign-in that is about
+    // to succeed by another route.
+    if (asked.deviceFlowDisabled) return { ok: false, deviceFlowDisabled: true, reason: asked.reason }
+    // A device-code refusal is OUR problem to name (a client id the vendor does
+    // not know), never a paste form: pasting a client id cannot fix our bundle.
+    setState(serviceId, { state: 'error', lastError: asked.reason, authServer: metadata.issuer, device: undefined })
+    return { ok: false, reason: asked.reason }
+  }
+  const grant = asked.grant
+  const flow = { serviceId, cancelled: false }
+  pendingDevice = flow
+
+  setState(serviceId, {
+    state: 'connecting',
+    authServer: metadata.issuer,
+    // The code goes on the card BEFORE the browser opens: if `openExternal`
+    // fails, or opens the wrong profile, or the user closes the tab, the code and
+    // the URL are still right there to use by hand. A flow whose only copy of the
+    // code was in a tab that vanished is unrecoverable.
+    device: { userCode: grant.userCode, verificationUri: grant.verificationUri, expiresAt: grant.expiresAt },
+    needsClientId: undefined,
+    lastError: undefined
+  })
+
+  // `verification_uri_complete` pre-fills the code (§3.3.1); the card still shows
+  // the code because the browser may land on a different account.
+  try {
+    await shell.openExternal(grant.verificationUriComplete ?? grant.verificationUri)
+  } catch {
+    /* the card carries the URL and the code; a failed hand-off is not a failed flow */
+  }
+
+  void (async () => {
+    const polled = await pollDeviceToken(metadata, client, grant, {
+      resource,
+      quirks: oauthQuirksFor(serviceId),
+      shouldStop: () => flow.cancelled || pendingDevice !== flow
+    })
+    // A Cancel (or a superseding connect) already wrote this card's state and
+    // owns it now — a late verdict must not overwrite either.
+    if (flow.cancelled || pendingDevice !== flow) return
+    if (!polled.ok) {
+      pendingDevice = null
+      if (polled.cancelled) return
+      setState(serviceId, {
+        // Denied/expired are not errors to alarm about — they are "you didn't
+        // finish". `disconnected` keeps the card's verb a plain Connect.
+        state: polled.denied || polled.expired ? 'disconnected' : 'error',
+        lastError: polled.reason,
+        device: undefined
+      })
+      return
+    }
+    if (!storeTokens(serviceId, polled.tokens)) {
+      pendingDevice = null
+      setState(serviceId, {
+        state: 'error',
+        lastError: 'The OS keychain would not hold the sign-in.',
+        device: undefined
+      })
+      return
+    }
+    pendingDevice = null
+    // The code panel comes down BEFORE the commit, so the card never shows a
+    // "type this code" box over a connection that already landed.
+    setState(serviceId, { device: undefined })
+    // THE SAME commit sequence the code flow uses (connect-orchestrator): the
+    // grant is what makes it connected, the probe only decorates. One shape, so
+    // a device connection and a browser connection are indistinguishable after.
+    const tokens = polled.tokens
+    await commitLandedGrant({
+      setState: (patch) => void setState(serviceId, patch),
+      readState: () => readMeta(serviceId),
+      registerServer: () => void registerConnectionServer(serviceId),
+      // Nothing to tear down: the poll loop has already returned, and the code
+      // panel came down above. Idempotent so a late Cancel is a no-op.
+      closeFlow: () => endDeviceFlow(serviceId),
+      // The device flow has no tab of OURS to answer — the user is looking at
+      // GitHub's own "you're all set" page. Writing HTML nobody requested would
+      // be writing into a response that does not exist.
+      showPage: () => undefined,
+      discoverAccount: () => discoverAccount(tokens, metadata),
+      probe: () => probeConnection(resource, tokens.accessToken),
+      now: Date.now
+    }, {
+      label,
+      scopes: tokens.scopes ?? scopes,
+      expiresAt: tokens.expiresAt,
+      authServer: metadata.issuer,
+      // A first-party client is OURS, not the user's — the card must not offer
+      // "Forget client ID" for a client the user never pasted.
+      userClient: client.source === 'user'
+    })
+  })()
+
   return { ok: true }
 }
 
@@ -893,12 +1075,19 @@ export function clearClient(serviceId: string): { ok: boolean; reason?: string }
 /** The user's Cancel while a browser consent is pending — and the manual unstick for
  *  a card that says "connecting" with no live flow behind it (however it got there). */
 export function cancelConnect(serviceId: string): void {
+  if (pendingDevice?.serviceId === serviceId) {
+    endDeviceFlow(serviceId)
+    setState(serviceId, { state: 'disconnected', lastError: undefined, device: undefined })
+    return
+  }
   if (pending?.serviceId === serviceId) {
     abandonFlow()
     return
   }
   const meta = readMeta(serviceId)
-  if (meta?.state === 'connecting') setState(serviceId, { state: 'disconnected', lastError: undefined })
+  // `device` clears with the state: a stale code panel over a card that is no
+  // longer connecting is the "connecting… forever" bug wearing a new hat.
+  if (meta?.state === 'connecting') setState(serviceId, { state: 'disconnected', lastError: undefined, device: undefined })
 }
 
 // ── Refresh + the one decryption point ──────────────────────────────────────

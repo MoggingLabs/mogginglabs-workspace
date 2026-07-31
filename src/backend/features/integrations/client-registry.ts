@@ -1,4 +1,4 @@
-import type { OAuthClientRecord } from '@contracts'
+import { firstPartyClientFor, type OAuthClientRecord } from '@contracts'
 import { registerClient, type AuthServerMetadata } from './oauth'
 
 // The OAuth CLIENT ledger (ADR 0014, extended): where a connection's client
@@ -71,18 +71,45 @@ export const userClientRecord = (issuer: string, clientId: string, clientSecret?
 })
 
 /**
- * The client for a flow: stored record first (either kind), dynamic registration
- * second, and an ACTIONABLE refusal when neither exists. `needsClientId` is set
- * only for the no-DCR case — a network failure to a live registration endpoint
- * must NOT render the paste form, because pasting a client id would not fix it.
+ * The client for a flow, down a four-rung ladder:
+ *
+ *   1. a STORED record (either kind) — the user's own paste, or a past DCR;
+ *   2. a SHIPPED first-party public client id (the `gh` model) — this rung is
+ *      what turns GitHub's card back into one button, and it is deliberately
+ *      ABOVE dynamic registration: where we ship a client, we know it works and
+ *      we know its device-flow status, which a fresh DCR client cannot promise;
+ *   3. dynamic registration (RFC 7591) — most of the catalog, no paperwork;
+ *   4. an ACTIONABLE refusal: `needsClientId`, which renders the paste form.
+ *
+ * `needsClientId` is set only for the no-DCR case — a network failure to a live
+ * registration endpoint must NOT render the paste form, because pasting a client
+ * id would not fix it.
+ *
+ * A shipped client is NEVER written to the store (see first-party-clients.ts
+ * rule 2): it is app data, so it re-resolves every flow and an app update can
+ * rotate it. Persisting one would let a stale record pin an id we have revoked.
  */
 export async function resolveClient(
   metadata: AuthServerMetadata,
   redirectUri: string,
-  store: ClientStore
+  store: ClientStore,
+  o: { env?: Readonly<Record<string, string | undefined>> } = {}
 ): Promise<{ ok: true; client: OAuthClientRecord } | { ok: false; reason: string; needsClientId?: true }> {
   const cached = store.load(metadata.issuer)
   if (cached) return { ok: true, client: cached }
+  const shipped = firstPartyClientFor(metadata.issuer, o.env ?? {})
+  if (shipped) {
+    return {
+      ok: true,
+      client: {
+        authServer: metadata.issuer,
+        clientId: shipped.clientId,
+        // No clientSecret, structurally — a shipped client is public, always.
+        registeredAt: Date.now(),
+        source: 'first-party'
+      }
+    }
+  }
   const reg = await registerClient(metadata, redirectUri)
   if (!reg.ok) {
     return metadata.registration_endpoint ? reg : { ok: false, reason: reg.reason, needsClientId: true }
@@ -95,8 +122,11 @@ export async function resolveClient(
 }
 
 /** May a redirect-uri mismatch purge this record? Only when we can get another
- *  one ourselves. Absent `source` means a pre-existing DCR record — purgeable. */
-export const canRepairClientByReRegistering = (client: OAuthClientRecord): boolean => client.source !== 'user'
+ *  one ourselves. Absent `source` means a pre-existing DCR record — purgeable.
+ *  A `first-party` client is not purgeable either: it is never in the store, so
+ *  purging cannot help, and only a new app build can change it. */
+export const canRepairClientByReRegistering = (client: OAuthClientRecord): boolean =>
+  client.source !== 'user' && client.source !== 'first-party'
 
 /** The sentence for a redirect-uri mismatch, matched to what "try again" will
  *  actually do. For a DCR client the app re-registers, so try-again is real
@@ -107,6 +137,10 @@ export const canRepairClientByReRegistering = (client: OAuthClientRecord): boole
  *  this route, and the honest sentence says so instead of sending the user to
  *  look for a setting that does not exist. */
 export const redirectDriftAdvice = (client: OAuthClientRecord, reason: string): string =>
-  canRepairClientByReRegistering(client)
-    ? `${reason} — try Connect again (we re-register with the provider).`
-    : `${reason} — your OAuth client must accept loopback redirects (http://127.0.0.1). For Google, create it as a “Desktop app” client and try again. If the provider's console cannot allow loopback redirect URLs at all, this route cannot connect it — use the per-CLI path instead.`
+  client.source === 'first-party'
+    ? // OUR client, OUR registration. The user cannot fix this and must not be
+      // sent to a console they do not own — say whose bug it is.
+      `${reason} — this app's own OAuth client is misconfigured for loopback sign-in. That is a bug on our side, not something you can fix here; the per-CLI path still works meanwhile.`
+    : canRepairClientByReRegistering(client)
+      ? `${reason} — try Connect again (we re-register with the provider).`
+      : `${reason} — your OAuth client must accept loopback redirects (http://127.0.0.1). For Google, create it as a “Desktop app” client and try again. If the provider's console cannot allow loopback redirect URLs at all, this route cannot connect it — use the per-CLI path instead.`

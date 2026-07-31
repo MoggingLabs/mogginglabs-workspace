@@ -318,12 +318,42 @@ export function buildAuthorizeUrl(o: {
   return u.toString()
 }
 
+/** Read an OAuth error out of a token-endpoint body, in either wire shape (JSON
+ *  per the spec; form-encoded is what GitHub sends when nothing asked for JSON,
+ *  and what any proxy that strips an Accept header leaves behind). Returns null
+ *  when the body carries no `error` — i.e. when it is a real token response. */
+function parseTokenError(bodyText: string, contentType: string | null | undefined): { code: string; description?: string } | null {
+  const body = String(bodyText ?? '').trim()
+  if (!body) return null
+  let raw: Record<string, unknown> | null = null
+  if (!contentType?.includes('application/x-www-form-urlencoded')) {
+    try {
+      const parsed = JSON.parse(body) as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) raw = parsed as Record<string, unknown>
+    } catch {
+      raw = null
+    }
+  }
+  if (!raw && /(^|&)[A-Za-z0-9_]+=/.test(body)) raw = Object.fromEntries(new URLSearchParams(body))
+  const code = raw && typeof raw.error === 'string' && raw.error ? raw.error : null
+  if (!code) return null
+  const description = raw && typeof raw.error_description === 'string' && raw.error_description ? raw.error_description : undefined
+  return { code, description }
+}
+
+/** A token-endpoint failure. `errorCode` is the AS's own machine-readable
+ *  `error` field, carried out UNPARAPHRASED because the device flow's whole
+ *  control loop is a switch on it (`authorization_pending` is not a failure, it
+ *  is "keep waiting") and a prose sentence cannot be switched on. Every other
+ *  caller ignores it and reads `reason`, exactly as before. */
+export type TokenFailure = { ok: false; reason: string; errorCode?: string }
+
 async function tokenRequest(
   metadata: AuthServerMetadata,
   client: OAuthClientRecord,
   form: Record<string, string>,
   quirks?: NormalizeQuirks
-): Promise<{ ok: true; tokens: OAuthTokens } | { ok: false; reason: string }> {
+): Promise<{ ok: true; tokens: OAuthTokens } | TokenFailure> {
   const body = new URLSearchParams({ ...form, client_id: client.clientId })
   // A confidential client (rare — only when DCR handed us a secret) authenticates
   // the token call. A public client proves itself with the PKCE verifier alone.
@@ -348,17 +378,18 @@ async function tokenRequest(
     // connection bridge / rejects the ipcMain handle. Treat an unreadable body as a failure.
     return { ok: false, reason: `Could not read the response from ${hostOf(metadata.token_endpoint)}: ${short(e)}` }
   }
-  if (!res.ok) {
+  // An `error` in the BODY is a failure whatever the status says. RFC 6749 §5.2
+  // mandates 400, and most of the catalog obeys — but GitHub answers its device
+  // poll `authorization_pending` with a **200**, and a status-only check reads
+  // that as success, hands the body to the normalizer, and reports "returned no
+  // access token" on a flow that is merely still waiting for the user. Reading
+  // the body first makes the two shapes one path.
+  const failure = parseTokenError(text, res.headers.get('content-type'))
+  if (failure || !res.ok) {
     // The AS's own `error_description` is almost always the most useful sentence
     // available — surface it rather than our paraphrase of a status code.
-    let detail = `${res.status}`
-    try {
-      const j = JSON.parse(text) as { error?: string; error_description?: string }
-      detail = j.error_description ?? j.error ?? detail
-    } catch {
-      /* not JSON — the status stands */
-    }
-    return { ok: false, reason: String(detail).slice(0, 200) }
+    const detail = failure?.description ?? failure?.code ?? `${res.status}`
+    return { ok: false, reason: String(detail).slice(0, 200), errorCode: failure?.code }
   }
   // THE normalization seam (phase-tools/02, credential-core): every raw token
   // response — JSON or form-encoded, GitHub-quirked or standard — becomes the
@@ -443,6 +474,217 @@ export const mergeRefreshedTokens = (prev: OAuthTokens, next: OAuthTokens): OAut
   ...next,
   refreshToken: next.refreshToken ?? prev.refreshToken
 })
+
+// ── The device flow (RFC 8628) — the one-button on-ramp ─────────────────────
+//
+// The authorization-code flow above needs three things the biggest vendors make
+// a user go and get: a registered client, a redirect URI that vendor's console
+// will accept, and (for GitHub, Slack, Google) a client SECRET. That is the
+// paperwork that turned "Connect" into "go create an OAuth app, copy two
+// strings, come back". The device flow needs NONE of it:
+//
+//   · a PUBLIC client id and nothing else — no secret, so nothing worth
+//     stealing ships in the bundle (ADR 0014's rule survives intact);
+//   · no redirect URI, so no loopback port, so no "your client must accept
+//     http://127.0.0.1" dead end and no firewall prompt;
+//   · the user sees a short code, we open their browser, they approve. That is
+//     `gh auth login`, and it is what the user asked us to be.
+//
+// Two provider realities this code exists to absorb:
+//   1. GitHub answers `authorization_pending` with **HTTP 200**, not the RFC's
+//      400 (see parseTokenError) — so the poll switches on the body's `error`;
+//   2. `slow_down` means "you polled too fast, add 5s and keep going", NOT a
+//      failure — treating it as one aborts a flow the user is mid-approving.
+
+/** RFC 8628 §3.2, normalized: absolute deadline, millisecond interval. */
+export interface DeviceCodeGrant {
+  deviceCode: string
+  /** What the USER types (or reads back) — display it verbatim, dashes and all. */
+  userCode: string
+  /** Where they type it. */
+  verificationUri: string
+  /** §3.3.1 — the URI with the code pre-filled. When a provider offers it, the
+   *  user approves without typing anything; the code stays on screen anyway,
+   *  because a browser that opens on the wrong profile is the common case. */
+  verificationUriComplete?: string
+  /** Absolute ms. */
+  expiresAt: number
+  /** Absolute ms between polls (RFC default: 5s when the AS names none). */
+  intervalMs: number
+}
+
+const DEVICE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code'
+/** RFC 8628 §3.5: absent `interval`, poll every 5 seconds. */
+const DEVICE_DEFAULT_INTERVAL_MS = 5_000
+/** §3.5 again: each `slow_down` adds five seconds to the interval. */
+const DEVICE_SLOW_DOWN_STEP_MS = 5_000
+
+/**
+ * Step 1: ask the AS for a device + user code. A PUBLIC client id is the only
+ * credential involved.
+ */
+export async function requestDeviceCode(o: {
+  endpoint: string
+  clientId: string
+  scopes?: string[]
+  /** Provider-specific extras the catalog declares (`quirks.authorizationParams`). */
+  extraParams?: Readonly<Record<string, string>>
+  now?: () => number
+  timeoutMs?: number
+}): Promise<{ ok: true; grant: DeviceCodeGrant } | { ok: false; reason: string; deviceFlowDisabled?: true }> {
+  const now = o.now ?? Date.now
+  const body = new URLSearchParams({ client_id: o.clientId, ...(o.extraParams ?? {}) })
+  if (o.scopes?.length) body.set('scope', o.scopes.join(' '))
+  let res: Response
+  try {
+    res = await fetch(o.endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+      body,
+      signal: AbortSignal.timeout(o.timeoutMs ?? 20_000)
+    })
+  } catch (e) {
+    return { ok: false, reason: `Could not reach ${hostOf(o.endpoint)}: ${short(e)}` }
+  }
+  const text = await res.text().catch(() => '')
+  const failed = parseTokenError(text, res.headers.get('content-type'))
+  if (failed) {
+    // DEVICE FLOW TURNED OFF AT THE VENDOR. GitHub ships OAuth Apps with "Enable
+    // Device Flow" UNCHECKED, so this is the single most likely answer the first
+    // time anyone points a real client id at this code. It is not a failure of
+    // the flow and not something to alarm the user about: the caller falls back
+    // to the authorization-code flow, which that same client can already do.
+    if (/device.?flow.?disabled|device_flow_disabled/i.test(failed.code)) {
+      return {
+        ok: false,
+        deviceFlowDisabled: true,
+        reason: `${hostOf(o.endpoint)} has device sign-in turned off for this app's OAuth client (tick "Enable Device Flow" on it to use the one-step sign-in).`
+      }
+    }
+    // A client id the provider has never heard of is OUR configuration bug, and
+    // "Not Found" would send the user hunting through their own console for it.
+    const unknownClient = /not.?found|invalid.?client|unauthorized.?client/i.test(failed.code) || /not.?found/i.test(failed.description ?? '')
+    return {
+      ok: false,
+      reason: unknownClient
+        ? `${hostOf(o.endpoint)} does not recognize this app's client id — that is a configuration problem on our side, not something you can fix by trying again.`
+        : (failed.description ?? failed.code).slice(0, 200)
+    }
+  }
+  if (!res.ok) return { ok: false, reason: `${hostOf(o.endpoint)} answered ${res.status} to the device-code request.` }
+  let raw: Record<string, unknown>
+  try {
+    const parsed = JSON.parse(text) as unknown
+    raw =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : Object.fromEntries(new URLSearchParams(text.trim()))
+  } catch {
+    // Form-encoded is legal here too, and GitHub sends it without an Accept header.
+    if (!/(^|&)[A-Za-z0-9_]+=/.test(text.trim())) {
+      return { ok: false, reason: `${hostOf(o.endpoint)} returned a device-code response we could not read.` }
+    }
+    raw = Object.fromEntries(new URLSearchParams(text.trim()))
+  }
+  const str = (k: string): string | undefined => (typeof raw[k] === 'string' && raw[k] ? (raw[k] as string) : undefined)
+  const num = (k: string): number | undefined => {
+    const v = raw[k]
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v)
+    return undefined
+  }
+  const deviceCode = str('device_code')
+  const userCode = str('user_code')
+  const verificationUri = str('verification_uri') ?? str('verification_url') // Google spells it _url
+  if (!deviceCode || !userCode || !verificationUri) {
+    return { ok: false, reason: `${hostOf(o.endpoint)} did not return a device code.` }
+  }
+  const expiresIn = num('expires_in') ?? 900
+  const interval = num('interval')
+  return {
+    ok: true,
+    grant: {
+      deviceCode,
+      userCode,
+      verificationUri,
+      verificationUriComplete: str('verification_uri_complete'),
+      expiresAt: now() + expiresIn * 1000,
+      intervalMs: interval != null && interval > 0 ? interval * 1000 : DEVICE_DEFAULT_INTERVAL_MS
+    }
+  }
+}
+
+export type DevicePollOutcome =
+  | { ok: true; tokens: OAuthTokens }
+  /** `denied` = the user said no; `expired` = the code timed out; `cancelled` =
+   *  WE stopped (the card's Cancel). Each gets a different sentence, because
+   *  "try again" is right for two of them and wrong for the third. */
+  | { ok: false; reason: string; denied?: boolean; expired?: boolean; cancelled?: boolean }
+
+/**
+ * Step 2: poll until the user approves, denies, or the code expires.
+ *
+ * `sleep`/`now` are injected so the gate drives the backoff ladder in
+ * milliseconds instead of minutes; `shouldStop` is how the card's Cancel gets a
+ * word in between polls, so a cancelled flow stops making requests rather than
+ * running its five minutes out in the background.
+ */
+export async function pollDeviceToken(
+  metadata: AuthServerMetadata,
+  client: OAuthClientRecord,
+  grant: DeviceCodeGrant,
+  o: {
+    resource?: string
+    quirks?: NormalizeQuirks
+    sleep?: (ms: number) => Promise<void>
+    now?: () => number
+    shouldStop?: () => boolean
+  } = {}
+): Promise<DevicePollOutcome> {
+  const now = o.now ?? Date.now
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  let intervalMs = grant.intervalMs
+  for (;;) {
+    if (o.shouldStop?.()) return { ok: false, reason: 'The sign-in was cancelled.', cancelled: true }
+    if (now() >= grant.expiresAt) {
+      return { ok: false, reason: 'The sign-in code expired before it was approved. Try again.', expired: true }
+    }
+    await sleep(intervalMs)
+    // Re-check AFTER the wait: a Cancel during the interval must not spend one
+    // more request on a flow nobody is waiting for.
+    if (o.shouldStop?.()) return { ok: false, reason: 'The sign-in was cancelled.', cancelled: true }
+
+    const attempt = await tokenRequest(
+      metadata,
+      client,
+      {
+        grant_type: DEVICE_GRANT_TYPE,
+        device_code: grant.deviceCode,
+        ...(o.resource ? { resource: o.resource } : {})
+      },
+      o.quirks
+    )
+    if (attempt.ok) return { ok: true, tokens: attempt.tokens }
+
+    switch (attempt.errorCode) {
+      case 'authorization_pending':
+        // The ONLY expected answer while the user is still in their browser.
+        continue
+      case 'slow_down':
+        // Not a failure: we polled too eagerly. Back off and keep the flow alive.
+        intervalMs += DEVICE_SLOW_DOWN_STEP_MS
+        continue
+      case 'access_denied':
+        return { ok: false, reason: 'You declined the sign-in. Nothing was connected.', denied: true }
+      case 'expired_token':
+        return { ok: false, reason: 'The sign-in code expired before it was approved. Try again.', expired: true }
+      default:
+        // An unknown error code is a real failure — surface the provider's own
+        // sentence rather than looping until the code expires.
+        return { ok: false, reason: attempt.reason }
+    }
+  }
+}
 
 // ── Talking to the MCP server itself ────────────────────────────────────────
 

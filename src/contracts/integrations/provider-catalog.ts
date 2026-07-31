@@ -65,6 +65,21 @@ export interface ProviderMethod {
     authorizationUrl?: string
     tokenUrl?: string
     refreshUrl?: string
+    /**
+     * RFC 8628 §3.1 — where the DEVICE flow starts. Declaring this is what makes
+     * a provider one-button: the connect flow prefers device authorization over
+     * the loopback code flow whenever this URL is present AND a client id
+     * resolves, because it needs no redirect URI and no client secret.
+     *
+     * It lives in the catalog rather than being discovered because the vendors
+     * that most need it do not advertise it. Measured 2026-07-31: GitHub's
+     * `/.well-known/oauth-authorization-server/login/oauth` publishes neither a
+     * `device_authorization_endpoint` nor `urn:ietf:params:oauth:grant-type:device_code`
+     * in `grant_types_supported` — yet the endpoint is live and is exactly what
+     * `gh auth login` drives. Discovery would silently conclude "no device flow"
+     * for the one provider that needs it most.
+     */
+    deviceAuthorizationUrl?: string
   }
   scopes?: readonly ProviderScope[]
   inputs?: readonly ProviderInputField[]

@@ -82,6 +82,29 @@ export function oauthQuirksFor(id: string): { tokenExpirationBuffer?: number } |
   return m?.quirks
 }
 
+/**
+ * The RFC 8628 device-authorization endpoint this service declares, or undefined.
+ *
+ * Presence is the whole switch: a service that declares one and resolves a client
+ * id connects the ONE-BUTTON way (a code on the card, the vendor's page in the
+ * user's browser, no redirect URI, no client secret, no console paperwork). A
+ * service that declares none keeps the loopback code flow exactly as before.
+ *
+ * Read off the `oauth` method — the same method `oauthQuirksFor` reads, so the
+ * endpoint and its quirks can never come from two different rows.
+ */
+export function deviceEndpointFor(id: string): string | undefined {
+  const m = byId.get(id)?.methods.find((x) => x.kind === 'oauth')
+  const url = m?.endpoints?.deviceAuthorizationUrl
+  return typeof url === 'string' && url.startsWith('https://') ? url : undefined
+}
+
+/** The extra authorize-time params a provider's oauth method declares
+ *  (`quirks.authorizationParams`) — they ride the device-code request too. */
+export function oauthAuthorizationParamsFor(id: string): Readonly<Record<string, string>> | undefined {
+  return byId.get(id)?.methods.find((x) => x.kind === 'oauth')?.quirks?.authorizationParams
+}
+
 /** The declarative liveness probe for key-auth connections (Nango's verification
  *  blocks) — absent means the MCP initialize+tools/list proof is the only probe. */
 export const verificationSpecFor = (id: string) => byId.get(id)?.verification

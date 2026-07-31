@@ -58,7 +58,8 @@
               "discovery": { "enum": ["mcp", "oidc"] },
               "authorizationUrl": { "type": "string", "pattern": "^https://" },
               "tokenUrl": { "type": "string", "pattern": "^https://" },
-              "refreshUrl": { "type": "string", "pattern": "^https://" }
+              "refreshUrl": { "type": "string", "pattern": "^https://" },
+              "deviceAuthorizationUrl": { "type": "string", "pattern": "^https://" }
             }
           },
           "scopes": {

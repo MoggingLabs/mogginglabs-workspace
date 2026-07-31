@@ -9516,6 +9516,50 @@ body.pane-dragging * {
   min-width: 0;
 }
 
+/* ── The device sign-in panel (RFC 8628) ─────────────────────────────────────
+   The code is the loudest thing on the card while a device flow is open: the
+   user is looking at a browser page asking for it, and hunting for it is the
+   whole failure mode this panel exists to prevent. Monospace + wide tracking so
+   an O/0 or an I/1 can be read off the screen and typed without a second guess. */
+.conn-device {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  flex-basis: 100%;
+  margin-top: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md, 8px);
+  background: var(--panel);
+}
+.conn-device-lede {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.conn-device-code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--accent-ink);
+  /* The code is meant to be grabbed with a mouse as one unit. */
+  user-select: all;
+  -webkit-user-select: all;
+  word-break: break-all;
+}
+.conn-device-actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.conn-device-uri {
+  color: var(--muted);
+  font-size: 0.78rem;
+  user-select: all;
+  -webkit-user-select: all;
+  word-break: break-all;
+}
+
 /* ── Tool cards (phase-tools/05): the chooser + the merged routes ─────────────
    Method rows speak outcomes; the custody subtitle is the fine print. Coming-soon
    rows are disabled by construction — greyed, no handler, no pretend affordance. */

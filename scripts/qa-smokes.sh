@@ -9,9 +9,9 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 199 gates: 29 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
+# 200 gates: 30 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CHANNELS · AGENTCAT · LAYOUT ·
 # DOCSREFS · CUSTODY · MOTION · NPMCONFIG · PRODARTIFACT · GATECOUNT · LINT · UNIT ·
-# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · ORIGINPIN · FUSES · BYTECODE ·
+# GITPURE · REMOTEBOOT · CONNPURE · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · BYTECODE ·
 # GRAMMARCAT · CATSCHEMA · TOOLWORDS · TOOLCRED · RESTEXEC · RESTIMPORT · FONTCOVER) + 170 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
@@ -287,6 +287,15 @@ run_static RESTIMPORT node scripts/check-restimport.mjs
 # one issuer-keyed client covers the whole Workspace group, and a user record is never
 # purged on redirect drift (a dcr record still is — each gets the advice that is true).
 run_static PREREGCLIENT npm run smoke:preregistered-client-pure
+# DEVICEFLOW: the one-button on-ramp (RFC 8628) — the flow that lets a card say
+# "Connect" with no client id to paste and no client secret to copy. A fixture AS
+# proves the ladder AND the two provider realities that break it silently: GitHub
+# answers `authorization_pending` with HTTP **200** (a status-only error check reads
+# that as success and reports "no access token" on a flow that is merely waiting),
+# and `slow_down` means back off 5s and KEEP GOING, not fail. Also pins the custody
+# rules: a shipped client is public (no secret slot), is NEVER persisted, an empty
+# table entry is inert, and a user's own pasted client still outranks it.
+run_static DEVICEFLOW npm run smoke:device-flow-pure
 # ORIGINPIN: ADR 0015 — a shipped build talks to exactly the origins compiled into it.
 # An env var (the old registry override, catalog.ts) could repoint where a signed
 # install fetched the integrations registry; the same pattern is a licensing bypass the

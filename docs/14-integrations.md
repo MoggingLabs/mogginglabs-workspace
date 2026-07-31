@@ -214,20 +214,23 @@ The default, and the one the Connections card grid drives. You connect a service
 **account** to the app, once:
 
 1. The app discovers the server's authorization server from its own `401`
-   (RFC 9728 → RFC 8414), then **registers itself** as a public OAuth client
-   (RFC 7591) where the vendor allows it — no vendor paperwork, no shipped secret.
-   Where the vendor allows no self-registration (Google, GitHub, Slack), the card
-   offers a **client-ID form** instead of a dead Reconnect: create an OAuth client
-   once in the vendor's own console (for Google: a **“Desktop app”** client, so it
-   accepts loopback redirects) and paste its ID — and secret, if it has one — on
-   the card. The record is keyed by **issuer**, so one pasted Google client covers
-   Drive, Gmail, Calendar and Chat alike; the secret rests as OS-keychain
-   ciphertext with no IPC getter, and **Forget client ID** deletes it again. A
-   pasted client is never purged by the app's own error recovery — only the
-   self-registered kind is disposable. The one hard limit is the vendor's own
-   redirect policy: a console that cannot allow loopback redirect URLs at all
-   (Slack's) cannot connect on this route, and the card's advice says so — the
-   per-CLI route below remains that service's path.
+   (RFC 9728 → RFC 8414), then finds a client down a **four-rung ladder**: a
+   stored record, then a **shipped first-party client**, then self-registration
+   (RFC 7591), then — only if all three miss — the client-ID paste form.
+   Rung 2 is what keeps **Connect** a button; see *The one-button on-ramp* below.
+   Where every rung misses (a vendor with no self-registration and no shipped
+   client of ours), the card offers a **client-ID form** instead of a dead
+   Reconnect: create an OAuth client once in the vendor's own console (for
+   Google: a **“Desktop app”** client, so it accepts loopback redirects) and
+   paste its ID — and secret, if it has one — on the card. The record is keyed by
+   **issuer**, so one pasted Google client covers Drive, Gmail, Calendar and Chat
+   alike; the secret rests as OS-keychain ciphertext with no IPC getter, and
+   **Forget client ID** deletes it again. A pasted client is never purged by the
+   app's own error recovery — only the self-registered kind is disposable, and a
+   user's own paste always outranks a client we ship. The one hard limit is the
+   vendor's own redirect policy: a console that cannot allow loopback redirect
+   URLs at all (Slack's) cannot connect on this route, and the card's advice says
+   so — the per-CLI route below remains that service's path.
 2. Consent runs in **your own browser**, on the vendor's real page, over an
    ephemeral `127.0.0.1` loopback redirect (RFC 8252) with PKCE/S256. The app never
    renders a login form and never sees your password.
@@ -242,6 +245,66 @@ The default, and the one the Connections card grid drives. You connect a service
    clock. Nothing is inferred from a config file's contents.
 
 One grant, one refresher (rotation-safe), one **Disconnect**.
+
+### The one-button on-ramp — device flow (RFC 8628)
+
+The client-ID form above is honest, and it is still five minutes of vendor
+paperwork standing between a user and a button. It is the single most common
+reason a card never gets connected. `gh auth login` does not ask for any of it,
+and neither should we.
+
+Where a catalog row declares a **`deviceAuthorizationUrl`** and a client id
+resolves, **Connect** takes the device flow instead of the loopback code flow:
+
+1. The app asks the vendor for a short **user code** and a verification URL.
+2. The code goes **on the card**, and the browser opens the vendor's page.
+3. You approve. The card fills in by itself.
+
+It needs **no redirect URI** (so no loopback port, no firewall prompt, and none
+of the “your OAuth client must accept `http://127.0.0.1`” dead ends) and **no
+client secret**. Everything downstream is identical — the same vault, the same
+one decryption point, the same bridge row, the same `commitLandedGrant`
+sequence — so a device connection and a browser connection are indistinguishable
+once made.
+
+The code is shown on the card rather than only handed to the browser, because
+every way that hand-off goes wrong ends there: a browser that opened on the wrong
+profile, a tab closed by accident, a default browser that never launched. The
+card holds the code and the URL for as long as the flow is alive.
+
+**A shipped client id is not a shipped secret.** ADR 0014 refuses to ship a client
+*secret*, and that refusal stands word for word. A public client **id** is an
+identifier, not a credential — OAuth 2.1 §2.1 and RFC 8252 §8.4 classify a native
+app as a public client precisely because it cannot hold a secret. Every native app
+that signs you in with one command ships one (`gh`, `aws`, `gcloud`, `docker`).
+Two rules keep it honest, both enforced in code and pinned by the DEVICEFLOW gate:
+the shipped record has **no secret slot at all**, and it is **never persisted** —
+it re-resolves every flow, so an app update can rotate it and no stale keychain
+record can pin an id we have revoked.
+
+#### Lighting up a provider (one-time, per vendor)
+
+`src/contracts/integrations/first-party-clients.ts` ships the table. An entry with
+an **empty `clientId` is inert** — the flow falls back to exactly today's
+behaviour — so the table ships safe and half-filled. To enable one:
+
+1. Register an OAuth app in the vendor's console. For GitHub:
+   <https://github.com/settings/applications/new> — and **tick “Enable Device
+   Flow”**, which is off by default and is the whole point.
+2. Paste the **Client ID** into that provider's row. **Never the client secret:**
+   the device flow does not use one, and the CATSCHEMA secret scan refuses it.
+3. Add `deviceAuthorizationUrl` to the provider's `oauth` method in its catalog
+   row, if it is not already there.
+
+For a fork, a self-hosted build, or local development, an environment variable
+overrides the table without touching the bundle:
+`MOGGING_OAUTH_CLIENT_<ISSUER_HOST>` — e.g. `MOGGING_OAUTH_CLIENT_GITHUB_COM`.
+The override also works for an issuer that has no table row at all.
+
+> **Status:** the machinery is in and gated (DEVICEFLOW, 41 assertions). GitHub's
+> row ships with an empty `clientId` until the MoggingLabs OAuth app is
+> registered; until then GitHub's card behaves exactly as it did before — the
+> client-ID form, or the PAT on-ramp.
 
 ### Route B — a per-CLI server (the CLI holds it)
 

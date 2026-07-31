@@ -34,7 +34,9 @@
     "smoke:connections-pure": "tsx scripts/connections-pure-smoke.ts",
     "smoke:toolcred-pure": "tsx scripts/toolcred-pure-smoke.ts",
     "smoke:restexec-pure": "tsx scripts/restexec-pure-smoke.ts",
-    "smoke:preregistered-client-pure": "tsx scripts/preregistered-client-pure-smoke.ts"
+    "smoke:preregistered-client-pure": "tsx scripts/preregistered-client-pure-smoke.ts",
+    "smoke:device-flow-pure": "tsx scripts/device-flow-pure-smoke.ts",
+    "check:device-flow-live": "tsx scripts/device-flow-live-check.ts"
   },
   "dependencies": {
     "@sentry/electron": "^7.15.0",

@@ -16,7 +16,8 @@
       "rank": 1,
       "endpoints": {
         "authorizationUrl": "https://github.com/login/oauth/authorize",
-        "tokenUrl": "https://github.com/login/oauth/access_token"
+        "tokenUrl": "https://github.com/login/oauth/access_token",
+        "deviceAuthorizationUrl": "https://github.com/login/device/code"
       },
       "scopes": [
         {

@@ -29,6 +29,7 @@ import {
   type WorkspaceToolPlan
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
+import { copyText } from '../../core/clipboard/clipboard-port'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { EmptyState, Button, clear, el, icon, loadingRow, providerLogo, showToast, submitWithRetain } from '../../components'
 import { HOSTED } from './cli-meta'
@@ -426,6 +427,46 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
     const form = el('div', { class: 'conn-note-form' }, [input, save, cancel])
     setTimeout(() => input.focus(), 0)
     return form
+  }
+
+  /**
+   * The device sign-in panel (RFC 8628) — what "Connect" looks like when there is
+   * no paperwork left to do.
+   *
+   * The code is shown, not hidden behind the browser hand-off, because every way
+   * that hand-off can go sideways ends here: a browser that opened on the wrong
+   * profile, a tab the user closed, a default browser that never launched. The
+   * card holds the two facts needed to finish by hand — the code and the URL —
+   * for as long as the flow is alive.
+   */
+  function devicePanel(d: NonNullable<Connection['device']>): HTMLElement {
+    const code = el('div', {
+      class: 'conn-device-code',
+      text: d.userCode,
+      // Read as one unit by a screen reader, and selectable as one by a mouse.
+      ariaLabel: `Your sign-in code is ${d.userCode.split('').join(' ')}`
+    })
+    const copy = el('button', { class: 'trail-btn conn-mini', type: 'button', text: 'Copy code' }) as HTMLButtonElement
+    copy.onclick = (): void => {
+      void (async () => {
+        const ok = await copyText(d.userCode, 'app')
+        copy.textContent = ok ? 'Copied' : 'Copy failed'
+        // Back to the verb, so a second copy is obviously available.
+        setTimeout(() => {
+          copy.textContent = 'Copy code'
+        }, 1600)
+      })()
+    }
+    const open = el('button', { class: 'trail-btn conn-mini', type: 'button', text: 'Open the page' }) as HTMLButtonElement
+    open.onclick = (): void => void bridge.invoke(BrowserChannels.openExternal, { url: d.verificationUri })
+    return el('div', { class: 'conn-device' }, [
+      el('div', { class: 'conn-device-lede', text: 'Enter this code to finish signing in:' }),
+      code,
+      el('div', { class: 'conn-device-actions' }, [copy, open]),
+      // The URL in plain text: the last resort that always works, including on a
+      // machine where opening a browser from the app is blocked outright.
+      el('div', { class: 'conn-device-uri', text: d.verificationUri })
+    ])
   }
 
   function card(c: Connection, cardRow?: ToolCardRow): HTMLElement {
@@ -902,7 +943,13 @@ export function createConnectionsBlock(opts: ConnectionsBlockOpts = {}): Connect
         break
       }
       case 'connecting': {
-        actions.append(loadingRow('Waiting for you to finish in the browser…'))
+        // A DEVICE sign-in (RFC 8628) shows the code it is waiting on. Without
+        // this the card said "waiting for you to finish in the browser" over a
+        // page that is asking for a code only this card knows.
+        if (c.device) body.append(devicePanel(c.device))
+        actions.append(
+          loadingRow(c.device ? 'Waiting for you to approve it…' : 'Waiting for you to finish in the browser…')
+        )
         // Without this, an abandoned consent held the card hostage for the full
         // 5-minute timeout with nothing to click.
         const cancel = el('button', { class: 'trail-btn conn-mini', type: 'button', text: 'Cancel' }) as HTMLButtonElement

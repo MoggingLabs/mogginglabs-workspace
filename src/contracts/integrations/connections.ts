@@ -149,6 +149,23 @@ export interface Connection {
    *  the wording helper renders a note as "noted by you", always. Never telemetry
    *  (ADR 0005). */
   accountNote?: string
+  /** A device-flow sign-in IN PROGRESS (RFC 8628) — the code to type and where to
+   *  type it. Present only between "Connect" and the grant landing; every exit
+   *  path clears it. Not a secret: the user code is single-use, short-lived, and
+   *  useless without the account holder approving it in their own browser — it is
+   *  meant to be read aloud off a screen. Never telemetry, all the same. */
+  device?: DeviceSignIn
+}
+
+/** What the card shows while a device sign-in is waiting on the user. */
+export interface DeviceSignIn {
+  /** The short code the user confirms — display verbatim, dashes and all. */
+  userCode: string
+  /** Where they confirm it (we open this for them; it stays on screen because a
+   *  browser that opened on the wrong profile is the common case). */
+  verificationUri: string
+  /** Absolute ms — the card counts down, and says so when it lapses. */
+  expiresAt: number
 }
 
 /** The one place a connection's OAuth client registration is remembered. Per
@@ -161,11 +178,14 @@ export interface OAuthClientRecord {
   registeredAt: number
   /** How the record came to exist: `dcr` — the app registered itself (RFC 7591);
    *  `user` — pasted from the provider's own console, for the servers that offer no
-   *  DCR (Google, GitHub, Slack). Absent means `dcr` (records that predate the
-   *  field). The distinction is load-bearing: a `dcr` record can be purged and
-   *  re-registered on a redirect mismatch, a `user` record cannot — purging it
-   *  would eat credentials only the user can restore. */
-  source?: 'dcr' | 'user'
+   *  DCR (Google, GitHub, Slack); `first-party` — a PUBLIC client id we ship, the
+   *  `gh auth login` model (see contracts/integrations/first-party-clients.ts).
+   *  Absent means `dcr` (records that predate the field). The distinction is
+   *  load-bearing: a `dcr` record can be purged and re-registered on a redirect
+   *  mismatch, a `user` record cannot — purging it would eat credentials only the
+   *  user can restore — and a `first-party` record is never stored at all, so
+   *  purging it is a no-op and re-registering it is not ours to do. */
+  source?: 'dcr' | 'user' | 'first-party'
 }
 
 /** Is this connection usable right now, or does it need the user? */
