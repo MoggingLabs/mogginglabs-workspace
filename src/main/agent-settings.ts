@@ -290,6 +290,17 @@ export function markAgentConfigSessionLaunched(req: AgentCommandRequest): void {
   settings?.markSessionLaunched(req.agentId, req.workspaceId ?? 'default')
 }
 
+/**
+ * The profiles feature's door into fan-out (ADR 0022 step 03): a profile saved,
+ * removed, or discovered re-reaches every home for its provider — debounced in the
+ * service, one apply per burst. A no-op until registerAgentSettings has run, and
+ * for any provider string that is not a real agent CLI id.
+ */
+export function scheduleAccountDefaultsApply(provider: string): void {
+  if (!isAgentCliId(provider)) return
+  settings?.scheduleApplyAccountDefaults(provider)
+}
+
 export async function refreshAgentSettingsForCli(provider: AgentCliId): Promise<void> {
   if (offlineMode || !catalogs || !settings) return
   versionCache.delete(provider)
@@ -356,6 +367,51 @@ export async function registerAgentSettings(getWin: () => BrowserWindow | null, 
     return settings?.release(request.provider, target, request.settingId, request.behavior as 'keep' | 'restore') ??
       { ok: false, reason: 'Agent settings are unavailable.' }
   })
+  // ── ADR 0022: the cross-account tier's three doors ──
+  // "This account" resolution happens HERE: a profile target pins that profile, a
+  // user target pins the PRIMARY (its pointer-less profile row) — the renderer
+  // never learns profile identities beyond what the scope picker already shows.
+  const tierProfileId = (provider: AgentConfigProviderId, target: AgentConfigTarget): string | undefined =>
+    target.scope === 'profile'
+      ? target.targetId
+      : settings?.providerHomes(provider).find((home) => home.target.scope === 'user')?.profileId
+  ipcMain.handle(AgentConfigChannels.setDefault, async (_event, raw: unknown) => {
+    const request = record(raw)
+    const target = safeTarget(request?.target)
+    if (!request || !isAgentCliId(request.provider) || !target ||
+      typeof request.settingId !== 'string' || request.settingId.length > 512 ||
+      !['set', 'unset'].includes(String(request.operation)) || !['default', 'pin'].includes(String(request.tier)) ||
+      (request.operation === 'set' && !safeValue(request.value))) return { ok: false, reason: 'Invalid defaults request.' }
+    const tier = request.tier as 'default' | 'pin'
+    const profileId = tier === 'pin' ? tierProfileId(request.provider, target) : undefined
+    if (tier === 'pin' && !profileId) return { ok: false, reason: 'This target has no account to pin.' }
+    return settings?.setAccountDefault(
+      request.provider,
+      request.settingId,
+      request.operation as 'set' | 'unset',
+      request.value as AgentConfigValue | undefined,
+      tier,
+      profileId
+    ) ?? { ok: false, reason: 'Agent settings are unavailable.' }
+  })
+  ipcMain.handle(AgentConfigChannels.clearDefault, async (_event, raw: unknown) => {
+    const request = record(raw)
+    const target = safeTarget(request?.target)
+    if (!request || !isAgentCliId(request.provider) || !target ||
+      typeof request.settingId !== 'string' || request.settingId.length > 512 ||
+      !['default', 'pin'].includes(String(request.tier))) return { ok: false, reason: 'Invalid defaults request.' }
+    const tier = request.tier as 'default' | 'pin'
+    const profileId = tier === 'pin' ? tierProfileId(request.provider, target) : undefined
+    if (tier === 'pin' && !profileId) return { ok: false, reason: 'This target has no account to pin.' }
+    return settings?.clearAccountDefault(request.provider, request.settingId, tier, profileId) ??
+      { ok: false, reason: 'Agent settings are unavailable.' }
+  })
+  ipcMain.handle(AgentConfigChannels.promotable, async (_event, raw: unknown) => {
+    const request = record(raw)
+    if (!request || !isAgentCliId(request.provider)) return []
+    return settings?.promotableDefaults(request.provider).catch(() => []) ?? []
+  })
+
   ipcMain.handle(AgentConfigChannels.refresh, async (_event, raw: AgentConfigRefreshRequest) => {
     const request = raw === undefined ? {} : record(raw)
     if (!request || (request.provider !== undefined && !isAgentCliId(request.provider))) return { ok: false, refreshed: [], reason: 'Invalid provider.' }
@@ -379,6 +435,12 @@ export async function registerAgentSettings(getWin: () => BrowserWindow | null, 
   await catalogs.initialize({}, false)
   const reconciled = await settings.reconcileAll()
   if (!reconciled.ok) console.warn(`[agent-settings] startup reconciliation incomplete: ${reconciled.reason}`)
+  // ADR 0022 step 03: heal any adoption a closed app missed (an account that
+  // appeared while we weren't watching). Debounced + unref'd — post-boot, never
+  // the critical path; providers without authored tiers schedule nothing.
+  for (const { id } of AGENT_CLI_REGISTRY) {
+    if (store.listAccountDefaults(id).length) settings.scheduleApplyAccountDefaults(id)
+  }
   if (!offlineMode) {
     const refreshInstalledCatalogs = async (forceDetection: boolean): Promise<void> => {
       const versions: Partial<Record<AgentConfigProviderId, string>> = {}
@@ -409,6 +471,9 @@ export function disposeAgentSettings(): void {
     AgentConfigChannels.snapshot,
     AgentConfigChannels.set,
     AgentConfigChannels.release,
+    AgentConfigChannels.setDefault,
+    AgentConfigChannels.clearDefault,
+    AgentConfigChannels.promotable,
     AgentConfigChannels.refresh
   ]) ipcMain.removeHandler(channel)
   versionCache.clear()
@@ -417,6 +482,7 @@ export function disposeAgentSettings(): void {
   if (catalogTimer) clearInterval(catalogTimer)
   catalogTimer = undefined
   settingsWindow = undefined
+  settings?.dispose()
   settings = null
   catalogs = null
   offlineMode = false

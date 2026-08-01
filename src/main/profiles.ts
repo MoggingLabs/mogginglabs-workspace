@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { getSettingsStore } from './app-settings'
+import { scheduleAccountDefaultsApply } from './agent-settings'
 import { maybeFault, maybeMutationFault } from './fault-port'
 import { auditDelay, wizardAuditFaults } from './wizard-audit-faults'
 import type { SettingsStore } from '@backend/features/workspace'
@@ -158,7 +159,13 @@ function syncDiscoveredLogins(store: SettingsStore): void {
       }
       // An odd email label must not hide the login itself — retry unlabeled.
       const candidate = sanitizeProfile(draft) ?? sanitizeProfile({ ...draft, name: 'Default', email: undefined })
-      if (candidate) store.saveProfile(candidate)
+      if (candidate) {
+        store.saveProfile(candidate)
+        // ADR 0022 step 03: a newly DISCOVERED account adopts the provider's
+        // current defaults immediately — same trigger as an explicit save.
+        // (Label backfills above schedule nothing: they don't move homes.)
+        scheduleAccountDefaultsApply(candidate.provider)
+      }
     }
   }
 }
@@ -192,6 +199,9 @@ export function registerProfiles(): void {
     const profile = sanitizeProfile(deriveProfileDefaults(raw, store?.listProfiles() ?? []))
     if (!profile) return false
     store?.saveProfile(profile)
+    // ADR 0022 step 03: a new or edited account inherits the provider's current
+    // defaults on the same signal — no per-account opt-in, debounced downstream.
+    scheduleAccountDefaultsApply(profile.provider)
     return true
   })
   ipcMain.handle(ProfileChannels.remove, (_e, id: unknown) => {
