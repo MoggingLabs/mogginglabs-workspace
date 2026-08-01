@@ -246,9 +246,17 @@ export function runTreeLiveSmoke(win: BrowserWindow): void {
         }
         return -1
       })()`)
-      await ES(`window.__mogging.explorer.reveal(${JSON.stringify(join(evicted, 'POKED.txt'))})`)
-      await sleep(400)
-      const pokedRow = await ES<boolean>(`window.__mogging.explorer.rowNames().includes('POKED.txt')`)
+      // Bounded POLL with a RE-REVEAL each attempt — the torrent arm's precedent, and for
+      // the same reason: rows virtualize, so a row only enters the DOM window when the
+      // reveal walk runs AFTER its batch spliced it into the model. One fixed 400ms beat
+      // after a single reveal lost that race on a loaded macOS runner (batch had landed —
+      // pokedMs was 1120 — but the row had not yet been walked into view).
+      let pokedRow = false
+      for (let i = 0; i < 12 && !pokedRow; i++) {
+        await ES(`window.__mogging.explorer.reveal(${JSON.stringify(join(evicted, 'POKED.txt'))})`)
+        await sleep(400)
+        pokedRow = await ES<boolean>(`window.__mogging.explorer.rowNames().includes('POKED.txt')`)
+      }
       const poolOk =
         poolStats.handles === WATCH_POOL_CAP &&
         poolStats.polls === 102 - WATCH_POOL_CAP &&
@@ -266,7 +274,18 @@ export function runTreeLiveSmoke(win: BrowserWindow): void {
       await sleep(1800) // longer than any coalesce window or poll tick
       const blindBatches = await ES<string[][]>(`window.__mogging.explorer.batches()`)
       win.show()
-      const blindMs = await awaitRow('WHILE-BLIND.txt', 6000)
+      // Same virtualization rule as the poll-tier arm above: `WHILE-BLIND.txt` sorts to the
+      // END of `live`'s 60-file listing, so it is a row the tree HOLDS long before it is a
+      // row the DOM renders — and the scroll position here was left deep in the previous
+      // arm's 200-row expansion. Re-reveal each attempt instead of only watching rowNames.
+      const blindStart = Date.now()
+      let blindSeen = false
+      for (let i = 0; i < 20 && !blindSeen; i++) {
+        await ES(`window.__mogging.explorer.reveal(${JSON.stringify(join(fx.live, 'WHILE-BLIND.txt'))})`)
+        await sleep(400)
+        blindSeen = await ES<boolean>(`window.__mogging.explorer.rowNames().includes('WHILE-BLIND.txt')`)
+      }
+      const blindMs = blindSeen ? Date.now() - blindStart : -1
       await sleep(400)
       const resumeBatches = await ES<string[][]>(`window.__mogging.explorer.batches()`)
       const shownStats = explorerWatchStats()
