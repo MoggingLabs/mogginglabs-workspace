@@ -4325,14 +4325,20 @@ body.pane-dragging * {
   min-width: 0;
   justify-content: center;
   overflow: hidden;
+  /* A size container: the wizard's narrow-layout rules key on THIS width, not the
+     window's — beside the workspace rail the content is ~340px narrower than the window,
+     and window media queries slept through exactly the squeeze they were written for
+     (rail review, 2026-08-01). */
+  container-type: inline-size;
+  container-name: wizard;
 }
 .wizard-page {
   display: flex;
   flex-direction: column;
   width: min(var(--page-max), 100%);
   min-height: 0;
-  padding: var(--sp-5) var(--sp-6);
-  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-6);
+  gap: var(--sp-3);
 }
 .wizard-head {
   display: flex;
@@ -4369,7 +4375,9 @@ body.pane-dragging * {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-5);
+  /* One token tighter (compact pass): with the helper sentences gone, sp-5 between
+     sections read as holes — the hairline under each label is the divider now. */
+  gap: var(--sp-4);
   padding-bottom: var(--sp-2);
 }
 .wizard-footer {
@@ -4479,19 +4487,22 @@ body.pane-dragging * {
 .wizard-sec {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--sp-2);
 }
 .wizard-sec-head {
   display: flex;
   align-items: baseline;
   gap: var(--sp-3);
   min-width: 0;
-  padding-bottom: var(--sp-3);
+  padding-bottom: var(--sp-2);
   border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
+/* Labels carry the page's structure alone now (the helper sentences are gone — compact
+   pass), so they step up from text-lo to text-mid: the hierarchy the prose used to fake,
+   said typographically. */
 .wizard-sec-label {
   flex: none;
-  color: var(--text-lo);
+  color: var(--text-mid);
   font-size: var(--fs-11);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--track-wide);
@@ -4519,19 +4530,24 @@ body.pane-dragging * {
   font-size: var(--fs-11);
 }
 
-/* Where: folder and name share one row — the two facts of the section. */
+/* Where: folder and name share one row — the two facts of the section. WRAPPING
+   (resize review, 2026-08-01): at narrow windows the fixed-width name input used to win
+   the row and crush the path FIELD to zero — the folder you were choosing became
+   invisible. The bar now keeps a usable floor and the name drops to its own line. */
 .wizard-where-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-2);
 }
 .wizard-where-row .path-input {
-  flex: 1 1 auto;
+  flex: 1 1 320px;
   min-width: 0;
 }
 .wizard-name-input {
-  flex: none;
-  width: 240px;
+  flex: 1 1 180px;
+  width: auto;
+  max-width: 240px;
   height: 40px; /* the path input's height — one row, one rhythm */
   border-radius: var(--r-md);
   font-size: var(--fs-13);
@@ -4686,6 +4702,14 @@ body.pane-dragging * {
   color: var(--text-hi);
   font-weight: var(--fw-medium);
 }
+/* Paths clip TAIL-FIRST (choosing review): end-ellipsis kept `C:\Users\pveloso01\Docu…`
+   — the root every path on this machine shares — and hid the project segment that
+   actually identifies the folder. RTL direction on a pure-LTR string moves the clip to
+   the START, so what survives is `…\projects\mogginglabs-workspace`. */
+.wizard-recent-path {
+  direction: rtl;
+  text-align: left;
+}
 .wizard-recent-path {
   min-width: 0;
   overflow: hidden;
@@ -4720,18 +4744,58 @@ body.pane-dragging * {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+/* THE FLOOR (600×400 review, 2026-08-01): at the window minimum the full-size lattice
+   was a wall of 24px dots filling the entire scroll viewport — a control reading as
+   noise. Narrow VIEWS take smaller dots (the lattice is a picker, not a preview; its
+   cells only need to be hittable), and the wrapped name field fills its own line
+   instead of stopping at the wide-layout cap. A CONTAINER query, not window media: the
+   workspace rail narrows the wizard without narrowing the window, and these rules must
+   fire on the squeeze itself (rail review, same day). */
+@container wizard (max-width: 720px) {
+  .grid-painter {
+    --gp-cell: 18px;
+  }
+  .wizard-name-input {
+    max-width: none;
+  }
+}
+/* The worst reachable squeeze: minimum window WITH the rail open (~310px of content —
+   screenshot-verified reachable, 2026-08-01). The folder FIELD is the one thing that
+   must survive: Browse folds to its icon (tooltip keeps the word) and the status chip
+   yields — its verdicts re-surface through the line under the bar when they matter. */
+@container wizard (max-width: 400px) {
+  .path-input-browse span {
+    display: none;
+  }
+  /* Doubled selector: the chip's own display rule sits later in the file and out-ranked
+     the plain class here — the chip survived the squeeze it was supposed to yield to
+     (screenshot-caught). */
+  .path-input .path-input-status {
+    display: none;
+  }
+}
+
+/* WRAP CASCADE (resize review, 2026-08-01): at 600px the canvas — the paint surface the
+   whole placement model lives on — was squeezed to a ~30px sliver while the rigid
+   lattice kept every pixel. Nothing here may crush: the summary drops below first, then
+   the canvas drops under the lattice, each holding a usable floor. */
 .wizard-layout-row {
   display: flex;
   align-items: stretch;
+  flex-wrap: wrap;
   gap: var(--sp-5);
   min-width: 0;
 }
 .wizard-layout-summary {
-  flex: 1 1 auto;
+  /* Wraps below the painter before its text starts breaking mid-word (resize review). */
+  flex: 1 1 200px;
   min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+  /* Vertically centered against the canvas it stands beside — top-packed content left
+     a hole under Reset grid the full height of the box (review shot). */
+  justify-content: center;
   gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-4);
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
@@ -4753,8 +4817,10 @@ body.pane-dragging * {
 .grid-painter {
   display: flex;
   align-items: stretch;
+  flex-wrap: wrap; /* the canvas drops under the lattice before it shrinks past use */
   gap: var(--sp-4);
   min-width: 0;
+  flex: 1 1 auto;
 }
 .gp-lattice {
   flex: none;
@@ -4767,8 +4833,8 @@ body.pane-dragging * {
   background: var(--bg-inset);
 }
 .gp-cell {
-  width: var(--sp-5);
-  height: var(--sp-5);
+  width: var(--gp-cell, var(--sp-5));
+  height: var(--gp-cell, var(--sp-5));
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--r-xs);
@@ -4796,7 +4862,9 @@ body.pane-dragging * {
 }
 .gp-canvas {
   flex: 1 1 auto;
-  min-width: 0;
+  /* The floor that keeps a 4×4 grid's tiles clickable — below it the canvas wraps to
+     its own line instead of thinning into decoration (resize review). */
+  min-width: 240px;
   max-width: 380px;
   aspect-ratio: 16 / 9;
   display: grid;
@@ -4875,6 +4943,12 @@ body.pane-dragging * {
   font-family: var(--font-mono);
   font-size: var(--fs-10);
   pointer-events: none;
+  /* Full agent names on the tiles now (review pass) — on a dense grid the name yields
+     to an ellipsis and the mark above carries identity alone. */
+  max-width: 92%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 @keyframes gp-shake {
   0%, 100% { transform: translateX(0); }
@@ -4934,18 +5008,34 @@ body.pane-dragging * {
   flex-wrap: wrap;
   gap: var(--sp-2);
 }
+/* Sub-hosts exist so the brushes and the missing chips rebuild on different cadences
+   (per paint stroke vs per roster change) while still wrapping as ONE flex line. */
+.wizard-palette-group {
+  display: contents;
+}
+/* Clear lives at the row's far end — a destructive verb spatially apart from the
+   brushes it clears (it used to sit flush against the shell chip, where it read as one
+   more agent). */
+.wizard-palette-clear {
+  flex: none;
+  margin-left: auto;
+}
 .wizard-chip-wrap {
   display: inline-flex;
   align-items: stretch;
   min-width: 0;
 }
+/* Chip metrics on the shared control rhythm: --wz-ctl tall like the steppers and
+   selects beside them, sp-2 between glyph/name/count, sp-3 lead-in — the pill shape
+   needs the deeper start or the logo crowds the curve. */
 .wizard-chip {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
   min-width: 0;
+  height: var(--wz-ctl);
   font-size: var(--fs-12);
-  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-3);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
   border-radius: var(--r-full);
   border: 1px solid var(--border);
   background: var(--bg-inset);
@@ -4956,6 +5046,17 @@ body.pane-dragging * {
     color var(--dur-1) var(--ease),
     border-color var(--dur-1) var(--ease);
 }
+/* A missing CLI, in the same clothes: grayed mark, low ink, and the download glyph in
+   the ▾'s slot. The whole chip is the install click-target. */
+.wizard-chip.is-missing {
+  color: var(--text-lo);
+}
+.wizard-chip.is-missing .provider-logo {
+  filter: grayscale(1) opacity(0.55);
+}
+.wizard-chip.is-missing:hover {
+  color: var(--text-mid);
+}
 /* The ▾ shares the pill: same border, glued to the chip's right edge, its own hit target. */
 .wizard-chip-wrap .wizard-chip {
   border-top-right-radius: 0;
@@ -4965,10 +5066,15 @@ body.pane-dragging * {
   border-radius: var(--r-full);
   padding-right: var(--sp-3);
 }
-.wizard-chip-menu {
+/* The chip's glued end-slot — the ▾ menu on a brush, the install/progress glyph on a
+   missing chip. One geometry for both, sp-2 pad so the glyph breathes and the target
+   clears ~20px wide. */
+.wizard-chip-menu,
+.wizard-chip-wrap .agent-setup-iconbtn {
   display: inline-flex;
   align-items: center;
-  padding: 0 var(--sp-1);
+  justify-content: center;
+  padding: 0 var(--sp-2);
   border: 1px solid var(--border);
   border-left: 0;
   border-top-right-radius: var(--r-full);
@@ -4980,16 +5086,57 @@ body.pane-dragging * {
     color var(--dur-1) var(--ease),
     border-color var(--dur-1) var(--ease);
 }
+/* The action wrapper must STRETCH its glyph to the pill's full height — centered, the
+   install button rendered as a short bordered box floating mid-chip, visibly detached
+   from the pill it belongs to (review crop, 2026-08-01). */
+.wizard-chip-wrap .agent-setup-action {
+  display: inline-flex;
+  align-items: stretch;
+}
+/* The download glyph invites in accent ink; the spinner/verdict grades keep their own. */
+.wizard-chip-wrap .agent-setup-iconbtn {
+  color: var(--accent-ink);
+}
+.wizard-chip-wrap .agent-setup-iconbtn.is-running {
+  color: var(--text-mid);
+  cursor: default;
+}
+.wizard-chip-wrap .agent-setup-iconbtn.is-failed {
+  color: var(--danger-ink);
+}
+.wizard-chip-wrap .agent-setup-iconbtn.is-ready {
+  color: var(--success);
+  cursor: default;
+}
 .wizard-chip:hover,
-.wizard-chip-menu:hover {
+.wizard-chip-menu:hover,
+.wizard-chip-wrap .agent-setup-iconbtn:hover {
   border-color: var(--border-strong);
   color: var(--text-hi);
 }
+.wizard-chip-wrap .agent-setup-iconbtn:hover {
+  color: var(--accent-ink);
+}
+/* The armed ring at --ring-w-attn (2px), not 1px: a one-pixel halo traced around a
+   full-radius pill lands between device pixels and reads as fuzz, not a ring — the
+   same anti-aliasing arithmetic that set the focus tokens (see the ring-width block).
+
+   The ring rides the WRAP and the armed paint reaches the glued ▾ segment too (review
+   shot: body-only styling snapped the pill in half — orange chip, gray tail). One pill,
+   one state. */
 .wizard-chip.is-armed {
   background: var(--accent-weak);
   color: var(--accent-ink);
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+  border-color: var(--accent);
+}
+.wizard-chip.is-armed + .wizard-chip-menu {
+  background: var(--accent-weak);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+.wizard-chip-wrap:has(> .is-armed) {
+  border-radius: var(--r-full);
+  box-shadow: 0 0 0 var(--ring-w-attn) color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .wizard-chip-name {
   min-width: 0;
@@ -5033,44 +5180,60 @@ body.pane-dragging * {
   font-size: var(--fs-11);
   white-space: nowrap;
 }
-.wizard-agents {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: var(--sp-2);
-}
-.wizard-agent-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
+/* ── The house select (review crop, 2026-08-01) ────────────────────────────────────────
+   A native <select> keeps the OS arrow-in-its-own-box no matter what the element is
+   styled to — the one control on the page still wearing system chrome. appearance:none
+   strips it; the wrapper draws the chevron as a pure-CSS triangle (no asset, so the
+   shipped img-src CSP has nothing to block), and the control takes the same height,
+   inset, border, and type as every other wizard control. */
+.wizard-select {
+  position: relative;
+  display: inline-flex;
   min-width: 0;
-  padding: var(--sp-2) var(--sp-3);
+}
+.wizard-select > select {
+  appearance: none;
+  height: var(--wz-ctl);
+  min-width: 0;
+  padding: 0 var(--sp-5) 0 var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  background: var(--bg-surface);
+  background: var(--bg-inset);
+  color: var(--text-hi);
+  font-size: var(--fs-12);
+  cursor: pointer;
   transition: border-color var(--dur-1) var(--ease);
 }
-.wizard-agent-card:hover {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+.wizard-select > select:hover {
+  border-color: var(--border-strong);
 }
-/* (.is-missing dimming lives with the setup component's wizard-fusion rules: dimming the
-   whole card put a primary Install button at 75% opacity, which read as disabled.) */
-/* The Install action rides the card's ONE row, pushed to the right edge — the card is a
-   single line of content (the old second controls row left with the steppers, and a lone
-   button on its own row just doubled the card's height). */
-.wizard-agent-head .wizard-agent-action {
-  flex: none;
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
+.wizard-select::after {
+  content: '';
+  position: absolute;
+  right: var(--sp-3);
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--text-lo);
+  border-bottom: 1.5px solid var(--text-lo);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
 }
-/* The custom row and the empty state span the whole grid. */
+/* (The per-provider CARD grid retired in design pass 2 — a missing CLI is a grayed chip
+   in the palette now, same anatomy as an installed one. .wizard-agents survives only as
+   the detection-pending note's host; the custom row keeps the head/tail skeleton.) */
+.wizard-agents {
+  min-width: 0;
+}
+.wizard-agents:empty {
+  display: none;
+}
 .wizard-agent-row {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  grid-column: 1 / -1;
-  min-height: 36px;
-  padding: var(--sp-1) var(--sp-2);
+  min-height: 32px;
+  padding: 0 var(--sp-1);
   border: 1px solid transparent;
   border-radius: var(--r-sm);
 }
@@ -5088,12 +5251,9 @@ body.pane-dragging * {
   flex: none;
   margin-left: auto; /* no zero-width spacer element — the audit's REMOVE */
 }
-.wizard-agent-row :is(.stepper, .wizard-recheck),
-.wizard-agent-card :is(.stepper, .wizard-recheck) {
+.wizard-agent-row .stepper {
   height: var(--wz-ctl);
 }
-/* (The per-card "Fill all ×N" button and the per-card profile select left with the
-   steppers — fills live on the chips' ▾ menus, profiles in .wizard-profiles.) */
 .wizard-agent-name {
   flex: 0 1 auto;
   min-width: 0;
@@ -5482,18 +5642,33 @@ body.pane-dragging * {
   font-weight: var(--fw-semibold);
 }
 /* The current folder IS the selection — until a child row takes it. */
+/* Selected crumb: the 1px accent border alone read as pixelated on the pill's curves
+   (the ring-width lesson) — the outer halo takes it to an effective 2px, and the arcs
+   resolve. */
 .fb-crumb.is-selected {
   background: var(--accent-weak);
   border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .fb-crumb-sep {
   display: inline-flex;
   color: var(--text-lo);
 }
+/* The list sizes against the viewport LEFT OVER above it (second choosing review,
+   2026-08-01). The first cut keyed on raw window height (28vh) and forgot that the bar,
+   cd line, crumbs, and page chrome eat ~380px BEFORE the first folder row — at ordinary
+   window heights that left ONE visible row: a folder picker you had to page-scroll to
+   peek through (operator screenshot). `100vh - 380px` is that chrome, measured; the
+   floor keeps five rows on even the smallest window (the list's own scrollbar does the
+   rest), and the ceiling stops a 4K display from turning the picker into a canyon. */
+/* The list FILLS whatever the browser's viewport-tracking cap grants (the cap lives on
+   `.wizard-sec--where .folder-browser`); crumbs and the footer keep their natural rows.
+   The min guarantees five visible rows even at the cap's floor. */
 .fb-list {
   display: flex;
   flex-direction: column;
-  height: 216px;
+  flex: 1 1 auto;
+  min-height: 160px;
   overflow-y: auto;
   padding: var(--sp-1);
 }
@@ -6007,9 +6182,14 @@ body.pane-dragging * {
   padding: var(--sp-4);
 }
 
-/* The Where section's folder browser stays a compact tool, not a page. */
+/* The browser is the CHOOSING surface, and it gets the viewport's leftovers (explicit
+   direction, 2026-08-01 — reversing 8.5's "compact tool" 220px cap, which squeezed the
+   rows to a keyhole: ~140px of list, one visible folder at ordinary window heights,
+   operator-screenshotted). `100vh - 380px` is the measured chrome above and below the
+   rows; the floor keeps five rows on the smallest window, the ceiling keeps a 4K
+   display from turning the picker into a canyon. */
 .wizard-sec--where .folder-browser {
-  max-height: 220px;
+  max-height: clamp(240px, calc(100vh - 380px), 520px);
 }
 .wizard-chosen {
   margin: 0;
@@ -7760,24 +7940,20 @@ body.pane-dragging * {
   padding-top: var(--sp-2);
 }
 
-/* ── Surface fusion: the wizard's agent cards ─────────────────────────────────────────
-   A missing card keeps the installed card's two-row anatomy — head, then controls —
-   with Install sitting exactly where the stepper sits, right-aligned. Only the head
-   dims: a primary button at 75% card opacity read as broken. */
-.wizard-agent-card.is-missing {
-  opacity: 1;
+/* ── Surface fusion: the wizard ───────────────────────────────────────────────────────
+   A missing CLI's install PROGRESS unfolds full-width under the palette row (its chip
+   only holds the glyph), separated by the section's own hairline language. Empty = no
+   height: at rest the host disappears entirely. */
+.wizard-setup-host {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
 }
-.wizard-agent-card.is-missing .wizard-agent-head {
-  opacity: 0.8;
+.wizard-setup-host:not(:has(.agent-setup:not([hidden]))) {
+  display: none;
 }
-/* The waiting-in-grayscale mark — the SAME rule Settings' avatars and Home's rows use.
-   Since the "not installed" pill left (redundancy pass), this is the shared visual verb
-   for "not here yet" on all three surfaces, and it lights up in brand color on install. */
-.wizard-agent-card.is-missing .provider-logo {
-  filter: grayscale(1) opacity(0.55);
-}
-.wizard-agent-card .agent-setup {
-  width: 100%;
+.wizard-setup-host .agent-setup {
   border-top: 1px solid var(--border);
   padding-top: var(--sp-2);
 }

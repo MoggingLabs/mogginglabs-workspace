@@ -46,6 +46,28 @@ export function createPathInput(opts: PathInputOpts = {}): PathInputHandle {
 
   const status = el('span', { class: 'path-input-status', hidden: true })
 
+  // THE LEAF STAYS VISIBLE (information review, 2026-08-01). An input clips at its END,
+  // so a deep path showed `C:\Users\…\AppData\Loca` — the root everyone already knows —
+  // while hiding the leaf, the one segment that answers "where will my terminals start?".
+  // Whenever the app writes the value (and again on blur, after the user's caret had it),
+  // the view scrolls to the tail; the full path rides the tooltip.
+  const showTail = (): void => {
+    input.scrollLeft = input.scrollWidth
+    input.title = input.value
+  }
+  input.addEventListener('blur', showTail)
+  input.addEventListener('input', () => (input.title = input.value))
+  // Chromium resets an UNFOCUSED input's scroll to 0 on reflow — a window resize quietly
+  // snapped the view back to the path's head (screenshot-caught). Re-assert the tail
+  // whenever the field's own box changes size. Self-disconnecting: the wizard rebuilds
+  // this input on every open, and an observer kept alive for a detached input is a leak
+  // that grows by one per open.
+  const retail = new ResizeObserver(() => {
+    if (!input.isConnected) return retail.disconnect()
+    if (document.activeElement !== input) showTail()
+  })
+  retail.observe(input)
+
   const wrap = el('div', { class: 'path-input' }, [
     el('span', { class: 'path-input-icon' }, [icon('folder', 16)]),
     input,
@@ -77,12 +99,15 @@ export function createPathInput(opts: PathInputOpts = {}): PathInputHandle {
     status.append(el('span', { text: s.text }))
   }
 
+  if (opts.value) queueMicrotask(showTail) // the initial value obeys the same rule
+
   return {
     el: wrap,
     input,
     value: () => input.value,
     setValue: (v) => {
       input.value = v
+      if (document.activeElement !== input) showTail()
     },
     setStatus,
     focus: () => input.focus()

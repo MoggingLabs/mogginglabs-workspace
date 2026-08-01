@@ -36,6 +36,13 @@ export interface AgentSetupPanelOptions {
   name: string
   /** Dense placement (the wizard's agent card) trims paddings and the log height. */
   compact?: boolean
+  /**
+   * Icon-only action (the wizard's palette chips): the download glyph + the grayed-out
+   * chip it sits on already say "not installed — get it", so the word "Install" is
+   * redundant there (explicit direction, 2026-08-01). The name still rides aria-label
+   * and the tooltip — icon-only is a visual economy, never an accessibility one.
+   */
+  iconOnly?: boolean
   /** Fired when setup SUCCEEDS, so a host surface can re-render around a now-present CLI. */
   onInstalled?: () => void
   /** Fired on every phase edge — a host that mirrors state elsewhere (a status pill)
@@ -131,8 +138,56 @@ export function createAgentSetupPanel(opts: AgentSetupPanelOptions): AgentSetupP
     return el('div', { class: 'agent-setup-details' }, [toggle, log])
   }
 
+  /** The icon-only grades of the same lifecycle — glyphs where the labeled button would
+   *  shout. Every state keeps its words in aria/title. */
+  function renderIconAction(): void {
+    switch (phaseOf()) {
+      case 'idle': {
+        action.append(
+          el(
+            'button',
+            {
+              class: 'agent-setup-iconbtn',
+              type: 'button',
+              ariaLabel: `Install ${opts.name}`,
+              title: notice || `Install ${opts.name} — one click, dependencies included`,
+              onClick: start
+            },
+            [icon('download', 13)]
+          )
+        )
+        return
+      }
+      case 'running': {
+        const running = el('span', { class: 'agent-setup-iconbtn is-running', title: `Installing ${opts.name}…` }, [Spinner()])
+        running.setAttribute('role', 'status')
+        running.setAttribute('aria-label', `Installing ${opts.name}`)
+        action.append(running)
+        return
+      }
+      case 'failed':
+        action.append(
+          el(
+            'button',
+            {
+              class: 'agent-setup-iconbtn is-failed',
+              type: 'button',
+              ariaLabel: `Retry installing ${opts.name}`,
+              title: `${opts.name} couldn’t be installed — retry`,
+              onClick: start
+            },
+            [icon('rotate-cw', 13)]
+          )
+        )
+        return
+      case 'succeeded':
+        action.append(el('span', { class: 'agent-setup-iconbtn is-ready', title: `${opts.name} is ready` }, [icon('check-circle', 13)]))
+    }
+  }
+
   function renderAction(): void {
     clear(action)
+    if (opts.iconOnly) return renderIconAction()
     switch (phaseOf()) {
       case 'idle':
         action.append(

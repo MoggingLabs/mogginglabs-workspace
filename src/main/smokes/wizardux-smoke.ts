@@ -147,7 +147,11 @@ export function runWizardUxSmoke(win: BrowserWindow): void {
           headPad: parseFloat(cs.paddingBottom)
         }
       })()`)
-      const spacingOk = spacing.gap >= 24 && spacing.hairline === 1 && spacing.headPad >= 12 // --sp-5 / hairline / --sp-3
+      // The compact rhythm (2026-08-01, explicit direction): with the helper sentences
+      // gone, --sp-5 between sections read as holes — the page tightened one token to
+      // --sp-4 / --sp-2, hairline unchanged. Still >=-anchored so a collapse to zero
+      // (a broken token, a lost class) fails loudly; the ceiling is design, not the gate.
+      const spacingOk = spacing.gap >= 16 && spacing.hairline === 1 && spacing.headPad >= 8 // --sp-4 / hairline / --sp-2
 
       // ── (c) prefill lands across the page at once ───────────────────────────
       // A `custom:` mix needs no installed CLI, so this asserts on any machine.

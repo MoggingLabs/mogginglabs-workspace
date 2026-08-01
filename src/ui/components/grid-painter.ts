@@ -339,7 +339,13 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
         {
           class: 'gp-region' + (merged ? ' is-merged' : ''),
           type: 'button',
-          title: merged ? 'Merged terminal — click to split it back' : chip?.label || 'Terminal',
+          // The tile's tooltip is the placement model's quiet teacher (compact pass): a
+          // bare tile says a click will choose, an assigned one says it can change.
+          title: merged
+            ? 'Merged terminal — click to split it back'
+            : chip?.label
+              ? `${chip.label} — click to change`
+              : 'Click to choose what runs here',
           ariaLabel:
             `Terminal ${i + 1}` +
             (chip ? ` — ${chip.label}` : '') +

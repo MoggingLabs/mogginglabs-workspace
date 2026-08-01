@@ -73,13 +73,15 @@ export function runAgentRegistrySmoke(win: BrowserWindow): void {
     await ES(`window.__mogging.templates.openWizard()`)
     await sleep(350)
     const wizard = await ES<boolean>(`(() => {
-      // The placement redesign (2026-08-01): an INSTALLED agent is a palette CHIP (a
-      // paintable brush — the steppers are gone); a MISSING one is still a card whose
-      // whole job is the one-click Install. The registry flip must move the provider
-      // between those two homes, so both are asserted, each in both directions.
-      const chip = [...document.querySelectorAll('#view-wizard .wizard-chip')].find((item) => item.textContent?.includes('Audit Codex'))
-      const card = [...document.querySelectorAll('#view-wizard .wizard-agent-card')].find((item) => item.textContent?.includes('Audit Codex'))
-      return !!chip === ${installed} && !!card === ${!installed} && (!card || card.classList.contains('is-missing'))
+      // Design pass 2 (2026-08-01): ONE palette row for every agent. Installed = a brush
+      // chip (armable, data-chip). Missing = a grayed .is-missing chip whose end slot
+      // carries the icon-only install. The registry flip must move the provider between
+      // those two grades — both asserted, each in both directions.
+      const brush = document.querySelector('#view-wizard .wizard-chip[data-chip="codex"]')
+      const missing = [...document.querySelectorAll('#view-wizard .wizard-chip-wrap.is-missing')]
+        .find((item) => item.textContent?.includes('Audit Codex'))
+      const installGlyph = !!missing?.querySelector('.agent-setup-iconbtn')
+      return !!brush === ${installed} && !!missing === ${!installed} && (${installed} || installGlyph)
     })()`)
 
     await ES(`window.__mogging.view('settings'); window.__mogging.settingsTab('providers')`)

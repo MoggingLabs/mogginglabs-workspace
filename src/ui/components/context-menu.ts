@@ -93,6 +93,10 @@ export function openContextMenu(opts: ContextMenuOpts): ContextMenuHandle {
     focusItem(live[next])
   }
 
+  // The icon COLUMN exists only when some item brings an icon. Rendering it
+  // unconditionally indented every label of an icon-less menu behind an empty gutter —
+  // dead left padding with nothing to align to (review shot, 2026-08-01).
+  const hasIcons = opts.items.some((entry) => !isSeparator(entry) && entry.icon)
   for (const entry of opts.items) {
     if (isSeparator(entry)) {
       menu.append(el('div', { class: 'ctx-sep', role: 'separator' }))
@@ -115,7 +119,7 @@ export function openContextMenu(opts: ContextMenuOpts): ContextMenuHandle {
         }
       },
       [
-        el('span', { class: 'ctx-icon' }, [entry.icon ? icon(entry.icon, 14) : null]),
+        hasIcons ? el('span', { class: 'ctx-icon' }, [entry.icon ? icon(entry.icon, 14) : null]) : null,
         el('span', { class: 'ctx-label', text: entry.label }), // textContent — labels may carry user data
         entry.hint ? el('span', { class: 'ctx-hint', text: entry.hint }) : null
       ]

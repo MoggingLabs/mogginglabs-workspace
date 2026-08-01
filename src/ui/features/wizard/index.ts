@@ -191,11 +191,12 @@ export const wizardFeature: UiFeature = {
     // shows it; nothing is re-mounted on a view trip.
     const page = el('div', {}, [
       el('div', { class: 'wizard-page' }, [
+        // COMPACT PASS (2026-08-01, explicit direction): the page sheds its standing prose.
+        // The title carries the page; the section labels carry the structure; guidance
+        // lives where it is needed — tooltips, placeholders, and state-triggered lines —
+        // instead of narrating controls that explain themselves.
         el('header', { class: 'wizard-head' }, [
-          el('div', { class: 'wizard-head-text' }, [
-            el('h1', { class: 'wizard-title', text: 'New workspace' }),
-            el('p', { class: 'wizard-subtitle', text: 'Folder, layout, agents — nothing hidden.' })
-          ]),
+          el('h1', { class: 'wizard-title', text: 'New workspace' }),
           Button({ label: 'Cancel', icon: 'chevron-left', variant: 'ghost', size: 'sm', onClick: leave })
         ]),
         body,
@@ -204,6 +205,23 @@ export const wizardFeature: UiFeature = {
     ])
     page.id = 'view-wizard'
     ctx.content.append(page)
+
+    // WHEEL ANYWHERE IN THE VIEW (2026-08-01, direction). The scroll owner is the body
+    // column, but the page centers at --page-max — full-bleed (zero workspaces) that
+    // leaves wide side margins, and a wheel over them did nothing. Intuition says the
+    // whole view scrolls, so forward the delta. Scoped to THIS view's element on purpose:
+    // the workspace rail is outside it, and hovering the rail must keep scrolling the
+    // rail, not this page.
+    page.addEventListener(
+      'wheel',
+      (e) => {
+        if (activeView() !== 'wizard' || e.deltaY === 0) return
+        if (e.target instanceof Node && body.contains(e.target)) return // the scroller has it
+        body.scrollTop += e.deltaY
+        e.preventDefault()
+      },
+      { passive: false }
+    )
 
     // Esc leaves, back to wherever the user came from — the Settings-page contract.
     // Overlays above the page (palette, dialogs) own their own Esc.
@@ -444,7 +462,7 @@ export const wizardFeature: UiFeature = {
 
     const providerColor = (id: string): string => providerAccent(id)
     function providerInitial(id: string): string {
-      if (id.startsWith('custom:')) return '›'
+      if (id.startsWith('custom:')) return 'custom'
       return roster.find((a) => a.id === id)?.name ?? id
     }
 
@@ -661,9 +679,12 @@ export const wizardFeature: UiFeature = {
     let summaryCount!: HTMLElement
     let summaryShape!: HTMLElement
     let painter!: GridPainterHandle
-    let agentsCaption!: HTMLElement
     let rosterHost!: HTMLElement
     let paletteHost!: HTMLElement
+    let brushesHost!: HTMLElement
+    let missingHost!: HTMLElement
+    let clearHost!: HTMLElement
+    let setupHost!: HTMLElement
     let brushHint!: HTMLElement
     let profilesHost!: HTMLElement
     let presetsHost!: HTMLElement
@@ -845,7 +866,7 @@ export const wizardFeature: UiFeature = {
 
       whereSection = section(
         'Working folder',
-        'Your terminals start here — type a path, cd to it, or click through.',
+        '', // the bar, the cd prompt, and the browser explain themselves — no narration
         null,
         [el('div', { class: 'wizard-where-row' }, [path.el, nameInput]), cdLine.el, chosenLine, browser.el],
         'wizard-sec--where'
@@ -876,31 +897,35 @@ export const wizardFeature: UiFeature = {
       return { kind: 'ok', text: 'no repo — fine' }
     }
 
-    /** The small current-folder line between the path bar and the browser. */
+    /** The line under the bar SPEAKS ONLY WHEN SOMETHING IS WRONG or non-obvious
+     *  (compact pass): a refusal, a remote target, no folder at all. The happy path —
+     *  "terminals will start in X" — restated what the bar already shows, every minute,
+     *  to everyone. */
     function updateChosen(): void {
       if (!chosenLine || !selection) return
       const s = selection.state()
       clear(chosenLine)
       chosenLine.title = s.cwd
+      chosenLine.hidden = false
       if (s.remote) {
-        chosenLine.append(`Runs on ${remoteHost?.name ?? 'a remote host'} — the path above is a folder on that machine.`)
+        chosenLine.append('Runs on ', el('strong', { text: remoteHost?.name ?? 'a remote host' }), ' — the path lives on that machine.')
         return
       }
       if (!s.cwd.trim()) {
-        chosenLine.append('No folder chosen yet — pick one below.')
+        chosenLine.append('Pick a folder below.')
         return
       }
       if (s.refusal) {
         chosenLine.append('Can’t use that path — ', el('strong', { text: REFUSAL_TEXT[s.refusal.reason] ?? 'unverified' }))
         return
       }
-      chosenLine.append('Terminals will start in ', el('strong', { text: basename(s.cwd) || s.cwd }))
+      chosenLine.hidden = true
     }
 
     // ── Recent folders ───────────────────────────────────────────────────────
     function buildRecents(): HTMLElement {
       recentsHost = el('div', { class: 'wizard-recents' })
-      recentsSection = section('Recent', 'One click — folder and name follow.', null, [recentsHost])
+      recentsSection = section('Recent', '', null, [recentsHost])
       return recentsSection
     }
 
@@ -974,7 +999,10 @@ export const wizardFeature: UiFeature = {
           return {
             color: providerColor(id),
             mark: providerLogo(id, 14),
-            label: providerInitial(id).slice(0, 1).toUpperCase()
+            // The full name, not an initial (review shot: a bare "C" under the mark was
+            // cryptic — and Claude and Codex would BOTH say "C"). The tile ellipsizes on
+            // dense grids; the logo still carries identity when the name has no room.
+            label: providerInitial(id)
           }
         }
       })
@@ -990,24 +1018,38 @@ export const wizardFeature: UiFeature = {
           refreshAgents()
         }
       })
+      // The capacity story compresses to one short line; the full reasoning (machine vs
+      // screen vs ceiling, what's already running) rides its tooltip — help on demand,
+      // not a paragraph on duty (compact pass).
+      const capacityLine = el('span', { class: 'wizard-hint', text: capacityShortText() })
+      capacityLine.title = capacityHintText()
       const summary = el('div', { class: 'wizard-layout-summary' }, [
         summaryCount,
         summaryShape,
         layoutReadout,
-        el('span', { class: 'wizard-hint', text: capacityHintText() }),
+        capacityLine,
         resetBtn
       ])
-      return section(
-        'Layout',
-        'Pick a size on the dots. Drag across terminals to merge; click a merged one to split.',
-        null,
-        [el('div', { class: 'wizard-layout-row' }, [painter.el, summary])]
-      )
+      return section('Layout', '', null, [el('div', { class: 'wizard-layout-row' }, [painter.el, summary])])
     }
 
     function layoutReadoutText(): string {
       const merged = gridSpec.regions.filter((region) => region.rs > 1 || region.cs > 1).length
       return `${paneCount} ${plural(paneCount)} · ${gridSpec.rows}×${gridSpec.cols}${merged ? ' · merged' : ''}`
+    }
+
+    /** The budget in a few words — what the summary column shows. The number keeps its
+     *  NOUN (WIZLAYOUT rightly failed the unit-less first cut: "up to 32" of what?), and
+     *  the machine is named when the machine binds. The full reasoning stays in the
+     *  tooltip (capacityHintText below). */
+    function capacityShortText(): string {
+      const source =
+        capacity.maxPanes < capacity.screenMaxPanes
+          ? 'sized to this machine'
+          : capacity.limitedBy === 'ceiling'
+            ? 'the app’s ceiling'
+            : 'this screen'
+      return `Up to ${capacity.maxPanes} terminals — ${source}`
     }
 
     /** The budget, in words: what stopped the count where it did. A machine-bound
@@ -1045,16 +1087,25 @@ export const wizardFeature: UiFeature = {
     //
     // Each chip wears a live ×N readout — counts became outputs, not inputs.
     function buildAgents(): HTMLElement {
-      agentsCaption = el('span', { class: 'wizard-sec-hint', text: agentsText() })
       meterFill = el('span', { class: 'wizard-meter-fill' })
       meterLabel = el('span', { class: 'wizard-fill-label' })
       const meter = el('span', { class: 'wizard-meter' }, [
         el('span', { class: 'wizard-meter-track' }, [meterFill]),
         meterLabel
       ])
-      paletteHost = el('div', { class: 'wizard-palette', role: 'toolbar', ariaLabel: 'Agent brushes' })
+      // ONE row for every agent (design pass 2, 2026-08-01): installed CLIs as brush
+      // chips, missing ones as grayed chips with an icon-only install in the same slot
+      // the ▾ menu occupies — same anatomy, different state, no separate card grid. The
+      // sub-hosts are display:contents so the row wraps as one flex line; Clear sits at
+      // the row's far end, spatially apart from the brushes it destroys.
+      paletteHost = el('div', { class: 'wizard-palette', role: 'toolbar', ariaLabel: 'Agents' })
+      brushesHost = el('span', { class: 'wizard-palette-group' })
+      missingHost = el('span', { class: 'wizard-palette-group' })
+      clearHost = el('span', { class: 'wizard-palette-clear' })
+      paletteHost.append(brushesHost, missingHost, clearHost)
       brushHint = el('p', { class: 'wizard-hint wizard-brush-hint' })
       profilesHost = el('div', { class: 'wizard-profiles' })
+      setupHost = el('div', { class: 'wizard-setup-host' })
       rosterHost = el('div', { class: 'wizard-agents' })
 
       // Custom command — any CLI, verbatim. Label only; never a stored credential. The
@@ -1075,7 +1126,8 @@ export const wizardFeature: UiFeature = {
         class: 'input input--mono wizard-custom-input',
         type: 'text',
         value: customCmd,
-        placeholder: 'Custom command — e.g. aider --model …',
+        placeholder: 'Custom command…',
+        title: 'Any CLI, verbatim — e.g. aider --model gpt-4o',
         ariaLabel: 'Custom command',
         onInput: (e) => {
           customCmd = (e.target as HTMLInputElement).value
@@ -1091,27 +1143,24 @@ export const wizardFeature: UiFeature = {
         el('span', { class: 'wizard-agent-tail' }, [customStepper.el])
       ])
 
-      const sec = section('Agents', '', el('span', { class: 'wizard-agents-tools' }, [meter]), [
+      return section('Agents', '', el('span', { class: 'wizard-agents-tools' }, [meter]), [
         paletteHost,
         brushHint,
         customRow,
         profilesHost,
+        setupHost,
         rosterHost
       ])
-      const head = sec.querySelector('.wizard-sec-head')
-      head?.insertBefore(agentsCaption, head.children[1] ?? null)
-      return sec
     }
 
-    function agentsText(): string {
-      return `Who runs in your ${paneCount} ${plural(paneCount)} — paint them on, or leave shells.`
-    }
-
+    /** Contextual, not standing (compact pass): silent at rest — the chips and the
+     *  canvas's own tooltips carry discovery — and ONE short line while a brush is
+     *  armed, because painting is the moment that needs narrating. */
     function brushHintText(): string {
-      if (!brush) return 'Pick an agent, then click or sweep across the layout to place it — or click any terminal to choose.'
-      if (brush === 'shell') return 'Painting plain shells — click or sweep across terminals to clear them back.'
+      if (!brush) return ''
+      if (brush === 'shell') return 'Sweep the grid to clear terminals back to shells.'
       const name = brush === 'custom' ? 'the custom command' : (roster.find((a) => a.id === brush)?.name ?? brush)
-      return `Painting ${name} — click or sweep across the layout. Double-click the chip to fill every terminal. Click the chip again to stop.`
+      return `Sweep the grid to place ${name} — double-click fills all.`
     }
 
     /** Grow or shrink `id`'s slot count to n: new ones take the first empty terminals,
@@ -1189,16 +1238,21 @@ export const wizardFeature: UiFeature = {
             renderAgentControls()
           }
         }))
+      // The custom entry EARNS its row by existing (review shot: a disabled "type one
+      // below first" line was noise in a four-item menu — type the command and the row
+      // appears). Plain shell sits behind a separator: it is the exit, not one more agent.
       const cmd = customCmd.trim()
-      entries.push({
-        label: 'Custom command',
-        hint: cmd ? (cmd.length > 24 ? cmd.slice(0, 23) + '…' : cmd) : 'type one below first',
-        disabled: !cmd,
-        onSelect: () => {
-          slots[slot] = 'custom'
-          renderAgentControls()
-        }
-      })
+      if (cmd) {
+        entries.push({
+          label: 'Custom command',
+          hint: cmd.length > 24 ? cmd.slice(0, 23) + '…' : cmd,
+          onSelect: () => {
+            slots[slot] = 'custom'
+            renderAgentControls()
+          }
+        })
+      }
+      entries.push({ separator: true })
       entries.push({
         label: 'Plain shell',
         hint: slots[slot] === null ? 'current' : undefined,
@@ -1270,14 +1324,15 @@ export const wizardFeature: UiFeature = {
     }
 
     function renderPalette(): void {
-      if (!paletteHost) return
+      if (!brushesHost) return
       // A rebuild must not eat the keyboard: whoever held focus gets it back by chip id.
       const focused = (document.activeElement as HTMLElement | null)?.dataset?.chip ?? null
-      clear(paletteHost)
-      for (const a of roster.filter((agent) => agent.installed)) paletteHost.append(paletteChip(a.id, a.name))
-      if (customCmd.trim() || countOf('custom') > 0) paletteHost.append(paletteChip('custom', 'Custom'))
-      paletteHost.append(paletteChip('shell', 'Shell'))
-      paletteHost.append(
+      clear(brushesHost)
+      for (const a of roster.filter((agent) => agent.installed)) brushesHost.append(paletteChip(a.id, a.name))
+      if (customCmd.trim() || countOf('custom') > 0) brushesHost.append(paletteChip('custom', 'Custom'))
+      brushesHost.append(paletteChip('shell', 'Shell'))
+      clear(clearHost)
+      clearHost.append(
         Button({
           label: 'Clear',
           size: 'sm',
@@ -1286,8 +1341,11 @@ export const wizardFeature: UiFeature = {
           onClick: clearAssignments
         })
       )
-      if (focused) paletteHost.querySelector<HTMLElement>(`[data-chip="${focused}"]`)?.focus()
-      if (brushHint) brushHint.textContent = brushHintText()
+      if (focused) brushesHost.querySelector<HTMLElement>(`[data-chip="${focused}"]`)?.focus()
+      if (brushHint) {
+        brushHint.textContent = brushHintText()
+        brushHint.hidden = !brushHint.textContent // silent at rest — no empty line holding space
+      }
     }
 
     function renderProfiles(): void {
@@ -1306,7 +1364,7 @@ export const wizardFeature: UiFeature = {
           el('label', { class: 'wizard-profile-row' }, [
             providerLogo(a.id, 13),
             el('span', { class: 'wizard-profile-name', text: `${a.name} profile` }),
-            sel
+            el('span', { class: 'wizard-select' }, [sel])
           ])
         )
       }
@@ -1321,78 +1379,52 @@ export const wizardFeature: UiFeature = {
       refreshAgents()
     }
 
-    /** The agents subtree: palette + profiles + the missing-CLI cards. Rebuilt when the
-     *  roster or the profiles list changes; pure placement moves take renderAgentControls. */
+    /** The agents subtree at roster cadence: the missing chips (+ their progress panels)
+     *  and the detection-pending note. Pure placement moves take renderAgentControls. */
     function renderRoster(): void {
       if (!rosterHost) return
       normalizeAssignmentsToCapacity()
       clear(rosterHost)
-      // Each rebuild throws the previous cards away; their setup panels hold a live IPC
+      clear(missingHost)
+      clear(setupHost)
+      // Each rebuild throws the previous chips away; their setup panels hold a live IPC
       // subscription apiece, so they must be released with the DOM that owned them.
       for (const panel of setupPanels.splice(0)) panel.dispose()
 
-      const noneInstalled = roster.length > 0 && roster.every((a) => !a.installed)
-      if (!roster.length || noneInstalled) {
-        const recheck = el('button', { class: 'wizard-recheck', type: 'button', text: 'Re-check PATH' })
-        recheck.onclick = (): void => {
-          const generation = openGeneration
-          recheck.textContent = 'Checking…'
-          recheck.disabled = true
-          void refreshAgentRegistry()
-            .then((agents) => {
-              if (currentOpen(generation)) applyRoster(agents)
-            })
-            .catch(() => undefined)
-            .finally(() => {
-              if (recheck.isConnected) {
-                recheck.disabled = false
-                recheck.textContent = 'Re-check PATH'
-              }
-            })
-        }
+      if (!roster.length) {
         rosterHost.append(
-          el('div', { class: 'wizard-agents-empty' }, [
-            el('span', {
-              class: 'wizard-hint',
-              text: roster.length
-                ? 'No agent CLIs installed yet — pick one below and hit Install. It handles the dependencies too.'
-                : 'Looking for agent CLIs (Claude Code, Codex, Gemini, Aider, OpenCode) on your PATH…'
-            }),
-            recheck
-          ])
+          el('span', { class: 'wizard-hint', text: 'Looking for agent CLIs (Claude Code, Codex, Gemini, Aider, OpenCode)…' })
         )
       }
 
-      // Installed agents live in the PALETTE now; only the missing ones still take a
-      // card — its whole job is the one-click Install (setup-panel.ts, no command shown;
-      // the transcript behind Details still records what ran). The moment one installs,
-      // the registry push re-renders and it graduates into a chip.
+      // A missing CLI is a CHIP like everyone else (design pass 2): grayed, with the
+      // download glyph in the slot where an installed chip keeps its ▾ — the gray and
+      // the glyph say "not installed" together, so no card, no pill, no label. Clicking
+      // anywhere on it installs; the step-by-step progress unfolds full-width below the
+      // row. The moment it installs, the registry push re-renders it as a brush.
       for (const a of roster) {
         if (a.installed || !a.installHint) continue
         const panel = createAgentSetupPanel({
           agentId: a.id,
           name: a.name,
           compact: true,
+          iconOnly: true,
           onInstalled: () => void refreshAgentRegistry()
         })
         setupPanels.push(panel)
-        // ONE row — logo, name, Install right-aligned (2026-08-01, height complaint).
-        // The old two-row anatomy (head row, controls row) existed so missing cards
-        // matched installed cards' stepper row; installed agents are palette chips now,
-        // so the second row held nothing but a floating button and doubled the card's
-        // height for no content. No "not installed" pill either (redundancy pass): the
-        // Install button and the grayscale mark already say it. The setup progress still
-        // unfolds full-width below while a run is live.
-        rosterHost.append(
-          el('div', { class: 'wizard-agent-card is-missing' }, [
-            el('span', { class: 'wizard-agent-head' }, [
-              providerLogo(a.id, 18),
-              el('span', { class: 'wizard-agent-name', text: a.name }),
-              el('span', { class: 'wizard-agent-action' }, [panel.action])
-            ]),
-            panel.el
-          ])
+        setupHost.append(panel.el)
+        const body = el(
+          'button',
+          {
+            class: 'wizard-chip is-missing',
+            type: 'button',
+            title: `${a.name} isn’t installed — one click sets it up, dependencies included`,
+            ariaLabel: `Install ${a.name}`,
+            onClick: () => panel.action.querySelector('button')?.click()
+          },
+          [providerLogo(a.id, 14), el('span', { class: 'wizard-chip-name', text: a.name })]
         )
+        missingHost.append(el('span', { class: 'wizard-chip-wrap is-missing' }, [body, panel.action]))
       }
 
       renderProfiles()
@@ -1405,12 +1437,10 @@ export const wizardFeature: UiFeature = {
     // hidden section made that discovery impossible.
     function buildTools(): HTMLElement {
       toolsHost = el('div', { class: 'wizard-tools' })
-      toolsSection = section(
-        'Agent tools',
-        'House server always on. Unpicked tools stay out of this workspace’s agents (edit later in Settings › Integrations › Workspace tools).',
-        null,
-        [toolsHost]
-      )
+      // One clause; the scoping rule and the later-edit path ride the section's tooltip.
+      toolsSection = section('Agent tools', 'House server always on.', null, [toolsHost])
+      const hint = toolsSection.querySelector<HTMLElement>('.wizard-sec-hint')
+      if (hint) hint.title = 'Unpicked tools stay out of this workspace’s agents — edit later in Settings › Integrations › Workspace tools.'
       return toolsSection
     }
 
@@ -1422,7 +1452,7 @@ export const wizardFeature: UiFeature = {
         // The Library reopens ON TOP of the wizard (it is an overlay, not a view
         // change), so the half-configured folder/layout/agents survive the trip.
         toolsHost.append(
-          el('div', { class: 'wizard-hint wizard-tools-empty', text: 'No tools connected yet — agents launch with the house server only.' }),
+          el('div', { class: 'wizard-hint wizard-tools-empty', text: 'None connected yet.' }),
           Button({
             label: 'Browse the Library',
             icon: 'plug',
@@ -1539,8 +1569,9 @@ export const wizardFeature: UiFeature = {
         el('div', { class: 'wizard-option-row' }, [isolateBox.el, isolateHint, isolateFix]),
         el('div', { class: 'wizard-option-row' }, [
           el('span', { class: 'wizard-option-label', text: 'Runs on' }),
-          remoteSelect,
-          el('span', { class: 'wizard-hint', text: 'This machine, or a saved SSH host.' })
+          // Wrapped for the house chevron — a native select keeps the OS arrow chrome
+          // no matter what the select itself is styled to (review crop, 2026-08-01).
+          el('span', { class: 'wizard-select' }, [remoteSelect])
         ])
       ])
     }
@@ -1562,9 +1593,7 @@ export const wizardFeature: UiFeature = {
         disabled: assignedTotal() === 0,
         onClick: savePreset
       })
-      return section('Presets', 'Save the current mix — it comes back as one click.', saveBtn, [
-        el('div', { class: 'wizard-presets-row' }, [presetsHost])
-      ])
+      return section('Presets', '', saveBtn, [el('div', { class: 'wizard-presets-row' }, [presetsHost])])
     }
 
     function savePreset(): void {
@@ -1590,12 +1619,7 @@ export const wizardFeature: UiFeature = {
       if (!presetsHost) return
       clear(presetsHost)
       if (!presets.length) {
-        presetsHost.append(
-          el('span', {
-            class: 'wizard-hint',
-            text: 'Nothing saved yet — set up a mix you like, then keep it here for next time.'
-          })
-        )
+        presetsHost.append(el('span', { class: 'wizard-hint', text: 'Nothing saved yet.' }))
         return
       }
       for (const p of presets) {
@@ -1695,25 +1719,27 @@ export const wizardFeature: UiFeature = {
 
     /** What each refusal MEANS, in the user's terms — and, where one exists, the button that
      *  fixes it. Every line here names the real obstacle rather than restating the feature. */
+    /** Short forms (compact pass): the happy path and the wait are near-silent; a refusal
+     *  still names its obstacle — that text is the actionable kind and stays. */
     function isolationHint(pf: WorktreePreflight | null): { text: string; fix?: 'path' } {
-      if (!cwd.trim()) return { text: 'Pick a git repository above to give each agent its own branch.' }
-      if (!pf) return { text: 'Checking whether this folder can be isolated…' }
+      if (!cwd.trim()) return { text: 'Needs a git repository.' }
+      if (!pf) return { text: 'Checking…' }
       switch (pf.reason) {
         case 'ok':
-          return { text: 'Each agent works on its own branch in its own folder — no trampling. Review & merge later.' }
+          return { text: 'Own branch and folder per agent.' }
         case 'no-git':
           // THE case this preflight was written for. Not "install git" — git is usually
           // already installed and simply arrived after this app started, so the honest fix
           // is one button, not a download.
-          return { text: 'This app can’t reach Git. If you installed it recently, it just needs picking up.', fix: 'path' }
+          return { text: 'Git is unreachable — if you installed it recently, it just needs picking up.', fix: 'path' }
         case 'no-commits':
-          return { text: 'This repository has no commits yet — make one first, then each agent can branch from it.' }
+          return { text: 'No commits yet — make one first.' }
         case 'not-writable':
-          return { text: 'This folder is read-only, so the isolated copies can’t be created here.' }
+          return { text: 'Folder is read-only.' }
         case 'unsupported':
-          return { text: pf.detail ? `Git refused: ${pf.detail}` : 'Git couldn’t prepare this repository for isolation.' }
+          return { text: pf.detail ? `Git refused: ${pf.detail}` : 'Git couldn’t prepare this repository.' }
         default:
-          return { text: 'This folder isn’t a git repository — run `git init` there (or pick a repo) to isolate agents.' }
+          return { text: 'Not a git repository — run `git init` to enable.' }
       }
     }
 
@@ -1754,7 +1780,6 @@ export const wizardFeature: UiFeature = {
       const total = assignedTotal()
       meterFill.style.width = `${paneCount ? Math.min(100, Math.round((total / paneCount) * 100)) : 0}%`
       meterLabel.textContent = `${total} / ${paneCount} · ${paneCount - total} empty`
-      agentsCaption.textContent = agentsText()
       layoutReadout.textContent = layoutReadoutText()
 
       customStepper?.setMax(countOf('custom') + (paneCount - total))
@@ -1823,14 +1848,13 @@ export const wizardFeature: UiFeature = {
         [icon('sparkles'), launchLabel]
       )
       skipBtn = Button({ label: 'Skip — no agents', variant: 'outline', onClick: () => void tryLaunch(true) })
-      footer.append(
-        launchAlert,
-        el('span', { class: 'wizard-byo' }, [
-          icon('check-circle', 12),
-          el('span', { text: 'Your own CLIs, your own login — this app never touches it.' })
-        ]),
-        el('div', { class: 'wizard-footer-actions' }, [skipBtn, launchBtn])
-      )
+      // The trust line, compressed; the full promise rides its tooltip (ADR 0002).
+      const byo = el('span', { class: 'wizard-byo' }, [
+        icon('check-circle', 12),
+        el('span', { text: 'Your CLIs, your login.' })
+      ])
+      byo.title = 'Agents run as your own CLIs under your own login — this app never touches or stores a credential.'
+      footer.append(launchAlert, byo, el('div', { class: 'wizard-footer-actions' }, [skipBtn, launchBtn]))
     }
 
     /** The validation that used to gate "Continue" now gates "Launch". */

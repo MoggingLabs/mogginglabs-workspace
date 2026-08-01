@@ -46,7 +46,15 @@ export function dismissSignInBanner(paneId: number): void {
  * which is just an error message with extra steps.
  */
 export function offerSignIn(paneId: number, target: AgentSignInTarget, agentRunning: boolean): void {
-  if (live.has(paneId)) return
+  // Pane ids are RECYCLED (a split takes the lowest free slot), and a banner whose pane
+  // died with its workspace leaves a DETACHED element in the registry — which would
+  // silently swallow the offer for the next, unrelated pane that inherits the id. A
+  // stale entry is vacated, never obeyed.
+  const existing = live.get(paneId)
+  if (existing) {
+    if (existing.isConnected) return
+    live.delete(paneId)
+  }
   const command = (agentRunning ? target.inSession : target.shell) ?? target.shell ?? target.inSession
   if (!command) return
   const slot = slotFor(paneId)
