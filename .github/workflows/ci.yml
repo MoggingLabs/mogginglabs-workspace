@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Full 206-gate sweeps are heavy (~4h each): nightly, staggered per OS, + on demand.
+  # Full 207-gate sweeps are heavy (~4h each): nightly, staggered per OS, + on demand.
   schedule:
     - cron: '30 3 * * *' # linux-sweep
     - cron: '30 4 * * *' # macos-sweep
@@ -146,7 +146,7 @@ jobs:
 
   # Phase-4/06: the third platform must BUILD AND BOOT — full native install, the
   # SMOKE gate headless under xvfb, then the AppImage + deb package. The full
-  # 206-gate sweep on Linux is a follow-up; this asserts build + boot.
+  # 207-gate sweep on Linux is a follow-up; this asserts build + boot.
   linux-boot:
     name: linux boot + package
     runs-on: ubuntu-latest
@@ -216,7 +216,14 @@ jobs:
       - name: Fuse wall gate
         run: MOGGING_FUSES_APP=dist/linux-unpacked node scripts/check-fuses.mjs
 
-  # Phase-6/02: the ENTIRE 206-gate sweep on Linux — same script, same gate list as
+      # Build debris does not ship (docs/research/2026-07-installer-ux-audit.md §8), read
+      # off the same tree. v0.16.0 carried 137MB / 916 files of link intermediates, debug
+      # symbols, compile inputs and foreign-arch prebuilds — and the NSIS section writes
+      # every file twice on the way in, so debris costs install time, not just download.
+      - name: Package weight gate
+        run: MOGGING_WEIGHT_APP=dist/linux-unpacked node scripts/check-package-weight.mjs
+
+  # Phase-6/02: the ENTIRE 207-gate sweep on Linux — same script, same gate list as
   # Windows. Nightly + manual (heavy); the fast boot gate above still runs per push.
   # MOGGING_CI_GPU=soft relaxes ONLY frame-gap budgets (software GL under xvfb) and
   # prints loudly in every affected smoke's log; all other claims are untouched.
@@ -394,7 +401,7 @@ jobs:
           if-no-files-found: warn
 
   # Phase-6/03: Windows regression coverage stops depending on the dev machine —
-  # the ENTIRE 206-gate sweep on windows-latest. Same script, same gate list:
+  # the ENTIRE 207-gate sweep on windows-latest. Same script, same gate list:
   # Git Bash drives qa-smokes.sh through its native MINGW branches (the local-dev
   # path). No GPU on the runner -> MOGGING_CI_GPU=soft, the same frame-timing-only
   # honesty as linux/macos. The @electron/rebuild spawn hang is confirmed on this
@@ -525,6 +532,14 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then APP=$(ls -d dist/mac* | head -1); else APP=dist/win-unpacked; fi
           MOGGING_FUSES_APP="$APP" node scripts/check-fuses.mjs
+
+      # Build debris does not ship (docs/research/2026-07-installer-ux-audit.md §8), on the
+      # signed-SHAPE artifact — the last stop before a release carries it to every user.
+      - name: Package weight gate
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then APP=$(ls -d dist/mac* | head -1); else APP=dist/win-unpacked; fi
+          MOGGING_WEIGHT_APP="$APP" node scripts/check-package-weight.mjs
 
   # Phase-6/02: install manifests must VALIDATE continuously where the tooling
   # exists, so submission day is a copy-paste PR. Dispatch + once nightly (tied

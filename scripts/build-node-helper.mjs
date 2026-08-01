@@ -43,6 +43,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSy
 import { delimiter, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { pruneHelperDeps } from './prune-helper-deps.mjs'
 
 export const HELPER_NODE_VERSION = '24.15.0'
 const NODE_DIST = `https://nodejs.org/dist/v${HELPER_NODE_VERSION}`
@@ -99,9 +100,7 @@ function overlayConpty(treeDir) {
   const src = join(ROOT, 'build', 'conpty', CONPTY_PIN, `win10-${ARCH}`)
   for (const f of ['conpty.dll', 'OpenConsole.exe']) {
     if (!existsSync(join(src, f))) {
-      console.error(`
-node-helper: vendored conpty ${CONPTY_PIN} is missing ${f} (${src})
-`)
+      console.error(`\nnode-helper: vendored conpty ${CONPTY_PIN} is missing ${f} (${src})\n`)
       process.exit(1)
     }
   }
@@ -124,12 +123,20 @@ if (!process.env.MOGGING_HELPER_FORCE) {
   try {
     const have = JSON.parse(readFileSync(STAMP, 'utf8'))
     if (JSON.stringify(have) === JSON.stringify(wanted) && existsSync(join(OUT, EXE)) && existsSync(join(OUT, HELPER_DEPS_DIR))) {
-      // The conpty pin overlays on the stamp-skip path too: the stamp records dep
-      // VERSIONS, not the pin, so a tree built before the pin (or before a pin bump)
-      // would otherwise sail through with the tarball's older pair.
+      // The prune (step 2b) runs on this path too. The stamp records the NODE VERSION and
+      // the DEP VERSIONS — it says nothing about the ship-list, so a tree built before a
+      // prune rule existed, or before one was tightened, would otherwise sail through here
+      // and get packaged with the debris still in it. That is a silent, machine-dependent
+      // failure: correct on CI's fresh checkout, wrong on every developer's box. The prune
+      // is idempotent and costs milliseconds, so the fix is simply to always run it.
+      const skipPruned = pruneHelperDeps(join(OUT, HELPER_DEPS_DIR), `${PLATFORM}-${ARCH}`)
+      // The conpty pin overlays on this path too — same reasoning as the prune: the
+      // stamp records dep VERSIONS, not the pin, so a tree built before the pin (or
+      // before a pin bump) would otherwise ship the tarball's older pair.
       overlayConpty(join(OUT, HELPER_DEPS_DIR))
       overlayConpty(join(ROOT, 'node_modules'))
-      console.log(`  node helper OK — v${HELPER_NODE_VERSION} ${PLATFORM}-${ARCH} already built (stamp matches)`)
+      const note = skipPruned.removed.length ? `, pruned ${skipPruned.removed.length} stale paths` : ''
+      console.log(`  node helper OK — v${HELPER_NODE_VERSION} ${PLATFORM}-${ARCH} already built (stamp matches${note})`)
       process.exit(0)
     }
   } catch {
@@ -279,6 +286,18 @@ if (PLATFORM !== 'win32') {
 // probe's real pty spawn runs against the pinned backend and a bad pair dies here.
 overlayConpty(depsDir)
 overlayConpty(join(ROOT, 'node_modules'))
+
+// ── 2b. Prune what npm left behind ────────────────────────────────────────────────────
+// npm leaves a DEVELOPMENT tree here and electron-builder ships it verbatim: v0.16.0 put
+// all 78MB / 696 files of it in front of every user, for ~5MB of files that actually run.
+// The rules, and the reasoning behind each one, live in scripts/prune-helper-deps.mjs.
+//
+// This runs BEFORE the probe below ON PURPOSE — the probe is what makes it safe rather than
+// merely plausible. It drives THIS helper binary through a real pty spawn and a real sqlite
+// round-trip against the pruned tree, so removing something load-bearing exits non-zero with
+// a stack: no stamp is written, no package can be built, nothing reaches a user.
+const pruned = pruneHelperDeps(depsDir, `${PLATFORM}-${ARCH}`)
+console.log(`  pruned ${pruned.removed.length} dead paths from ${HELPER_DEPS_DIR}/`)
 
 // ── 3. Prove it: the helper itself must load both addons and do real work ─────────────
 // A pty spawn (node-pty) and an insert/select round-trip (better-sqlite3), executed BY
