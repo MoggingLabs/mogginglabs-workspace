@@ -77,17 +77,22 @@ export function runPaneRestartSmoke(win: BrowserWindow): void {
       const paneWasLive = await until(`!!window.__mogging.agents.paneLive(${paneId})`, 60, 500)
       if (!paneWasLive) throw new Error('pane never came live — environment, not the seam')
       await ES(`(() => { window.__mogging.ptyWrites = []; return 1 })()`)
-      await ES(`(() => { ${pane(paneId)}.term.input('live-probe'); return 1 })()`)
+      // Guarded like the polls above, and for the same reason: `find()` returns undefined
+      // whenever the pane entry churns, and `.term` on undefined throws — which kills the
+      // WHOLE smoke with "Script failed to execute" and zero diagnostics. The polls were
+      // hardened for that once; these ACTION evals were left bare and still threw (macOS
+      // run 30715528028, ubuntu run 30720628264). `until` retries a transient absence.
+      await until(`(() => { const p = ${pane(paneId)}; if (!p) return false; p.term.input('live-probe'); return true })()`)
       const spySawLive = await until(
         `window.__mogging.ptyWrites.some(w => w.id === ${paneId} && String(w.data).includes('live-probe'))`,
         20, 250
       )
       // Clear the typed probe so it never executes; the shell just sees an empty line.
-      await ES(`(() => { ${pane(paneId)}.term.input('\\u0003'); return 1 })()`)
+      await until(`(() => { const p = ${pane(paneId)}; if (!p) return false; p.term.input('\\u0003'); return true })()`)
 
       // ── death: real PTY exit; the epitaph must NAME the code, the banner must offer
       //    Restart, and the pane must hold the dead fact itself ────────────────────────
-      await ES(`(() => { ${pane(paneId)}.write('exit\\r'); return 1 })()`)
+      await until(`(() => { const p = ${pane(paneId)}; if (!p) return false; p.write('exit\\r'); return true })()`)
       const exitCodeShown = await until(
         `(() => { const p = ${pane(paneId)}; return !!p && /\\[process exited \\(code \\d+\\)\\]/.test(${joined(paneId)}) })()`
       )
@@ -109,15 +114,20 @@ export function runPaneRestartSmoke(win: BrowserWindow): void {
       const fillPainted = await until(`${joined(paneId)}.includes('fill-120-end')`, 20, 250)
 
       // ── gate: a keystroke into the dead pane must never reach the wire ─────────────
-      await ES(`(() => { window.__mogging.ptyWrites = []; ${pane(paneId)}.term.input('ghost\\r'); return 1 })()`)
+      await until(
+        `(() => { const p = ${pane(paneId)}; if (!p) return false; window.__mogging.ptyWrites = []; p.term.input('ghost\\r'); return true })()`
+      )
       await sleep(700)
       const deadInputGated =
         (await ES<number>(`window.__mogging.ptyWrites.filter(w => w.id === ${paneId}).length`)) === 0
 
       // ── restart: the banner's button respawns the same id in place ─────────────────
-      await ES(
-        `(() => { document.querySelector('.layout-slot[data-pane-id="${paneId}"] .pane-dead-restart').click(); return 1 })()`
+      // The banner paints asynchronously after the exit lands: querySelector(...).click()
+      // on a not-yet-rendered button throws and takes the whole smoke with it.
+      const restartClicked = await until(
+        `(() => { const b = document.querySelector('.layout-slot[data-pane-id="${paneId}"] .pane-dead-restart'); if (!b) return false; b.click(); return true })()`
       )
+      if (!restartClicked) throw new Error('restart button never rendered on the dead pane')
       const aliveAgain = await until(`(() => { const p = ${pane(paneId)}; return !!p && !p.dead() })()`)
       const bannerGone = await until(
         `!document.querySelector('.layout-slot[data-pane-id="${paneId}"] .pane-dead-banner')`
@@ -126,7 +136,11 @@ export function runPaneRestartSmoke(win: BrowserWindow): void {
       // shell, which echoes the marker back. Retries, not one shot: the fresh PTY boots.
       let respawnedShell = false
       for (let i = 0; i < 6 && !respawnedShell; i++) {
-        await ES(`(() => { ${pane(paneId)}.term.input('echo resurrect-${paneId}\\r'); return 1 })()`)
+        await until(
+          `(() => { const p = ${pane(paneId)}; if (!p) return false; p.term.input('echo resurrect-${paneId}\\r'); return true })()`,
+          8,
+          250
+        )
         respawnedShell = await until(
           `(() => { const t = ${joined(paneId)}; ` +
           `return t.split('resurrect-${paneId}').length > 2 })()`, // typed once + echoed back ≥ once
