@@ -30,12 +30,15 @@ export const HELPER_RUNTIME_DEPS = ['node-pty', 'better-sqlite3', 'bindings', 'f
 // `!**/*.map` covers `files:`, but this directory ships through `extraResources`, which that
 // negation never sees; v0.16.0 shipped 18 .js.map files here, half of them for test files.
 // Kept deliberately in step with the extension set electron-builder.yml applies to the
-// Electron-ABI copies, so the two trees do not drift apart.
-const DEAD_EXT = /\.(pdb|iobj|ipdb|ilk|exp|lib|map|vcxproj|filters|recipe|sln|gyp|gypi)$/i
+// Electron-ABI copies, so the two trees do not drift apart. `mk` is the POSIX half of the
+// same rule: node-gyp on linux/mac generates `*.target.mk` / `*.Makefile` stubs the way
+// MSBuild leaves .vcxproj on Windows — build recipes, loaded by nothing at runtime.
+const DEAD_EXT = /\.(pdb|iobj|ipdb|ilk|exp|lib|map|vcxproj|filters|recipe|sln|gyp|gypi|mk|Makefile)$/i
 
 // Package metadata and CI config that npm ships and nothing reads. LICENSE files STAY —
-// they are a redistribution obligation, not clutter.
-const DEAD_NAME = new Set(['.npmignore', '.travis.yml', '.editorconfig', '.eslintrc', 'History.md', 'README.md', 'CHANGELOG.md', '.gitattributes'])
+// they are a redistribution obligation, not clutter. `Makefile` (bare) is gyp's POSIX
+// entry recipe — the runtime loads build/Release/*.node, never the recipe that made it.
+const DEAD_NAME = new Set(['.npmignore', '.travis.yml', '.editorconfig', '.eslintrc', 'History.md', 'README.md', 'CHANGELOG.md', '.gitattributes', 'Makefile'])
 
 /**
  * Strip a built helper deps dir down to what actually runs. Idempotent: a second pass over
@@ -83,6 +86,10 @@ export function pruneHelperDeps(depsDir, hostTriple) {
     ['node-pty', 'deps'],
     ['node-pty', 'src'],
     ['node-pty', 'scripts'],
+    // gyp's generated per-dependency makefile dir (linux/mac source builds only — the
+    // 2026-08-01 linux WEIGHT red: four *.target.mk/*.Makefile stubs shipped). Absent on
+    // Windows, where node-pty loads from prebuilds/ and gyp never runs.
+    ['node-pty', 'node-addon-api'],
     ['better-sqlite3', 'deps'],
     ['better-sqlite3', 'src']
   ]) {
