@@ -379,28 +379,45 @@ export function runRemoteSmoke(win: BrowserWindow): void {
       const gitObservedCwd = '/srv/git-selected-worktree'
       const gitFrame = `\x1b]633;P;MoggingGitCwdRaw=${gitObservedCwd}\x1b\\`
       const staleFrame = '\x1b]633;P;MoggingProcessCwdRaw=4343;/srv/stale-background\x1b\\'
-      /** Type one node command and wait until it PROVABLY ran (its sentinel reached the
-       *  pane); `evented` additionally waits for the event it was meant to produce. */
-      const ctxStep = async (label: string, source: string, evented = false, tries = 120): Promise<boolean> => {
+      /**
+       * Type one node command and wait until it PROVABLY ran (its sentinel reached the
+       * pane); `evented` additionally waits for the event it was meant to produce — step
+       * A's frame is what latches remoteCwdLive, and the daemon arms the next window on
+       * the NEXT submitted line, so typing B before that latch leaves B's frame unarmed
+       * and silently refused.
+       *
+       * RETYPED while the sentinel is absent, because the pane's input channel is shared
+       * with the TERMINAL'S OWN RESPONSES: a queued Device Attributes reply (ESC[?1;2c)
+       * was delivered into stdin ahead of our text and cmd ran the corrupted line ("is
+       * not recognized…") — measured on this box, and the whole reason step A kept
+       * timing out on windows runners. A retype on a clean prompt is idempotent: the
+       * frames repeat, and identical cwds dedup.
+       */
+      const ctxStep = async (
+        label: string,
+        source: string,
+        opts: { evented?: boolean; retry?: boolean; tries?: number } = {}
+      ): Promise<boolean> => {
+        const { evented = false, retry = true, tries = 120 } = opts
         const src = `${source};process.stdout.write(${JSON.stringify(label + '\n')})`
-        await ES(
-          `window.bridge.send('terminal:write', { id: ${base + 2}, data: ${JSON.stringify(nodeEvalCommand(src) + '\r')} })`
-        )
+        const type = (): Promise<unknown> =>
+          ES(
+            `window.bridge.send('terminal:write', { id: ${base + 2}, data: ${JSON.stringify(nodeEvalCommand(src) + '\r')} })`
+          )
+        await type()
         for (let i = 0; i < tries; i++) {
-          const done = (await bufferText(base + 2)).includes(label)
-          if (done && !evented) return true
-          // Step A's frame is what latches remoteCwdLive, and the daemon arms the next
-          // window on the NEXT submitted line — so typing B before that latch leaves B's
-          // frame unarmed and silently refused (the windows red). Wait for the EVENT.
-          if (done && (await ES<boolean>('window.__remoteContextEvents.length > 0'))) return true
           await sleep(500)
+          const done = (await bufferText(base + 2)).includes(label)
+          if (done && (!evented || (await ES<boolean>('window.__remoteContextEvents.length > 0')))) return true
+          if (retry && !done && i % 4 === 3) await type()
         }
         return false
       }
       const w = (frame: string): string => `process.stdout.write(${JSON.stringify(frame)})`
       // A: the shell cwd — latches remoteCwdLive. 60s: the first cold node.exe on a
       // windows runner is the slowest single step in this gate.
-      const ctxShellSeen = await ctxStep('CTXA_DONE', w(initialPrompt), true)
+      const ctxShellSeen = await ctxStep('CTXA_DONE', w(initialPrompt), { evented: true })
+      const ctxBufA = (await bufferText(base + 2)).replace(/\n+/g, '\n').slice(-700)
       // B / C: each opens its own window by being typed; its frame lands inside it.
       const ctxOpaqueSeen = await ctxStep('CTXB_DONE', w(opaqueFrame))
       const ctxGitSeen = await ctxStep('CTXC_DONE', w(gitFrame))
@@ -411,7 +428,14 @@ export function runRemoteSmoke(win: BrowserWindow): void {
         `setTimeout(()=>{${w(staleFrame)}},200)`,
         'setTimeout(()=>{},400)'
       ].join(';')
-      const ctxStaleRan = await ctxStep('CTXD_DONE', staleSource)
+      // Typed EXACTLY ONCE — a retype after this one already ran would open a fresh
+      // window and its delayed frame would be legitimately accepted, inverting the very
+      // assertion below. A bare CR first clears any pending terminal-response garbage off
+      // the input line, and costs nothing: acceptCommandStart early-returns while the
+      // `detected` latch from step C's accepted frame is still set.
+      await ES(`window.bridge.send('terminal:write', { id: ${base + 2}, data: '\\r' })`)
+      await sleep(700)
+      const ctxStaleRan = await ctxStep('CTXD_DONE', staleSource, { retry: false })
       await sleep(800) // the rejected frame's own settle beat, then read
       const remoteContextEvents = await ES<Array<{ cwd: string; source: string; locality: string }>>(
         'window.__remoteContextEvents'
@@ -753,6 +777,7 @@ export function runRemoteSmoke(win: BrowserWindow): void {
         ctxOpaqueSeen,
         ctxGitSeen,
         ctxStaleRan,
+        ctxBufA,
         remoteContextEvents,
         argvOk,
         readinessGateOk,
