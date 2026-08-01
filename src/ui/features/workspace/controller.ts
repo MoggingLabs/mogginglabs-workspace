@@ -494,7 +494,12 @@ export class WorkspaceController {
     if (!meta.remotes?.some((r) => r)) return
     meta.remotes.forEach((remote, i) => {
       if (remote) {
-        setPaneRemote(paneIdForSlot(meta, i + 1) as PaneId, { ...remote, cwd: meta.paneCwds?.[i] ?? undefined })
+        // paneCwds first (the legacy persisted/fixture shape), then THE REMOTE ENTRY'S OWN
+        // cwd — the wizard's contract ("the remote path's cwd rides on the REMOTE entry,
+        // never in paneCwds"). Clobbering it with undefined sent every wizard-created
+        // remote pane's ssh bootstrap to $HOME while launchLineup cd'd the agent command
+        // correctly — two halves of one pane disagreeing about its working directory.
+        setPaneRemote(paneIdForSlot(meta, i + 1) as PaneId, { ...remote, cwd: meta.paneCwds?.[i] ?? remote.cwd })
       }
     })
   }

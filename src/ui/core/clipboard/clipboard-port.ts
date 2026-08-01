@@ -1,12 +1,10 @@
 import {
   ClipboardChannels,
-  quotePathsForShell,
   type ClipboardEntry,
   type ClipboardEnv,
   type ClipboardHistoryEvent,
   type ClipboardSource,
-  type RichClipboard,
-  type ShellFlavor
+  type RichClipboard
 } from '@contracts'
 import { getBridge } from '../ipc/bridge'
 
@@ -111,16 +109,8 @@ export async function clipboardEnv(): Promise<ClipboardEnv> {
   return envCache
 }
 
-/** Quote dropped paths for the pane's shell. Async only because the flavor is fetched
- *  once; every call after the first resolves on the microtask queue. */
-export async function quoteDroppedPaths(paths: readonly string[]): Promise<string> {
-  const { flavor } = await clipboardEnv()
-  return quotePathsForShell(paths, flavor)
-}
-
-export function quoteWithFlavor(paths: readonly string[], flavor: ShellFlavor): string {
-  return quotePathsForShell(paths, flavor)
-}
+// (The old quoteDroppedPaths/quoteWithFlavor helpers moved into the shared insert plan —
+// core/terminal/pane-insert.ts — the ONE place the remote/local quoting split now lives.)
 
 // ── Reads and writes ───────────────────────────────────────────────────────────
 

@@ -2,7 +2,6 @@ import {
   EXPLORER_DRAG_TYPE,
   EXPLORER_MIN_WIDTH,
   quotePathForShell,
-  relativeToDir,
   type ExplorerEntry,
   type ExplorerResult,
   type GitFileState,
@@ -37,6 +36,7 @@ async function copyPath(path: string): Promise<void> {
 }
 import { getPaneRemote } from '../../core/layout/pane-meta'
 import { typeIntoPane } from '../../core/terminal/pane-input-port'
+import { planPaneInsert, REMOTE_INSERT_TOAST } from '../../core/terminal/pane-insert'
 import { gitCheckIgnore, gitFilesUnwatch, gitFilesWatch, onGitFiles } from './git.client'
 import { explorerOpen, explorerReveal, setActionRoot } from './explorer.client'
 import { getWorkspaces, onWorkspacesChange, type WorkspaceInfo } from '../../core/workspace/workspace-info-port'
@@ -493,26 +493,34 @@ export const explorerFeature: UiFeature = {
     }
 
     /**
-     * The text SEND-TO-PANE types. RELATIVE to the focused pane's own cwd when the file
-     * sits under it (that is what a person types), ABSOLUTE otherwise — a relative path
-     * that escapes the cwd would be a lie. Legitimate here and ONLY here: send-to-pane's
-     * target IS the focused pane. A drag must never use this — its target is whichever
-     * pane receives the drop, and pane-drop.ts computes the insert there (the recut).
-     * Quoted per-OS by the shared quoter, which also strips control characters: a
+     * The text SEND-TO-PANE types, decided by the SHARED plan (core/terminal/pane-insert):
+     * remoteness first — a focused ssh pane always gets the ABSOLUTE local path, POSIX-
+     * quoted, because its cwd lives in another namespace and a string that merely prefixes
+     * a local path must never fabricate a relative one. Local panes keep the old rule:
+     * RELATIVE under the pane's own cwd (what a person types), absolute otherwise.
+     * Legitimate here and ONLY here: send-to-pane's target IS the focused pane. A drag
+     * must never use this — its target is whichever pane receives the drop, and
+     * pane-drop.ts runs the same plan there. The quoter strips control characters: a
      * filename cannot smuggle a newline, and therefore cannot press Enter.
      */
     function insertTextFor(entry: ExplorerEntry): string {
       const focused = getFocusedPane()
-      const raw = (focused?.cwd && relativeToDir(entry.path, focused.cwd)) || entry.path
-      // A REMOTE pane's shell lives on the ssh host: quote POSIX (the terminal's own rule).
-      const f = focused && getPaneRemote(focused.paneId) ? 'posix' : flavor
-      return quotePathForShell(raw, f as ShellFlavor)
+      return planPaneInsert({
+        paths: [entry.path],
+        remote: !!(focused && getPaneRemote(focused.paneId)),
+        paneCwd: focused?.cwd || undefined,
+        localFlavor: flavor
+      }).text
     }
 
     function sendToPane(entry: ExplorerEntry): void {
       const focused = getFocusedPane()
       if (!focused) return
       actions.push({ verb: 'send', path: entry.path })
+      // The same honesty the drop path shows: the file lives on THIS machine, and the
+      // pane's shell does not. (The toast lives here, not in insertTextFor — that one is
+      // also the side-effect-free dev hook.)
+      if (getPaneRemote(focused.paneId)) showToast(REMOTE_INSERT_TOAST)
       // Padded on BOTH sides, the dropped-file precedent: the leading space detaches it from
       // whatever is at the cursor, the trailing one starts the next argument. NO carriage
       // return — not here, not ever. We type; the user executes.
