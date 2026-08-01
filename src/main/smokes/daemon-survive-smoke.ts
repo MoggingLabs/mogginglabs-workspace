@@ -23,7 +23,8 @@ const OUT_RESULT = path.join(app.getAppPath(), 'out', 'survive-result.json')
 const COUNTER =
   'node -e "let i=0;setInterval(function(){process.stdout.write(\'MARK_\'+(i++)+String.fromCharCode(10))},300)"'
 
-const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+// (No `delay` helper any more: both phases poll for their signal via kit's waitUntil —
+// a fixed sleep here was the windows-runner red this smoke spent a night on.)
 const marks = (s: string): number[] => (s.match(/MARK_(\d+)/g) || []).map((x) => Number(x.slice(5)))
 function writeResult(o: unknown): void {
   try {
