@@ -24,21 +24,30 @@ import { app, type BrowserWindow } from 'electron'
 // support floor pty-host enforces, NOT xterm's 21376 reflow threshold (CI's windows-latest is
 // Server 2022 / build 20348, where reflow-off is xterm's correct conservative path).
 //
-// THE WIDTH PHASE (2026-08-01). The OS's ConPTY v1 ERASES up to a viewport of output on a
-// width shrink that re-wraps long lines: its buffer is VIEWPORT-SIZED (scrollback exists
+// THE REFLOW PHASES (2026-08-01). The OS's ConPTY v1 ERASES up to a viewport of output on
+// a width shrink that re-wraps long lines: its buffer is VIEWPORT-SIZED (scrollback exists
 // only in xterm), conhost discards its re-wrap overflow, and its repaint erases those rows
 // in xterm too — measured here as a contiguous band of 18-27 lost markers of 120, identical
 // with xterm reflow on and off ("blank space in the middle of the pane" as reported). The
 // FIX is pty-host.ts's useConptyDll: node-pty's bundled ConPTY v2 (Windows Terminal 1.22's
-// backend) removed that machinery, and this phase measured lost: 0 under it. The assertion
-// is deliberately the BOUNDED-BAND contract rather than lost===0, because the v1 fallback
-// (MOGGING_CONPTY_V1=1, the kill switch) must stay sweepable: survivors ONCE and IN ORDER
-// (a splice or duplication is OUR bug at any conpty version), at most ONE contiguous lost
-// band under ~two narrow viewports, and zero blank rows between surviving lines. `lost` is
-// reported in the verdict, so a v2 regression back to nonzero loss is visible at a glance.
+// backend) removed that machinery, and these phases measured lost: 0 under it. Three
+// dances, each census'd on its own marker family:
+//   WIDTH    wide -> narrow (long lines wrap) -> wide — the original report;
+//   EXTREME  tiny in BOTH dimensions, TWICE, back to large — the compounding crossing;
+//   STREAM   two crossings WHILE output is flowing — the invariant every other gate
+//            misses (their dances resize a QUIET pty).
+// THE BAR IS BACKEND-AWARE: on the default (v2) every phase demands lost === 0 — zero
+// data loss is the shipped contract, and this gate is what keeps it true. Under the v1
+// kill switch (MOGGING_CONPTY_V1=1) the bar is the bounded-band contract — survivors
+// ONCE and IN ORDER (a splice or duplication is OUR bug at any conpty version), losses
+// in contiguous band(s) under the ceiling, zero blank rows between surviving lines — so
+// the fallback stays sweepable. `lost` rides the verdict either way.
 const MARKS = 120
 const WIDTH_MARKS = 120
-/** Loss ceiling for the width crossing: ~2 narrow viewports of wrapped long lines. */
+const EXTREME_MARKS = 80
+const STREAM_MARKS = 50
+/** v1-fallback loss ceiling per narrow crossing: ~2 narrow viewports of wrapped lines.
+ *  The DEFAULT (bundled ConPTY v2) ceiling is ZERO — see the width phase. */
 const WIDTH_LOSS_MAX = 60
 
 export function runConptySmoke(win: BrowserWindow): void {
@@ -141,70 +150,137 @@ export function runConptySmoke(win: BrowserWindow): void {
 
     const marksOnce = missing.length === 0 && dupes.length === 0
 
-    // ── WIDTH PHASE (see the header) ─────────────────────────────────────────────
-    // Long markers that WRAP at narrow width; then wide -> narrow -> wide. The census
-    // asserts the bounded-band contract, not marks-once — ConPTY erases a viewport's
-    // worth at the crossing by design (its buffer IS the viewport).
+    // ── SHARED CENSUS for the reflow phases below ────────────────────────────────
+    // Verdict per marker family: every surviving marker ONCE and IN ORDER (a splice or
+    // duplication is OUR bug at any conpty version), lost markers form AT MOST ONE
+    // contiguous band under `lossMax`, and zero blank-row runs are left between
+    // surviving lines (the reported "blank band mid-pane" shape). On the DEFAULT
+    // backend (bundled ConPTY v2) `lossMax` is ZERO — v2 removed the destructive
+    // reflow machinery, and this gate is what keeps that true. The v1 kill switch
+    // (MOGGING_CONPTY_V1=1) keeps the bounded-band bar so the fallback stays green.
+    const grab = (): Promise<string> =>
+      ES(
+        '(function(){var p=window.__mogging&&window.__mogging.panes&&window.__mogging.panes[0];' +
+          'if(!p)return "";p.term.selectAll();var s=p.term.getSelection();p.term.clearSelection();return s;})()'
+      ).then(String)
+    interface Census {
+      ok: boolean
+      found: number
+      lost: number
+      contiguous: boolean
+      ordered: boolean
+      dupes: number[]
+      maxBlankRun: number
+    }
+    const census = (buf: string, prefix: string, count: number, lossMax: number): Census => {
+      const re = new RegExp(prefix + '_(\\d+)_', 'g')
+      const cSeen = new Map<number, number>()
+      const cOrder: number[] = []
+      for (const m of buf.matchAll(re)) {
+        const n = Number(m[1])
+        cSeen.set(n, (cSeen.get(n) ?? 0) + 1)
+        cOrder.push(n)
+      }
+      const cMissing: number[] = []
+      const cDupes: number[] = []
+      for (let i = 1; i <= count; i++) {
+        const c = cSeen.get(i) ?? 0
+        if (c === 0) cMissing.push(i)
+        if (c > 1) cDupes.push(i)
+      }
+      let cOrdered = true
+      for (let i = 1; i < cOrder.length; i++) if (cOrder[i] <= cOrder[i - 1]) cOrdered = false
+      let cContig = true
+      for (let i = 1; i < cMissing.length; i++) if (cMissing[i] !== cMissing[i - 1] + 1) cContig = false
+      const lineRe = new RegExp(prefix + '_\\d+_')
+      const cLines = buf.split('\n')
+      const idx: number[] = []
+      for (let i = 0; i < cLines.length; i++) if (lineRe.test(cLines[i])) idx.push(i)
+      let blank = 0
+      if (idx.length > 1) {
+        let run = 0
+        for (let i = idx[0]; i <= idx[idx.length - 1]; i++) {
+          if (cLines[i].trim() === '') run++
+          else {
+            if (run > blank) blank = run
+            run = 0
+          }
+        }
+      }
+      return {
+        ok:
+          cDupes.length === 0 && cOrdered && cContig && cMissing.length <= lossMax && blank <= 2,
+        found: cOrder.length,
+        lost: cMissing.length,
+        contiguous: cContig,
+        ordered: cOrdered,
+        dupes: cDupes.slice(0, 10),
+        maxBlankRun: blank
+      }
+    }
+    // ConPTY v1 (the kill switch) erases a viewport band at each narrow crossing by
+    // construction; the DEFAULT (bundled v2) must lose NOTHING.
+    const onV1 = process.platform === 'win32' && process.env.MOGGING_CONPTY_V1 === '1'
+    const lossMax = onV1 ? WIDTH_LOSS_MAX : 0
     const PAD = '-'.repeat(70)
-    await send(
-      isWin
-        ? `for /L %i in (1,1,${WIDTH_MARKS}) do @echo WMARK_%i_${PAD}END\r`
-        : `for i in $(seq 1 ${WIDTH_MARKS}); do echo WMARK_\${i}_${PAD}END; done\r`
-    )
-    await delay(2500)
+    const typeMarks = async (prefix: string, count: number): Promise<void> => {
+      await send(
+        isWin
+          ? `for /L %i in (1,1,${count}) do @echo ${prefix}_%i_${PAD}END\r`
+          : `for i in $(seq 1 ${count}); do echo ${prefix}_\${i}_${PAD}END; done\r`
+      )
+      await delay(2500)
+    }
+
+    // ── WIDTH PHASE: wide -> narrow (long lines wrap) -> wide (see the header) ───
+    await typeMarks('WMARK', WIDTH_MARKS)
     win.setSize(460, 780)
     await delay(1200)
     win.setSize(1000, 780)
     await delay(1500)
-    const wtext = String(
-      await ES(
-        '(function(){var p=window.__mogging&&window.__mogging.panes&&window.__mogging.panes[0];' +
-          'if(!p)return "";p.term.selectAll();var s=p.term.getSelection();p.term.clearSelection();return s;})()'
-      )
-    )
-    const wseen = new Map<number, number>()
-    const worder: number[] = []
-    for (const m of wtext.matchAll(/WMARK_(\d+)_/g)) {
-      const n = Number(m[1])
-      wseen.set(n, (wseen.get(n) ?? 0) + 1)
-      worder.push(n)
-    }
-    const wmissing: number[] = []
-    const wdupes: number[] = []
-    for (let i = 1; i <= WIDTH_MARKS; i++) {
-      const c = wseen.get(i) ?? 0
-      if (c === 0) wmissing.push(i)
-      if (c > 1) wdupes.push(i)
-    }
-    let wordered = true
-    for (let i = 1; i < worder.length; i++) if (worder[i] <= worder[i - 1]) wordered = false
-    // One contiguous band at most: erased content is a single viewport region, never
-    // interleaved holes (holes = a splice, which IS our bug to catch).
-    let contiguous = true
-    for (let i = 1; i < wmissing.length; i++) if (wmissing[i] !== wmissing[i - 1] + 1) contiguous = false
-    // No blank rows left BETWEEN surviving lines — the reported artifact shape.
-    const wlines = wtext.split('\n')
-    const wmarkIdx: number[] = []
-    for (let i = 0; i < wlines.length; i++) if (/WMARK_\d+_/.test(wlines[i])) wmarkIdx.push(i)
-    let maxBlankRun = 0
-    if (wmarkIdx.length > 1) {
-      let run = 0
-      for (let i = wmarkIdx[0]; i <= wmarkIdx[wmarkIdx.length - 1]; i++) {
-        if (wlines[i].trim() === '') run++
-        else {
-          if (run > maxBlankRun) maxBlankRun = run
-          run = 0
-        }
-      }
-    }
-    const widthOk =
-      wdupes.length === 0 && wordered && contiguous && wmissing.length <= WIDTH_LOSS_MAX && maxBlankRun <= 2
+    const width = census(await grab(), 'WMARK', WIDTH_MARKS, lossMax)
 
-    const pass = wpOk && rowsChanged && marksOnce && ordered && widthOk && errors.length === 0
+    // ── EXTREME PHASE: tiny in BOTH dimensions, twice, back to large. The user-
+    // reported shape ("incredibly small width pulled to full") plus the repeat
+    // crossing that compounds any leak. Electron clamps to the window's minimum,
+    // which is exactly the point — as small as this app can go.
+    await typeMarks('XMARK', EXTREME_MARKS)
+    win.setSize(380, 300)
+    await delay(1200)
+    win.setSize(1240, 900)
+    await delay(1200)
+    win.setSize(380, 300)
+    await delay(1200)
+    win.setSize(1240, 900)
+    await delay(1500)
+    // TWO crossings may erase TWO bands on v1 — census contiguity is per-band, so
+    // the fallback bar doubles the allowance and tolerates two bands by checking
+    // only dupes/order/blanks plus total loss. The DEFAULT bar stays zero.
+    const xRaw = census(await grab(), 'XMARK', EXTREME_MARKS, onV1 ? EXTREME_MARKS : 0)
+    const extreme = onV1 ? { ...xRaw, ok: xRaw.dupes.length === 0 && xRaw.ordered && xRaw.maxBlankRun <= 2 } : xRaw
+
+    // ── STREAMING PHASE: resize WHILE output is flowing — the pipeline invariant no
+    // other gate exercises (every prior dance resized a QUIET pty). A slow marker
+    // stream rides two live crossings; when it ends, the census must hold the same
+    // bar. `node` is on PATH in the dev harness on every platform.
+    await send(
+      'node -e "var i=0;var t=setInterval(function(){console.log(\'SMARK_\'+(++i)+\'_\'+Array(50).join(\'-\')+\'END\');if(i>=' +
+        `${STREAM_MARKS})clearInterval(t)},40)"\r`
+    )
+    await delay(600) // stream is flowing
+    win.setSize(460, 780)
+    await delay(700) // ~17 markers land at the narrow width
+    win.setSize(1240, 900)
+    await delay(2500) // stream finishes wide; settle
+    const stream = census(await grab(), 'SMARK', STREAM_MARKS, onV1 ? WIDTH_LOSS_MAX : 0)
+
+    const pass =
+      wpOk && rowsChanged && marksOnce && ordered && width.ok && extreme.ok && stream.ok && errors.length === 0
     return {
       pass,
       wpOk,
       wp,
+      conptyV1Fallback: onV1,
       rowsChanged,
       rows: { before: r0, shrunk: r1, grown: r2 },
       marksOnce,
@@ -212,15 +288,9 @@ export function runConptySmoke(win: BrowserWindow): void {
       found: order.length,
       missing: missing.slice(0, 10),
       dupes: dupes.slice(0, 10),
-      width: {
-        ok: widthOk,
-        found: worder.length,
-        lost: wmissing.length,
-        contiguous,
-        ordered: wordered,
-        dupes: wdupes.slice(0, 10),
-        maxBlankRun
-      },
+      width,
+      extreme,
+      stream,
       errors
     }
   }
