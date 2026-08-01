@@ -123,6 +123,10 @@ export class TerminalPane {
    *  spawn reply lands, the two moments a scrollback replay (with every OSC 52 the agent
    *  ever emitted) can reach the parser. See the handler registration. */
   private replayCopyGraceUntil = Date.now() + 1500
+  /** The session generation this pane's spawn bound to (SpawnResult.gen — daemon path
+   *  only). Stamped on this pane's input/resize so the daemon can REFUSE a stale
+   *  sender after the id is reused; undefined (pre-reply, in-proc) sends ungated. */
+  private sessionGen?: number
   private stateDot?: HTMLSpanElement
   /** The pane's process is gone (exit or failed spawn — the markDead paths). The state
    *  dot only records this when it is VISIBLE, so untracked plain panes need this flag:
@@ -365,7 +369,7 @@ export class TerminalPane {
     // id, so the bytes would vanish with zero feedback — the exact "frozen" feel of the
     // dead-pane incident. The banner (markDead) is the affordance that explains why.
     this.term.onData((data) => {
-      if (!this.dead) terminalClient.write({ id: this.id, data })
+      if (!this.dead) terminalClient.write({ id: this.id, data, gen: this.sessionGen })
     })
 
     // ResizeObserver is the one true fit driver: it fires for real resizes AND for
@@ -520,6 +524,9 @@ export class TerminalPane {
         // The delivery report the agents feature settles on: TRUE only when a FRESH
         // session actually received the run line (a reattached session ignored it).
         reportSpawnRunOutcome(this.id, !!run && !res.existing)
+        // The generation this spawn BOUND to — from here on this pane's input/resize
+        // carry it, and the daemon refuses them once the id belongs to a successor.
+        if (!this.disposed) this.sessionGen = res.gen
         // The spawn reply's own emulation report — the authoritative confirmation of the
         // pre-spawn value applied in the constructor (same probe, same module, so it can
         // only differ if the backend changed under us mid-session; applying it keeps the
@@ -711,7 +718,7 @@ export class TerminalPane {
         return
       }
       if (applyGrid(this.term, d)) {
-        terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows })
+        terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows, gen: this.sessionGen })
         // A fit REFLOWS the buffer under a viewport nobody asked to move (a reveal, a
         // zoom, a window drag). If this pane was following its output, it still is.
         this.anchor?.pin()

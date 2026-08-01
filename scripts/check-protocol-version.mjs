@@ -186,7 +186,7 @@ function wireFingerprint() {
 // re-pin above. An old daemon parses the frame fine and routes the unknown type to
 // notice() (degraded, never broken); the build stamp — not a version burn — is what
 // retires stale daemon code in place. Nothing an old daemon cannot SPEAK moved.
-const PINNED = { version: 10, fingerprint: 'dd23e8528e522a73' }
+const PINNED = { version: 11, fingerprint: 'f5aae626da80d5eb' }
 
 const actualWire = wireFingerprint()
 if (actualWire !== PINNED.fingerprint) {

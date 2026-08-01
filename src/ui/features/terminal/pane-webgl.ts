@@ -158,11 +158,21 @@ export class PaneWebglManager {
       addon.onContextLoss(() => {
         // Evicted (context cap) or GPU reset: drop to the DOM renderer, then retry a few
         // times while visible — self-healing, never a frozen/blank pane.
-        this.release()
         this.glLosses++
         // Renderer-health signal (counts only) — the wedge metric watched in the field.
         getTelemetry().captureEvent({ name: 'gl.context_lost', props: { losses: this.glLosses } })
-        if (this.host.isVisible() && this.glLosses <= 3) {
+        const retrying = this.host.isVisible() && this.glLosses <= 3
+        // TRANSIENT loss (a retry is ahead): swap to the DOM renderer WITHOUT the
+        // metrics refit. The DOM renderer's cell width differs at fractional scaling,
+        // so notifying here refitted to a DIFFERENT grid and the re-attach refitted
+        // straight back — an A,B,A resize thrash costing a live agent up to six full
+        // ConPTY repaints for a GPU event the user never caused. Suppressed, the pane
+        // renders ≤1.6s on DOM at the WebGL grid (a sliver of clipped canvas at worst)
+        // and the re-attach finds the grid UNCHANGED: a loss/recover cycle now costs
+        // the PTY zero resizes. SETTLED loss (retries exhausted, or hidden): the DOM
+        // renderer is the truth from here — refit to it.
+        this.release(!retrying)
+        if (retrying) {
           this.glRetry = setTimeout(() => this.acquire(), 1500)
         }
       })
@@ -172,13 +182,19 @@ export class PaneWebglManager {
       this.host.onRendererChanged()
     } catch (err) {
       console.warn('WebGL renderer unavailable; using default renderer.', err)
+      // The pane is STAYING on the DOM renderer (including a failed retry after a
+      // refit-suppressed transient loss) — settle its metrics; applyGrid dedupes an
+      // unchanged grid, so this never costs a spurious resize.
+      this.host.onRendererChanged()
     }
   }
 
   /** Detach the WebGL renderer and release its GPU context (idempotent). xterm falls
    *  back to its DOM renderer, which is fine for a hidden pane (no frames are being
-   *  painted anyway). Also the dispose path. */
-  release(): void {
+   *  painted anyway). Also the dispose path. `notifyRendererChanged: false` is the
+   *  TRANSIENT context-loss path only (see onContextLoss) — every settled release
+   *  must tell the host, or the pane keeps a dead renderer's grid. */
+  release(notifyRendererChanged = true): void {
     if (this.glRetry) {
       clearTimeout(this.glRetry)
       this.glRetry = undefined
@@ -203,6 +219,6 @@ export class PaneWebglManager {
     // After the swap back to the DOM renderer — its metrics may disagree with WebGL's
     // (see PaneWebglHost.onRendererChanged). The host guards its own disposed state
     // (release is also the dispose path).
-    this.host.onRendererChanged()
+    if (notifyRendererChanged) this.host.onRendererChanged()
   }
 }

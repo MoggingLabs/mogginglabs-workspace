@@ -437,11 +437,20 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   // guess, it is the identical probe a round-trip would fetch, minus the race with
   // the reattach replay that made "apply from the spawn reply" arrive late.
   ipcMain.handle(TerminalChannels.ptyEmulation, () => ptyEmulation())
-  ipcMain.on(TerminalChannels.write, (_e, cmd: WriteCommand) => client.input(String(cmd.id), cmd.data))
+  // Tombstone-gated at MAIN too: the daemon's gen gate needs a claimed gen to act, but a
+  // command for a pane the app already CLOSED needs no claim to refuse — 'killed' is the
+  // relay's own verdict, and forwarding past it re-delivered a disposed pane's stragglers
+  // to whatever session reuses the id next. The renderer's own gen (from SpawnResult)
+  // rides through for the daemon-side half of the guard.
+  ipcMain.on(TerminalChannels.write, (_e, cmd: WriteCommand) => {
+    if (gens.get(String(cmd.id)) === 'killed') return
+    client.input(String(cmd.id), cmd.data, cmd.gen)
+  })
   ipcMain.on(TerminalChannels.resize, (_e, cmd: ResizeCommand) => {
+    if (gens.get(String(cmd.id)) === 'killed') return
     const spec = specs.get(String(cmd.id))
     if (spec) Object.assign(spec, { cols: cmd.cols, rows: cmd.rows }) // the replay must use CURRENT dims
-    client.resize(String(cmd.id), cmd.cols, cmd.rows)
+    client.resize(String(cmd.id), cmd.cols, cmd.rows, cmd.gen)
   })
   ipcMain.on(TerminalChannels.kill, (_e, cmd: KillCommand) => {
     specs.delete(String(cmd.id)) // closed on purpose — never resurrected by a reconnect replay

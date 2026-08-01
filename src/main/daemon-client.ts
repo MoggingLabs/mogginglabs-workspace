@@ -540,7 +540,7 @@ export class DaemonClient {
         if (waiters) {
           this.spawnWaiters.delete(m.id)
           for (const waiter of waiters) {
-            waiter.resolve({ existing: m.existing === true, restored: m.restored === true, pty: m.pty })
+            waiter.resolve({ existing: m.existing === true, restored: m.restored === true, pty: m.pty, gen: m.gen })
           }
         }
         break
@@ -644,8 +644,8 @@ export class DaemonClient {
   attach(id: string): void {
     this.send({ t: 'attach', id })
   }
-  input(id: string, data: string): void {
-    this.send({ t: 'input', id, data })
+  input(id: string, data: string, gen?: number): void {
+    this.send({ t: 'input', id, data, gen })
   }
   /** Swarm manifest (Phase-4/01): acknowledged role naming. */
   setRole(id: string, role: string, timeoutMs = 2000): Promise<boolean> {
@@ -720,8 +720,8 @@ export class DaemonClient {
   unapprove(repoId: string, branch: string): void {
     this.send({ t: 'unapprove', repoId, branch })
   }
-  resize(id: string, cols: number, rows: number): void {
-    this.send({ t: 'resize', id, cols, rows })
+  resize(id: string, cols: number, rows: number, gen?: number): void {
+    this.send({ t: 'resize', id, cols, rows, gen })
   }
   kill(id: string): void {
     this.send({ t: 'kill', id })

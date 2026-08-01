@@ -207,12 +207,20 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           subscribe(m.id)
           break
         }
-        case 'input':
-          sessions.get(m.id)?.write(m.data)
+        case 'input': {
+          // Gen-gated when the sender claims one: pane ids are reused, and a stale
+          // generation's late input must not type into the id's successor session.
+          const pane = sessions.get(m.id)
+          if (pane && (typeof m.gen !== 'number' || m.gen === pane.gen)) pane.write(m.data)
           break
-        case 'resize':
-          sessions.get(m.id)?.resize(m.cols, m.rows)
+        }
+        case 'resize': {
+          // Same gate, and it matters MORE here: ConPTY answers every applied resize
+          // with a full repaint, so a stale resize smears the successor's live frame.
+          const pane = sessions.get(m.id)
+          if (pane && (typeof m.gen !== 'number' || m.gen === pane.gen)) pane.resize(m.cols, m.rows)
           break
+        }
         case 'kill':
           sessions.remove(m.id)
           break

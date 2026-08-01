@@ -10,6 +10,16 @@ import type { PersistedWorkspace } from '../ipc/workspace.ipc'
 import type { PtyEmulation } from '../ipc/terminal.ipc'
 import type { ReviewSnapshot } from '../ipc/review.ipc'
 
+// v11: `input` and `resize` carry the sender's session GENERATION (optional `gen`), and the
+// daemon REFUSES a stale claim. v5 stamped every SERVER->client pane event with `gen`; the
+// client->server half stayed unstamped, so a disposed pane's late resize — or any second
+// authenticated client's — landed on whatever session reused the id, and ConPTY answers
+// every applied resize with a full stale repaint over the successor's live frame. Absent
+// `gen` still passes (the in-proc backend and pane-bound CLI verbs have no generations),
+// but a PRESENT-and-wrong one is dropped. Bumped rather than added silently: the daemon
+// outlives the app, and a surviving v10 daemon would accept the stale resize this guard
+// exists to refuse — the fingerprint gate (check-protocol-version.mjs) enforces exactly
+// this discipline.
 // v10: the swarm coordination verbs are pane-bound. `mail-send`, `claim` and `release`
 // gained an optional `token` — the sender's own MOGGING_PANE_TOKEN — and the daemon now
 // REFUSES a pane sender (from ≠ '0') that does not present it, exactly as `approve` and
@@ -25,7 +35,7 @@ import type { ReviewSnapshot } from '../ipc/review.ipc'
 // and `welcome` gained `otherClients` — the count the stamp-war retire guard needs before
 // it may fire (daemon-client.ts ensureDaemon: a mismatched daemon with a live client is
 // left running; retiring it starts a war that kills every pane's process each round).
-export const DAEMON_PROTOCOL_VERSION = 10
+export const DAEMON_PROTOCOL_VERSION = 11
 
 // v9: burned by v0.11.1 to DELIVER a daemon-side behaviour fix (the tracker's done-chime
 // grace — a finished turn's own bell no longer latches the pane red). The fix changed no
@@ -256,8 +266,13 @@ export type ClientMessage =
   | { t: 'hello'; v: number; token: string; client?: ClientIdentity }
   | { t: 'spawn'; id: string; spec?: SpawnSpec }
   | { t: 'attach'; id: string }
-  | { t: 'input'; id: string; data: string }
-  | { t: 'resize'; id: string; cols: number; rows: number }
+  // `gen` (v11): the sender's claim about WHICH session it is talking to. Pane ids are
+  // reused; the daemon refuses a stale generation's input/resize instead of letting it
+  // type into (or smear-repaint) the id's successor. Optional because generation-less
+  // senders exist by design (the in-proc backend, pane-bound CLI verbs) — absent passes,
+  // present-and-stale is dropped. See the v11 note above for why this took a bump.
+  | { t: 'input'; id: string; data: string; gen?: number }
+  | { t: 'resize'; id: string; cols: number; rows: number; gen?: number }
   | { t: 'kill'; id: string }
   | { t: 'list' }
   | { t: 'verify-pane'; requestId: number; id: string; token: string }

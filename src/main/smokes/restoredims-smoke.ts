@@ -10,14 +10,20 @@
 //   A. COLD SPAWN at 44x11 with run 'claude' (PATH is stripped for the whole smoke, so
 //      the typed command ECHOES and resolves to nothing — never a real agent), then a
 //      graceful shutdown persists command='claude' + the 44x11 grid.
-//   B. COLD-START RESTORE — the four contract points, in order:
+//   B. COLD-START RESTORE — the contract points, in order:
 //        1. the restored session lists 44x11, not the 80x24 spawn default;
 //        2. its resume ('claude --resume') is DEFERRED: absent from scrollback while
 //           only a bare (dims-less) attach has seen the pane;
 //        3. a spawn WITHOUT dims (an unmeasured hidden pane) neither resizes the
 //           session nor releases the resume — absent dims mean "leave it alone";
 //        4. a spawn WITH measured dims equal to the session's applies nothing but
-//           CONFIRMS the size, and the resume types promptly after it.
+//           CONFIRMS the size, and the resume types promptly after it;
+//        5. the replay GROUNDS terminal modes after its history (RESTORE_MODE_RESET) —
+//           a dead TUI's alt-screen/mouse/paste modes never leak into the fresh shell;
+//        6. a STALE-generation resize is REFUSED and the true generation's applies
+//           (protocol `gen`, additive — the reused-pane-id smear guard);
+//        7. replay disposition: 'suppress' delivers no ring bytes (the reconnect
+//           double-paint fix), 'reset' delivers the full-reset prefix plus the ring.
 //   C. HEADLESS GRACE — a fresh cold start where NO client ever sends dims: the resume
 //      still types on its own once LAUNCH_DIMS_GRACE_MS expires (daemon self-recovery,
 //      ADR 0006, must not wait forever on an app that never comes).
@@ -149,6 +155,48 @@ export async function runRestoreDimsSmoke(): Promise<void> {
     const typedAfterConfirm = await until(() => capB.includes('--resume'), 8000)
     if (!typedAfterConfirm)
       return fail('resume never typed after a measured attach confirmed the grid', { capTail: capB.slice(-200) })
+
+    // 5. the restored replay GROUNDS terminal modes after its history: the dead process
+    // may have held alt-screen/mouse/bracketed-paste; the fresh shell holds none
+    // (RESTORE_MODE_RESET rides the ring between history and the shell's first byte).
+    const modeGrounded = capB.includes('\x1b[?1049l') && capB.includes('\x1b[?2004l')
+    if (!modeGrounded) return fail('restored replay carries no mode reset (RESTORE_MODE_RESET missing)')
+
+    // 6. gen-gated resize (protocol `gen`, additive): a STALE generation's resize is
+    // refused — pane ids are reused, and ConPTY answers every applied resize with a
+    // full repaint, so a stale one smears the successor. The true gen applies.
+    const genB = reMeasured.gen
+    if (typeof genB !== 'number') return fail('spawn reply carries no gen (SpawnResult.gen missing)')
+    clientB.resize(PANE, 90, 22, genB + 7)
+    await delay(700)
+    const staleProbe = new DaemonClient(ep2, {})
+    const staleInfo = (await staleProbe.connect()).find((p) => p.id === PANE)
+    staleProbe.dispose()
+    const staleRefused = staleInfo?.cols === 44 && staleInfo?.rows === 11
+    if (!staleRefused) return fail('a STALE-gen resize was applied', { staleInfo })
+    clientB.resize(PANE, 90, 22, genB)
+    await delay(700)
+    const trueProbe = new DaemonClient(ep2, {})
+    const trueInfo = (await trueProbe.connect()).find((p) => p.id === PANE)
+    trueProbe.dispose()
+    const trueGenApplied = trueInfo?.cols === 90 && trueInfo?.rows === 22
+    if (!trueGenApplied) return fail('a TRUE-gen resize was refused', { trueInfo })
+
+    // 7. replay disposition (the reconnect double-paint fix): 'suppress' must deliver
+    // NO replay bytes; 'reset' must deliver a full-reset prefix plus the ring.
+    const ringLen = capB.length
+    await clientB.spawn(PANE, { cols: 90, rows: 22, cwd: '' }, undefined, 'suppress')
+    await delay(800)
+    const suppressDelta = capB.length - ringLen
+    const suppressOk = suppressDelta < Math.max(300, ringLen / 4)
+    if (!suppressOk) return fail('suppress replay still delivered the ring', { suppressDelta, ringLen })
+    const beforeReset = capB.length
+    await clientB.spawn(PANE, { cols: 90, rows: 22, cwd: '' }, undefined, 'reset')
+    await delay(800)
+    const resetChunk = capB.slice(beforeReset)
+    const resetOk = resetChunk.includes('\x1bc') && resetChunk.length > 100
+    if (!resetOk) return fail('reset replay carried no full-reset prefix', { resetLen: resetChunk.length })
+
     if (!(await retire(clientB, ep2.pid))) return fail('gen B daemon did not die on shutdown')
 
     // C. headless grace: no client ever measures — the resume must fire on its own.
@@ -182,6 +230,11 @@ export async function runRestoreDimsSmoke(): Promise<void> {
       deferredUntilMeasured: deferred,
       dimlessLeftAlone,
       typedAfterConfirm,
+      modeGrounded,
+      staleGenRefused: staleRefused,
+      trueGenApplied,
+      suppressOk,
+      resetOk,
       graceTyped
     })
     app.exit(0)

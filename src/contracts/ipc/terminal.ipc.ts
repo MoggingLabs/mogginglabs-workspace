@@ -62,15 +62,26 @@ export interface SpawnResult {
   existing: boolean
   restored: boolean
   pty: PtyEmulation
+  /** The session GENERATION this spawn bound to (daemon path; the in-proc backend has no
+   *  generations). The pane echoes it on write/resize so a stale sender — a disposed
+   *  pane's late timer, a reused id's previous occupant — can be REFUSED at the daemon
+   *  instead of resizing/typing into the successor session (ConPTY answers every applied
+   *  resize with a full repaint, so a stale resize is a smear, not a no-op). */
+  gen?: number
 }
 export interface WriteCommand {
   id: PaneId
   data: string
+  /** The sender's session generation (see SpawnResult.gen). Absent = ungated legacy/
+   *  in-proc sender; present-and-stale = dropped by the daemon. */
+  gen?: number
 }
 export interface ResizeCommand {
   id: PaneId
   cols: number
   rows: number
+  /** See WriteCommand.gen. */
+  gen?: number
 }
 export interface KillCommand {
   id: PaneId
