@@ -85,7 +85,10 @@ const HISTORICAL = [
   // The committed winget/homebrew manifests pin the LAST SHIPPED release's bytes by
   // design (they regenerate from the new release's artifacts AFTER it publishes) —
   // the version they name is a past release on purpose until that post-release step.
-  { contains: 'committed manifests pin the shipped', why: 'manifests regenerate post-release; they truthfully name the last shipped artifacts' }
+  { contains: 'committed manifests pin the shipped', why: 'manifests regenerate post-release; they truthfully name the last shipped artifacts' },
+  // The publish-after-assets law names the release whose live window taught it —
+  // a scar, not a copy-paste target.
+  { contains: 'learned live,', why: 'the premature-publish incident names the release it happened to on purpose' }
 ]
 
 const lineOf = (text, index) => text.slice(0, index).split('\n').length
