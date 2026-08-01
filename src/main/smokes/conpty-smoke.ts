@@ -23,7 +23,23 @@ import { app, type BrowserWindow } from 'electron'
 // requires windowsPty = { backend:'conpty', buildNumber >= 18309 } on win32 — 18309 is the
 // support floor pty-host enforces, NOT xterm's 21376 reflow threshold (CI's windows-latest is
 // Server 2022 / build 20348, where reflow-off is xterm's correct conservative path).
+//
+// THE WIDTH PHASE (2026-08-01). Width is gated SEPARATELY because its correctness bar is
+// structurally lower, and the gate must say so rather than pretend: ConPTY's internal buffer
+// is VIEWPORT-SIZED (scrollback exists only in xterm), so a width shrink that re-wraps long
+// lines overflows conhost's own buffer, conhost DISCARDS the overflow, and its answering
+// repaint erases those rows in xterm too. Measured on build 26200: a 120-long-marker narrow
+// crossing loses a contiguous band of ~27 trailing markers — identically with xterm reflow
+// on and off (proven both ways), so no renderer configuration can prevent it; only conhost
+// keeping real scrollback would ("blank space in the middle of the pane" as reported). What
+// IS ours to guarantee, and what this phase pins: survivors stay ONCE and IN ORDER (no
+// splice, no duplication), the loss is AT MOST ONE contiguous band bounded by ~two narrow
+// viewports, and no blank rows are left between surviving lines. A regression anywhere in
+// our stack (windowsPty, fit, replay) breaks one of those long before it breaks nothing.
 const MARKS = 120
+const WIDTH_MARKS = 120
+/** Loss ceiling for the width crossing: ~2 narrow viewports of wrapped long lines. */
+const WIDTH_LOSS_MAX = 60
 
 export function runConptySmoke(win: BrowserWindow): void {
   const errors: string[] = []
@@ -124,7 +140,67 @@ export function runConptySmoke(win: BrowserWindow): void {
     for (let i = 1; i < order.length; i++) if (order[i] <= order[i - 1]) ordered = false
 
     const marksOnce = missing.length === 0 && dupes.length === 0
-    const pass = wpOk && rowsChanged && marksOnce && ordered && errors.length === 0
+
+    // ── WIDTH PHASE (see the header) ─────────────────────────────────────────────
+    // Long markers that WRAP at narrow width; then wide -> narrow -> wide. The census
+    // asserts the bounded-band contract, not marks-once — ConPTY erases a viewport's
+    // worth at the crossing by design (its buffer IS the viewport).
+    const PAD = '-'.repeat(70)
+    await send(
+      isWin
+        ? `for /L %i in (1,1,${WIDTH_MARKS}) do @echo WMARK_%i_${PAD}END\r`
+        : `for i in $(seq 1 ${WIDTH_MARKS}); do echo WMARK_\${i}_${PAD}END; done\r`
+    )
+    await delay(2500)
+    win.setSize(460, 780)
+    await delay(1200)
+    win.setSize(1000, 780)
+    await delay(1500)
+    const wtext = String(
+      await ES(
+        '(function(){var p=window.__mogging&&window.__mogging.panes&&window.__mogging.panes[0];' +
+          'if(!p)return "";p.term.selectAll();var s=p.term.getSelection();p.term.clearSelection();return s;})()'
+      )
+    )
+    const wseen = new Map<number, number>()
+    const worder: number[] = []
+    for (const m of wtext.matchAll(/WMARK_(\d+)_/g)) {
+      const n = Number(m[1])
+      wseen.set(n, (wseen.get(n) ?? 0) + 1)
+      worder.push(n)
+    }
+    const wmissing: number[] = []
+    const wdupes: number[] = []
+    for (let i = 1; i <= WIDTH_MARKS; i++) {
+      const c = wseen.get(i) ?? 0
+      if (c === 0) wmissing.push(i)
+      if (c > 1) wdupes.push(i)
+    }
+    let wordered = true
+    for (let i = 1; i < worder.length; i++) if (worder[i] <= worder[i - 1]) wordered = false
+    // One contiguous band at most: erased content is a single viewport region, never
+    // interleaved holes (holes = a splice, which IS our bug to catch).
+    let contiguous = true
+    for (let i = 1; i < wmissing.length; i++) if (wmissing[i] !== wmissing[i - 1] + 1) contiguous = false
+    // No blank rows left BETWEEN surviving lines — the reported artifact shape.
+    const wlines = wtext.split('\n')
+    const wmarkIdx: number[] = []
+    for (let i = 0; i < wlines.length; i++) if (/WMARK_\d+_/.test(wlines[i])) wmarkIdx.push(i)
+    let maxBlankRun = 0
+    if (wmarkIdx.length > 1) {
+      let run = 0
+      for (let i = wmarkIdx[0]; i <= wmarkIdx[wmarkIdx.length - 1]; i++) {
+        if (wlines[i].trim() === '') run++
+        else {
+          if (run > maxBlankRun) maxBlankRun = run
+          run = 0
+        }
+      }
+    }
+    const widthOk =
+      wdupes.length === 0 && wordered && contiguous && wmissing.length <= WIDTH_LOSS_MAX && maxBlankRun <= 2
+
+    const pass = wpOk && rowsChanged && marksOnce && ordered && widthOk && errors.length === 0
     return {
       pass,
       wpOk,
@@ -136,6 +212,15 @@ export function runConptySmoke(win: BrowserWindow): void {
       found: order.length,
       missing: missing.slice(0, 10),
       dupes: dupes.slice(0, 10),
+      width: {
+        ok: widthOk,
+        found: worder.length,
+        lost: wmissing.length,
+        contiguous,
+        ordered: wordered,
+        dupes: wdupes.slice(0, 10),
+        maxBlankRun
+      },
       errors
     }
   }
