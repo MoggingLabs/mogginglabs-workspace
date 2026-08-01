@@ -224,11 +224,15 @@ dialog, never a crash. A **closed dock has no root, and therefore no actions**.
 
 **Send-to-pane** inserts the path *relative to the focused pane's own cwd* when
 the file sits under it (that is what a person types), absolute otherwise — a
-relative path that escapes the cwd would be a lie. It is quoted by the shared
-`quotePathForShell`, which also strips control characters: **a filename cannot
-smuggle a newline, and therefore cannot press Enter.** The `pane-input-port` is
-the door, and it has no `run`, no `submit`, and no way to append a carriage
-return — the absence of the verb *is* the guarantee.
+relative path that escapes the cwd would be a lie. A focused **remote** pane
+always gets the absolute local path, POSIX-quoted, with the "This pane is
+remote" toast: its cwd lives in another namespace, so a cwd that merely
+string-prefixes the path must never fabricate a relative one across the ssh
+boundary. It is quoted by the shared quoter, which also strips control
+characters: **a filename cannot smuggle a newline, and therefore cannot press
+Enter.** The `pane-input-port` is the door, and it has no `run`, no `submit`,
+and no way to append a carriage return — the absence of the verb *is* the
+guarantee.
 
 **Drag** a row: `text/plain` carries the quoted insert, `text/uri-list` the plain
 `file://` path for OS targets, and a private `application/x-mogging-path` marker

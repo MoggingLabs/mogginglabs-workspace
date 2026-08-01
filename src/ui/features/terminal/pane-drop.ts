@@ -1,9 +1,10 @@
-import { EXPLORER_DRAG_TYPE, relativeToDir, type PaneId } from '@contracts'
+import { EXPLORER_DRAG_TYPE, type PaneId } from '@contracts'
 import { icon, showToast } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { getPaneRemote } from '../../core/layout/pane-meta'
 import { getPaneCwd } from '../../core/layout/pane-cwd'
-import { quoteDroppedPaths, quoteWithFlavor, recordDrop } from '../../core/clipboard/clipboard-port'
+import { clipboardEnv, recordDrop } from '../../core/clipboard/clipboard-port'
+import { planPaneInsert, REMOTE_INSERT_TOAST } from '../../core/terminal/pane-insert'
 import { terminalClient } from './terminal.client'
 
 // The pane's drag-and-drop target — extracted from TerminalPane along the same seam as
@@ -158,32 +159,24 @@ export function mountPaneDrop({ paneId, body, signal, focus }: PaneDropOptions):
  * text cannot carry a newline and therefore cannot press Enter. Nothing runs.
  */
 async function insertExplorerPath(paneId: PaneId, raw: string, quotedFallback: string, focus: () => void): Promise<void> {
+  // Remoteness FIRST — even the degraded fallback below owes the user the honesty toast
+  // (it used to slip past this check and type locally-quoted text into an ssh shell).
+  const remote = !!getPaneRemote(paneId)
   if (!raw) {
     // A marker with no payload (an older drag, or a synthetic one). The text/plain half
-    // was quoted by the explorer's own quoter — control-character-free — type it as-is.
+    // was quoted by the explorer's own quoter — control-character-free — type it as-is:
+    // the raw path is gone, so a remote pane cannot be re-quoted, only told the truth.
     if (quotedFallback) {
+      if (remote) showToast(REMOTE_INSERT_TOAST)
       terminalClient.write({ id: paneId, data: ' ' + quotedFallback + ' ' })
       focus()
     }
     return
   }
-  if (getPaneRemote(paneId)) {
-    // This pane's shell — and its cwd — live on the ssh host; `raw` names a LOCAL file.
-    // Never relativize across namespaces: quote POSIX, absolute, and say it plainly
-    // (the same honesty insertDroppedPaths shows for an OS file drop).
-    showToast({
-      tone: 'info',
-      title: 'This pane is remote',
-      body: 'The inserted path points at a file on THIS machine — the remote host cannot see it unless a mount shares it.'
-    })
-    terminalClient.write({ id: paneId, data: ' ' + quoteWithFlavor([raw], 'posix') + ' ' })
-    focus()
-    return
-  }
-  const cwd = getPaneCwd(paneId) ?? ''
-  const rel = cwd ? relativeToDir(raw, cwd) : null
-  const quoted = await quoteDroppedPaths([rel ?? raw])
-  terminalClient.write({ id: paneId, data: ' ' + quoted + ' ' })
+  const { flavor } = await clipboardEnv()
+  const plan = planPaneInsert({ paths: [raw], remote, paneCwd: getPaneCwd(paneId), localFlavor: flavor })
+  if (plan.remote) showToast(REMOTE_INSERT_TOAST)
+  terminalClient.write({ id: paneId, data: plan.data })
   focus()
 }
 
@@ -211,24 +204,18 @@ async function insertDroppedPaths(paneId: PaneId, files: File[], focus: () => vo
     .filter(Boolean)
   if (!paths.length) return
 
-  // A REMOTE pane's shell lives on the ssh host, not this machine: quote for POSIX
-  // (this app's remote panes ride ssh), and say plainly that the path itself is local —
-  // inserting C:\Users\... into a Linux shell is only useful if a share mounts it.
-  const remote = getPaneRemote(paneId)
-  const quoted = remote ? quoteWithFlavor(paths, 'posix') : await quoteDroppedPaths(paths)
-  if (remote) {
-    showToast({
-      tone: 'info',
-      title: 'This pane is remote',
-      body: 'The inserted path points at a file on THIS machine — the remote host cannot see it unless a mount shares it.'
-    })
-  }
-  // Padded on BOTH sides (user-specified): the leading space detaches the path from
-  // whatever is already at the cursor, the trailing one starts the next argument.
-  terminalClient.write({ id: paneId, data: ' ' + quoted + ' ' })
+  // OS drops stay ABSOLUTE by design (no paneCwd): a Finder/Explorer drag has no "what
+  // a person would type here" claim to make. planPaneInsert handles the remote split —
+  // POSIX quoting for an ssh pane, this machine's flavor otherwise — and its payload is
+  // padded on BOTH sides (user-specified): the leading space detaches the path from
+  // whatever is at the cursor, the trailing one starts the next argument.
+  const { flavor } = await clipboardEnv()
+  const plan = planPaneInsert({ paths, remote: !!getPaneRemote(paneId), localFlavor: flavor })
+  if (plan.remote) showToast(REMOTE_INSERT_TOAST)
+  terminalClient.write({ id: paneId, data: plan.data })
   focus()
 
   // Remembered in the Clipboard tab, but NOT put on the system clipboard — a drag is
   // not a copy, and clobbering what the user had copied would be a surprise.
-  void recordDrop(paths, quoted)
+  void recordDrop(paths, plan.text)
 }

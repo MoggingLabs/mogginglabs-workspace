@@ -419,7 +419,7 @@ run_smoke LEDGER      MOGGING_LEDGER    1 240 ledger
 run_smoke GATE        MOGGING_GATE      1 240 gate
 run_smoke PROFILES    MOGGING_PROFILES  1 240 profiles
 run_smoke LOGINTRUTH  MOGGING_LOGINTRUTH 1 240 logintruth
-run_smoke REMOTE      MOGGING_REMOTE    1 240 remote
+run_smoke REMOTE      MOGGING_REMOTE    1 300 remote
 run_smoke SWARMMILESTONE MOGGING_SWARMMILESTONE 1 300 swarmmilestone
 run_smoke TEMPLATE_A  MOGGING_TEMPLATE  A 180 template TEMPLATE
 run_smoke TEMPLATE_B  MOGGING_TEMPLATE  B 180 template TEMPLATE

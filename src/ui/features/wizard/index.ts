@@ -1951,7 +1951,7 @@ export const wizardFeature: UiFeature = {
           cwd: string
           assignments: string[]
           paneCwds: (string | null)[]
-          remotes: ({ hostId: string; name: string } | null)[]
+          remotes: ({ hostId: string; name: string; cwd?: string } | null)[]
         }) => openWorkspaceFromTemplate({ ...spec, paneCount: spec.assignments.length }),
         openWizard: (prefill?: WizardPrefill) => open(prefill)
       }

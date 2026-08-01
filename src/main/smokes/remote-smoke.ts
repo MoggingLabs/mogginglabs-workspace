@@ -1,8 +1,8 @@
 import { app, ipcMain, type BrowserWindow } from 'electron'
 import { execFile, execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import Database from 'better-sqlite3'
 import { getSettingsStore } from '../app-settings'
 import { runtimeDir } from '../daemon-client'
@@ -11,8 +11,10 @@ import { SessionStore, SettingsStore } from '@backend/features/workspace'
 import {
   REMOTE_READY_OSC,
   TerminalChannels,
+  quotePathForShell,
   type AgentCommandResult,
   type RemoteRemoveResult,
+  type ShellFlavor,
   type SpawnSpec
 } from '@contracts'
 import { remoteBootstrapCommand } from '../../pty-daemon/session'
@@ -25,12 +27,22 @@ import { remoteBootstrapCommand } from '../../pty-daemon/session'
 //   3. HONESTY: the local pane gets its git chip; the remote pane does NOT
 //   4. `mogging list` shows the REMOTE column with the host name
 //   5. exit of the (shimmed) ssh process = pane exit
+//   6. INSERT HONESTY: an explorer drop, a payload-less drop, and send-to-pane all give
+//      the REMOTE pane the ABSOLUTE local path, POSIX-quoted, plus the "This pane is
+//      remote" toast — even when the pane's projected cwd string-PREFIXES the local
+//      path (the relativize-across-namespaces bug this pins) — while the LOCAL pane
+//      still relativizes, toast-free. Fixture note: paneCwds is [null, null], the
+//      wizard's true shape — the remote target cwd rides ONLY on the remote entry, so
+//      argvOk + persistedCwdOk also pin the publishRemotes cwd-clobber regression.
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim()
 }
 
 function makeRepo(): string {
-  const repo = mkdtempSync(join(tmpdir(), 'mogging-remote-'))
+  // Canonical spelling (the treelive precedent): this box's TEMP is an 8.3 alias, and the
+  // pane's cwd projection reports the LONG spelling — a raw mkdtemp path would make the
+  // local-pane relativization control arm miss on pure spelling.
+  const repo = realpathSync.native(mkdtempSync(join(tmpdir(), 'mogging-remote-')))
   git(repo, ['init'])
   git(repo, ['symbolic-ref', 'HEAD', 'refs/heads/main'])
   git(repo, ['config', 'user.email', 'smoke@mogging.test'])
@@ -96,7 +108,7 @@ const SHIM_SRC =
     : '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$0.argv"\necho "SSH_SHIM argv captured"\nif [ "${MOGGING_DAEMON_ENDPOINT+x}" = x ]; then echo SSH_ENV_ENDPOINT=LEAK; else echo SSH_ENV_ENDPOINT=clean; fi\nif [ "${MOGGING_BROWSER_ENDPOINT+x}" = x ]; then echo SSH_ENV_BROWSER=LEAK; else echo SSH_ENV_BROWSER=clean; fi\nif [ "${MOGGING_PANE_ID+x}" = x ]; then echo SSH_ENV_ID=LEAK; else echo SSH_ENV_ID=clean; fi\nif [ "${MOGGING_PANE_TOKEN+x}" = x ]; then echo SSH_ENV_TOKEN=LEAK; else echo SSH_ENV_TOKEN=clean; fi\nsleep 2\nexec ${SHELL:-/bin/sh}\n'
 
 export function runRemoteSmoke(win: BrowserWindow): void {
-  setTimeout(() => app.exit(1), 240000) // safety net (16s readiness hold + daemon restart + reload)
+  setTimeout(() => app.exit(1), 300000) // safety net (16s readiness hold + insert arms + daemon restart + reload)
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -228,8 +240,12 @@ export function runRemoteSmoke(win: BrowserWindow): void {
       // (templates.openRemote), not the low-level workspace.create helper: that is the path that
       // carries the per-pane TARGET cwd AND launches the slot's CLI — which is what the readiness
       // gate below is about. The manifest still records the remote's target cwd.
+      // paneCwds is [null, null] — the WIZARD'S true shape: the remote target cwd rides
+      // ONLY on the remote entry (wizard/index.ts's own contract). The old fixture passed
+      // it in BOTH places, which masked publishRemotes clobbering the remote entry's cwd;
+      // with the mask off, argvOk (bootstrap bytes embed the cwd) and persistedCwdOk bite.
       await ES(
-        `window.__mogging.templates.openRemote({ name: 'Mix', cwd: ${JSON.stringify(repo)}, assignments: ['shell', 'codex'], paneCwds: [null, ${JSON.stringify(remoteCwd)}], remotes: [null, { hostId: 'h1', name: 'buildbox', cwd: ${JSON.stringify(remoteCwd)} }] })`
+        `window.__mogging.templates.openRemote({ name: 'Mix', cwd: ${JSON.stringify(repo)}, assignments: ['shell', 'codex'], paneCwds: [null, null], remotes: [null, { hostId: 'h1', name: 'buildbox', cwd: ${JSON.stringify(remoteCwd)} }] })`
       )
       await sleep(1400)
       const active = (await ES('window.__mogging.workspace.active()')) as {
@@ -373,6 +389,122 @@ export function runRemoteSmoke(win: BrowserWindow): void {
         )) as boolean
         if (!gitOk) await sleep(500)
       }
+
+      // 3.5) INSERT HONESTY: a local path entering a REMOTE pane is always the ABSOLUTE
+      // path, POSIX-quoted, with the "This pane is remote" toast — never a relative
+      // fabricated across the ssh namespace boundary. Asserted on the exact renderer→PTY
+      // write bytes (rendererWrites), not the wrapped pane buffer.
+      const readme = join(repo, 'README.md')
+      const expectRemote = ' ' + quotePathForShell(readme, 'posix') + ' '
+      const localFlavor: ShellFlavor = process.platform === 'win32' ? 'cmd' : 'posix'
+      const expectLocal = ' ' + quotePathForShell('README.md', localFlavor) + ' '
+
+      // Arm the relativize-across-namespaces bite. On POSIX hosts, project a REMOTE-locality
+      // cwd that string-PREFIXES the local fixture (its parent temp dir) through the same
+      // prompt-frame channel the context block used: a regressed relativize-before-remote-
+      // check now emits a relative path and fails the byte-exact assertions below. On win32
+      // no local path can sit under a POSIX cwd — there the bite is the FLAVOR (a regression
+      // quotes cmd-style, which can never equal the posix bytes).
+      if (process.platform !== 'win32') {
+        const biteFrame = `\x1b]633;P;MoggingPromptCwdRaw=${dirname(repo)}\x1b\\`
+        await ES(
+          `window.bridge.send('terminal:write', { id: ${base + 2}, data: ${JSON.stringify(nodeEvalCommand(`process.stdout.write(${JSON.stringify(biteFrame)})`) + '\r')} })`
+        )
+        await sleep(600)
+      }
+
+      // House toast helpers (the asyncstate pattern): toasts self-dismiss at 6s, stack caps
+      // at 4, and showToast never dedupes — so every arm clears first and counts after.
+      const remoteToastCount = (): Promise<number> =>
+        ES<number>(
+          `[...document.querySelectorAll('.toast.toast--info .toast-title')].filter((t) => t.textContent === 'This pane is remote').length`
+        )
+      const clearToasts = (): Promise<number> =>
+        ES<number>(`(() => { const t = [...document.querySelectorAll('.toast')]; t.forEach((x) => x.remove()); return t.length })()`)
+      const waitRemoteToast = async (): Promise<boolean> => {
+        for (let i = 0; i < 30; i++) {
+          if ((await remoteToastCount()) > 0) return true
+          await sleep(150)
+        }
+        return false
+      }
+      // A REAL drop through the pane's own handler (the fileact pattern), aimed by pane id.
+      const dropOnPane = (id: number, raw: string, plain: string): Promise<boolean> =>
+        ES<boolean>(
+          `(() => {
+            const body = document.querySelector('.layout-slot[data-pane-id="' + ${id} + '"] .pane-body')
+            if (!body) return false
+            const dt = new DataTransfer()
+            dt.setData('application/x-mogging-path', ${JSON.stringify(raw)})
+            dt.setData('text/plain', ${JSON.stringify(plain)})
+            body.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
+            return true
+          })()`
+        )
+      // Focus-report frames (ESC[I / ESC[O, mode 1004) ride the same write channel when a
+      // drop's focus() moves keyboard focus — control traffic, not typed content. Filter
+      // them so the count assertions measure INSERTS, byte-exactly, and nothing else.
+      const writesTo = (id: number, from: number): { id: number; data: string }[] =>
+        rendererWrites.slice(from).filter((w) => w.id === id && w.data !== '\x1b[I' && w.data !== '\x1b[O')
+
+      // (a) explorer-marker drop onto the REMOTE pane → one write, absolute POSIX bytes, one toast
+      await clearToasts()
+      let mark = rendererWrites.length
+      const dropRemoteSent = await dropOnPane(base + 2, readme, 'LOCAL-FALLBACK-MUST-NOT-TYPE')
+      const dropRemoteToastSeen = await waitRemoteToast()
+      await sleep(400)
+      const dropRemoteWrites = writesTo(base + 2, mark)
+      const dropRemoteAbsoluteOk =
+        dropRemoteSent &&
+        dropRemoteToastSeen &&
+        dropRemoteWrites.length === 1 &&
+        dropRemoteWrites[0]!.data === expectRemote &&
+        !/[\r\n]/.test(dropRemoteWrites[0]!.data) &&
+        (await remoteToastCount()) === 1
+
+      // (b) a payload-less marker (older/synthetic drag) → the quoted fallback typed
+      // verbatim — degraded, never silent — WITH the honesty toast (the bug-B pin).
+      await clearToasts()
+      mark = rendererWrites.length
+      const dropFbSent = await dropOnPane(base + 2, '', 'FALLBACK-REMOTE-PAYLOAD')
+      const dropFbToastSeen = await waitRemoteToast()
+      await sleep(400)
+      const fbWrites = writesTo(base + 2, mark)
+      const dropRemoteFallbackOk =
+        dropFbSent && dropFbToastSeen && fbWrites.length === 1 && fbWrites[0]!.data === ' FALLBACK-REMOTE-PAYLOAD '
+
+      // (c) send-to-pane at the FOCUSED remote pane → same bytes, same honesty (the
+      // parity pin: the menu path used to relativize first and never toast).
+      await ES(`window.__mogging.explorer.toggle(true)`)
+      await sleep(1200) // the dock roots at the workspace folder; README.md is a root entry
+      await clearToasts()
+      await ES(`document.querySelector('.layout-slot[data-pane-id="${base + 2}"] .xterm-helper-textarea').focus()`)
+      await sleep(300)
+      mark = rendererWrites.length
+      const sendRemoteRan = await ES<boolean>(`window.__mogging.explorer.sendToPane(${JSON.stringify(readme)})`)
+      const sendRemoteToastSeen = await waitRemoteToast()
+      await sleep(400)
+      const sendWrites = writesTo(base + 2, mark)
+      const sendRemoteAbsoluteOk =
+        sendRemoteRan === true && sendRemoteToastSeen && sendWrites.length === 1 && sendWrites[0]!.data === expectRemote
+
+      // (d) CONTROL: the LOCAL pane still relativizes on BOTH routes, with ZERO remote
+      // toasts — proving the split discriminates by the RECEIVING pane, not globally.
+      await clearToasts()
+      mark = rendererWrites.length
+      const dropLocalSent = await dropOnPane(base + 1, readme, 'LOCAL-FALLBACK-MUST-NOT-TYPE')
+      await sleep(700)
+      await ES(`document.querySelector('.layout-slot[data-pane-id="${base + 1}"] .xterm-helper-textarea').focus()`)
+      await sleep(300)
+      const sendLocalRan = await ES<boolean>(`window.__mogging.explorer.sendToPane(${JSON.stringify(readme)})`)
+      await sleep(700)
+      const localWrites = writesTo(base + 1, mark)
+      const localInsertControlOk =
+        dropLocalSent &&
+        sendLocalRan === true &&
+        localWrites.length === 2 &&
+        localWrites.every((w) => w.data === expectLocal) &&
+        (await remoteToastCount()) === 0
 
       // 4) `mogging list` shows the REMOTE column
       const listOut = await new Promise<string>((resolveCli) => {
@@ -526,6 +658,10 @@ export function runRemoteSmoke(win: BrowserWindow): void {
         argvOk &&
         chipOk &&
         gitOk &&
+        dropRemoteAbsoluteOk &&
+        dropRemoteFallbackOk &&
+        sendRemoteAbsoluteOk &&
+        localInsertControlOk &&
         listOk &&
         remoteRestoreOk &&
         gitAfterRestartOk &&
@@ -567,6 +703,16 @@ export function runRemoteSmoke(win: BrowserWindow): void {
         chipOk,
         chips,
         gitOk,
+        dropRemoteAbsoluteOk,
+        dropRemoteFallbackOk,
+        sendRemoteAbsoluteOk,
+        localInsertControlOk,
+        expectRemote,
+        expectLocal,
+        dropRemoteWrites,
+        fbWrites,
+        sendWrites,
+        localWrites,
         listOk,
         crossOsCommandsOk,
         posixCommand,
