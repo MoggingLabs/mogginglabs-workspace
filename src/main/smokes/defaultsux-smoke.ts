@@ -98,8 +98,16 @@ export function runDefaultsUxSmoke(win: BrowserWindow): void {
       const stopManaging = await execute<boolean>(`!![...((${rowScript('autoCompactEnabled')})?.querySelectorAll('button') || [])].find((button) => button.textContent?.includes('Stop managing everywhere'))`)
       // Value-agnostic: the switch started from the catalog default — assert every
       // home AGREES on whatever the first save produced, not on a guessed literal.
-      const firstValue = autoIn(files.primary)
-      const firstSaveEverywhere = firstValue !== undefined && autoIn(files.a) === firstValue && autoIn(files.b) === firstValue
+      // POLLED, like secondSaved below: the fan-out to the secondary homes is async,
+      // and a one-shot read here raced it — red on the CI Windows sweep (run
+      // 30690209434) and once locally on slow I/O, green on every re-run. The badge
+      // only proves the PRIMARY write; the secondary files earn their own wait.
+      let firstSaveEverywhere = false
+      for (let attempt = 0; attempt < 40 && !firstSaveEverywhere; attempt += 1) {
+        const firstValue = autoIn(files.primary)
+        firstSaveEverywhere = firstValue !== undefined && autoIn(files.a) === firstValue && autoIn(files.b) === firstValue
+        if (!firstSaveEverywhere) await sleep(250)
+      }
 
       // 3) The second save is QUIET — rememberKey — and still lands everywhere.
       await execute(`(() => {
