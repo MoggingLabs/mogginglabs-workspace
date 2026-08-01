@@ -45,7 +45,11 @@ for (const arch of ARCHES) {
   const trees = [
     join(ROOT, 'build', 'node-helper', `win32-${arch}`, 'node_deps', 'node-pty', 'prebuilds', `win32-${arch}`, 'conpty'),
     join(ROOT, 'build', 'node-helper', `win32-${arch}`, 'node_deps', 'node-pty', 'build', 'Release', 'conpty'),
-    ...(arch === (process.arch === 'arm64' ? 'arm64' : 'x64')
+    // node_modules only counts on a WINDOWS host: the overlay (overlayConpty) is a no-op
+    // off win32, so a POSIX checkout keeps the tarball's older pair there forever — and
+    // never executes it (useConptyDll is a win32 branch). Flagging it would fail every
+    // linux/macOS sweep over bytes no pane can load.
+    ...(process.platform === 'win32' && arch === (process.arch === 'arm64' ? 'arm64' : 'x64')
       ? [
           join(ROOT, 'node_modules', 'node-pty', 'prebuilds', `win32-${arch}`, 'conpty'),
           join(ROOT, 'node_modules', 'node-pty', 'build', 'Release', 'conpty')

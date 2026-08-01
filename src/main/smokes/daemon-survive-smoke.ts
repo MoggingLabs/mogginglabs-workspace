@@ -71,7 +71,11 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
 
     if (phase === 'A') {
       // A cold spawn must report existing=false — the flag the restore path keys off.
-      const { existing: existedA } = await client.spawn('sp1', { run: COUNTER })
+      // Dims are LOAD-BEARING: a dims-less spawn is an unmeasured pane, and the daemon
+      // DEFERS its launch until a client confirms the grid (LAUNCH_DIMS_GRACE_MS) — the
+      // counter would type ~15s after this smoke stopped listening. This smoke models a
+      // VISIBLE pane, and the app never spawns one of those without a measurement.
+      const { existing: existedA } = await client.spawn('sp1', { run: COUNTER, cols: 80, rows: 24 })
       if (existedA) {
         // RE-ENTRY (electron-vite dev respawns electron after app.exit): the cold run
         // already recorded phase A. Overwriting now would poison existedA for phase B.
@@ -103,7 +107,7 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
     // REATTACH must report existing=true, and the app must be able to SEE that: it is the
     // only signal that the pane's agent is still running, and the restore lineup refuses to
     // type `claude --resume` into a pane that already has Claude in it (agents/index.ts).
-    const spawnedB = await client.spawn('sp1', { run: COUNTER }) // id-guard: run ignored
+    const spawnedB = await client.spawn('sp1', { run: COUNTER, cols: 80, rows: 24 }) // id-guard: run ignored
     const existedB = spawnedB.existing
     // The DAEMON owns the pty, so only the daemon can say how it grows. A reattach that omits
     // this (a pre-v4 daemon) must never reach xterm: it would render against a guessed backend.
