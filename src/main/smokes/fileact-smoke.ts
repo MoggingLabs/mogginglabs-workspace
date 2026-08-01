@@ -21,7 +21,10 @@ import { probeContrastAcrossThemes, type AaProbeResult } from './aa-probe'
 //       files are all still on disk, and the name renders as TEXT (no element injected);
 //   (e) the menu opens on Shift+F10, walks by keyboard, returns focus to its row on Esc,
 //       and every item clears the 28px hitbox floor;
-//   (f) the drag payload's `text/plain` equals the quoted insert, behind our private type.
+//   (f) the drag payload: RAW absolute path behind our private type, quoted ABSOLUTE in
+//       text/plain — and a synthetic drop through the pane's real handler proves the
+//       RECEIVING pane computes the insert (relative to ITS cwd for an in-cwd file,
+//       absolute for an outside path, and Enter still never pressed).
 //   Plus AA on the menu's inks, across four themes.
 // Verdict: out/fileact-result.json.
 
@@ -293,12 +296,54 @@ export function runFileActSmoke(win: BrowserWindow): void {
         !menuKb.stillOpen &&
         menuKb.afterEsc === mainTs // Esc gave the keyboard back to the row that opened it
 
-      // ── (f) the drag payload ─────────────────────────────────────────────────────
+      // ── (f) the drag payload + the drop recut ────────────────────────────────────
+      // dragstart bakes NOTHING pane-specific (a drop can land on any pane, or outside
+      // the app): the private type carries the RAW absolute path, text/plain the quoted
+      // ABSOLUTE for outside targets. The RECEIVING pane computes the insert.
       const drag = await ES<Record<string, string>>(`window.__mogging.explorer.dragPayload(${JSON.stringify(mainTs)})`)
-      const dragOk =
-        drag['text/plain'] === quotedRel &&
-        drag['application/x-mogging-path'] === '1' && // our private marker gates the pane's drop
+      const payloadOk =
+        drag['application/x-mogging-path'] === mainTs && // the raw path, for OUR panes to recompute from
+        drag['text/plain'] === quotePathForShell(mainTs, flavor) && // quoted ABSOLUTE, for everyone else
         (drag['text/uri-list'] ?? '').startsWith('file://')
+
+      // A REAL drop through the pane's own handler (a synthetic DataTransfer wearing our
+      // marker), aimed at the pane body — driving exactly the code path a drag drives.
+      const dropOnPane = (raw: string, plain: string): Promise<boolean> =>
+        ES<boolean>(`(() => {
+          const body = document.querySelector('#workspace-host .pane-body')
+          if (!body) return false
+          const dt = new DataTransfer()
+          dt.setData('application/x-mogging-path', ${JSON.stringify(raw)})
+          dt.setData('text/plain', ${JSON.stringify(plain)})
+          body.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
+          return true
+        })()`)
+      const countOf = (haystack: string, needle: string): number => haystack.replace(/\n/g, '').split(needle).length - 1
+
+      // An IN-CWD file types RELATIVE — to the cwd of the pane that RECEIVED the drop
+      // (count-delta: the send arm already put one quotedRel in this buffer)…
+      const beforeDrops = await ES<string>(`window.__mogging.panes[0].text()`)
+      const dropRelSent = await dropOnPane(mainTs, 'FALLBACK-MUST-NOT-BE-TYPED')
+      await sleep(900)
+      const afterDropRel = await ES<string>(`window.__mogging.panes[0].text()`)
+      // …an OUTSIDE path types ABSOLUTE, honestly — never a fake relative…
+      const quotedOutside = quotePathForShell(F.outside, flavor)
+      const dropAbsSent = await dropOnPane(F.outside, 'FALLBACK-MUST-NOT-BE-TYPED')
+      await sleep(900)
+      const afterDropAbs = await ES<string>(`window.__mogging.panes[0].text()`)
+      // …and a marker with NO payload (an older drag) falls back to the quoted
+      // text/plain, typed verbatim — the drop degrades, it never goes silent.
+      const dropFbSent = await dropOnPane('', 'FALLBACK-IS-THE-PAYLOAD')
+      await sleep(900)
+      const afterDropFb = await ES<string>(`window.__mogging.panes[0].text()`)
+      const dragOk =
+        payloadOk &&
+        dropRelSent && dropAbsSent && dropFbSent &&
+        countOf(afterDropRel, quotedRel) === countOf(beforeDrops, quotedRel) + 1 && // relative, computed by the pane
+        !afterDropRel.includes('FALLBACK-MUST-NOT-BE-TYPED') && // from the raw payload, not the fallback
+        countOf(afterDropAbs, quotedOutside) === 1 && // outside the cwd stays absolute
+        countOf(afterDropFb, 'FALLBACK-IS-THE-PAYLOAD') === 1 && // payload-less marker → the fallback, once
+        promptLines(afterDropFb) === 1 // Enter was never pressed, still
 
       // ── AA on the menu's inks ────────────────────────────────────────────────────
       await ES(`window.__mogging.explorer.menuFor(${JSON.stringify(mainTs)})`)
@@ -328,7 +373,7 @@ export function runFileActSmoke(win: BrowserWindow): void {
         hostileOk, hostileRows, survivors, domSafe, echoed,
         promptsAfterSend: promptLines(paneAfterSend), promptsAfterHostile: promptLines(paneAfterHostile),
         menuOk, menuKb,
-        dragOk, drag,
+        dragOk, payloadOk, drag, dropTail: afterDropFb.replace(/\n/g, '').slice(-200),
         aaOk, aaFailures: aa.failures, aaWorst: aa.worst, aaMissing: aa.missing,
         platform: process.platform
       }

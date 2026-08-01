@@ -26,6 +26,58 @@ files:
   # live INSIDE app.asar — no unpack. GRAMMARCAT pins every artifact's hash.
   - assets/grammars/**/*
   - package.json
+  # ── Native-module BUILD DEBRIS (docs/research/2026-07-installer-ux-audit.md §3a) ──
+  # `buildDependenciesFromSource: true` above is right for ABI safety, but it leaves the
+  # WHOLE MSVC build tree in node_modules, and asarUnpack shipped that tree verbatim:
+  # 73MB / 369 files in app.asar.unpacked, of which ~9MB is the .node files the app
+  # actually dlopens. v0.16.0 shipped better_sqlite3.iobj (14.6MB), sqlite3.lib (7.1MB),
+  # sqlite3.c TWICE (9.5MB each — deps/ and the obj/global_intermediate copy), four
+  # node-pty .iobj files and MSBuild's own .tlog logs. Every one is a compile-time
+  # artifact; nothing reads them at runtime, in any process, on any platform.
+  #
+  # The safety net is native-preflight.ts assertNativeModules(): at boot it require()s
+  # each wrapper AND dlopens every .node in that module's build/Release, calling fatal()
+  # (exit 1) on the first that will not load. A prune that took a real binary cannot
+  # reach a user — it kills the packaged app on the first launch of the first smoke.
+  - '!**/node_modules/**/*.{iobj,ipdb,ilk,exp,lib,pdb}'
+  - '!**/node_modules/**/*.tlog/**'
+  # `**/obj/**`, not just build/Release/obj — better-sqlite3 also emits build/deps/Release/obj
+  # for its vendored sqlite3, and a Release-only pattern walks straight past it.
+  - '!**/node_modules/*/build/**/obj/**'
+  - '!**/node_modules/*/build/**/obj.target/**'
+  # The MSVC project files node-gyp generates next to the outputs, and MSBuild's .recipe
+  # stamps. Inputs to a build that has already happened.
+  - '!**/node_modules/**/*.{vcxproj,filters,recipe,sln,gyp,gypi}'
+  # The compile INPUTS. better_sqlite3.node is the artifact and stays in build/Release;
+  # lib/database.js reaches it through `bindings`, which never looks in deps/ or src/.
+  - '!**/node_modules/better-sqlite3/deps/**'
+  - '!**/node_modules/better-sqlite3/src/**'
+  # test_extension.node is an SQLITE loadable extension, not a Node addon — a fixture for
+  # better-sqlite3's own test suite. Nothing in lib/ names it, and it is precisely the file
+  # native-preflight.ts calls out as the reason its better-sqlite3 entry is an allowlist
+  # (['better_sqlite3.node']) rather than a build/Release sweep: require()ing it throws
+  # ERR_DLOPEN_FAILED "Module did not self-register". Shipping a file whose only property is
+  # that it must never be loaded is not a thing to keep.
+  - '!**/node_modules/better-sqlite3/build/Release/test_extension.node'
+  # node-pty resolves build/Release FIRST (lib/utils.js:18-19 — 'build/Release',
+  # 'build/Debug', then prebuilds/) and the source build fills it, so prebuilds/ is dead
+  # weight in THIS tree. pty-host.ts DOES enable useConptyDll (the ConPTY 1.25 pin), and
+  # the dll pair it loads ships from build/Release/conpty — populated by
+  # build-node-helper.mjs's overlayConpty from the VENDORED pin (build/conpty/<ver>/) and
+  # byte-asserted by check-conpty-pin.mjs. third_party/ is node-pty's own bundled 1.23
+  # pair — the stale source the pin supersedes — so it stays dead weight on disk.
+  # NOTE this does NOT touch the HELPER's copy. That one ships via extraResources from
+  # build/node-helper/ (npm prebuilds, no source build) and DOES load out of prebuilds/;
+  # scripts/build-node-helper.mjs prunes it there, by host arch, and its load probe proves
+  # the result before a stamp is written.
+  - '!**/node_modules/node-pty/prebuilds/**'
+  - '!**/node_modules/node-pty/third_party/**'
+  - '!**/node_modules/node-pty/deps/**'
+  - '!**/node_modules/node-pty/src/**'
+  - '!**/node_modules/node-pty/scripts/**' # prebuild.js / post-install.js — build tooling
+  # Headers for node-gyp, plus each package's own test suite. Compile- and dev-time only.
+  - '!**/node_modules/node-addon-api/**'
+  - '!**/node_modules/**/*.test.js'
 # Native modules (node-pty, better-sqlite3) are unpacked so they load from disk at runtime.
 # bin/ joins them: those scripts are spawned as a SEPARATE plain-`node` process, and node has
 # no asar support — it cannot read a path inside app.asar. Unpacked, the path is a real file.
@@ -145,6 +197,16 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  # The FINISH PAGE owns the desktop shortcut now (build/installer.nsh customFinishPage):
+  # a checked-by-default checkbox instead of a silent side effect. Two things this fixes.
+  # (1) It is a CHOICE — v0.16.0 created one unconditionally and never asked.
+  # (2) It is offered on UPDATE too. The stock policy is FRESH_INSTALL
+  # (CommonWindowsInstallerConfiguration.js:34-43), so installer.nsh:216-245 only ever
+  # RENAMES an existing link on an update — a user who deleted theirs never got it back,
+  # through any number of updates. Uninstall is unaffected: uninstaller.nsh:194-195
+  # deletes $oldDesktopLink from the registry-recorded ShortcutName regardless of who
+  # created it, and the finish page writes exactly that path ($newDesktopLink).
+  createDesktopShortcut: false
   # Scrubs ELECTRON_RUN_AS_NODE + the MOGGING_* gate vars from the installer's environment
   # before it launches anything. See build/installer.nsh for the full story: an app that
   # inherits ELECTRON_RUN_AS_NODE=1 boots as plain Node and exits 0 without a window.

@@ -1,7 +1,8 @@
-import { EXPLORER_DRAG_TYPE, type PaneId } from '@contracts'
+import { EXPLORER_DRAG_TYPE, relativeToDir, type PaneId } from '@contracts'
 import { icon, showToast } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { getPaneRemote } from '../../core/layout/pane-meta'
+import { getPaneCwd } from '../../core/layout/pane-cwd'
 import { quoteDroppedPaths, quoteWithFlavor, recordDrop } from '../../core/clipboard/clipboard-port'
 import { terminalClient } from './terminal.client'
 
@@ -128,14 +129,10 @@ export function mountPaneDrop({ paneId, body, signal, focus }: PaneDropOptions):
     e.preventDefault()
     hide()
     if (hasOurPath(e)) {
-      // The explorer already quoted it for this machine's shell, and the quoter strips
-      // control characters — so this cannot carry a newline, and therefore cannot press
-      // Enter. Typed at the cursor, padded like a dropped file. Nothing runs.
-      const text = e.dataTransfer?.getData('text/plain') ?? ''
-      if (text) {
-        terminalClient.write({ id: paneId, data: ' ' + text + ' ' })
-        focus()
-      }
+      // Our marker carries the RAW absolute path; the insert is computed HERE, against
+      // the pane that actually received the drop (see insertExplorerPath). The quoted
+      // text/plain rides along as the fallback for a payload-less marker.
+      void insertExplorerPath(paneId, e.dataTransfer?.getData(EXPLORER_DRAG_TYPE) ?? '', e.dataTransfer?.getData('text/plain') ?? '', focus)
       return
     }
     void insertDroppedPaths(paneId, Array.from(e.dataTransfer?.files ?? []), focus)
@@ -147,6 +144,47 @@ export function mountPaneDrop({ paneId, body, signal, focus }: PaneDropOptions):
   for (const type of ['dragend', 'drop', 'blur'] as const) {
     window.addEventListener(type, () => hide(), { signal })
   }
+}
+
+/**
+ * A row dragged out of OUR explorer (11/06, recut 2026-07-31). The drag carries the RAW
+ * absolute path in the private type, and the insert is decided here — by the pane that
+ * actually received the drop: RELATIVE to THIS pane's cwd when the file sits under it
+ * (that is what a person types), ABSOLUTE otherwise, quoted for THIS pane's shell. The
+ * dragstart side used to bake all of that against the FOCUSED pane, which is not
+ * necessarily the drop target — and under worktree-per-agent isolation a sibling pane's
+ * cwd names a DIFFERENT copy of the same repo path, so the shortened path could silently
+ * point at the wrong worktree. The quoter strips control characters, so the inserted
+ * text cannot carry a newline and therefore cannot press Enter. Nothing runs.
+ */
+async function insertExplorerPath(paneId: PaneId, raw: string, quotedFallback: string, focus: () => void): Promise<void> {
+  if (!raw) {
+    // A marker with no payload (an older drag, or a synthetic one). The text/plain half
+    // was quoted by the explorer's own quoter — control-character-free — type it as-is.
+    if (quotedFallback) {
+      terminalClient.write({ id: paneId, data: ' ' + quotedFallback + ' ' })
+      focus()
+    }
+    return
+  }
+  if (getPaneRemote(paneId)) {
+    // This pane's shell — and its cwd — live on the ssh host; `raw` names a LOCAL file.
+    // Never relativize across namespaces: quote POSIX, absolute, and say it plainly
+    // (the same honesty insertDroppedPaths shows for an OS file drop).
+    showToast({
+      tone: 'info',
+      title: 'This pane is remote',
+      body: 'The inserted path points at a file on THIS machine — the remote host cannot see it unless a mount shares it.'
+    })
+    terminalClient.write({ id: paneId, data: ' ' + quoteWithFlavor([raw], 'posix') + ' ' })
+    focus()
+    return
+  }
+  const cwd = getPaneCwd(paneId) ?? ''
+  const rel = cwd ? relativeToDir(raw, cwd) : null
+  const quoted = await quoteDroppedPaths([rel ?? raw])
+  terminalClient.write({ id: paneId, data: ' ' + quoted + ' ' })
+  focus()
 }
 
 /** Resolve dropped Files to absolute paths, quote them for the pane's shell, and type

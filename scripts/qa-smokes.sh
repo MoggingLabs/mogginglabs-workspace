@@ -9,7 +9,7 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 206 gates: 31 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · BYTECODE · GRAMMARCAT) + 175 app-boot
+# 207 gates: 32 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 175 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -186,11 +186,11 @@ run_static AUDIT   node scripts/check-audit.mjs
 run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs
-# The preload allowlist: every channel map spread into AllChannels (a forgotten spread
 # The staged conpty.dll/OpenConsole.exe must byte-match the vendored pin — npm restages
 # the tarball's older pair on every install; a missed overlay is a silent downgrade of
 # every Windows pane's terminal backend (see build-node-helper.mjs CONPTY_PIN).
 run_static CONPTYPIN node scripts/check-conpty-pin.mjs
+# The preload allowlist: every channel map spread into AllChannels (a forgotten spread
 # refuses a whole feature IPC surface with nothing but "channel not allowed" to show).
 run_static CHANNELS node scripts/check-channels.mjs
 run_static AGENTCAT node scripts/check-agent-settings-catalog.mjs
@@ -312,6 +312,14 @@ run_static ORIGINPIN node scripts/check-originpin.mjs
 # fuse but does not enforce it). Packages itself (~3 min: build + electron-builder
 # --dir), same never-trust-what's-there law as PRODARTIFACT.
 run_static FUSES node scripts/check-fuses.mjs
+# WEIGHT: build debris does not ship (audit 2026-07-installer-ux-audit §8). Reads the
+# tree FUSES just packaged — no second electron-builder run — and refuses link
+# intermediates, .pdb symbols, MSBuild logs, compile inputs, prebuild-install's own
+# download tree and foreign-arch prebuilds, plus a size/file-count ceiling. v0.16.0
+# shipped 137MB and 916 files of exactly that, and NSIS writes every one of them TWICE
+# during an install, so this is install TIME, not just download size. Debris regrows
+# silently on every native-dep bump, which is why it is a gate and not a one-off fix.
+run_static WEIGHT node scripts/check-package-weight.mjs
 # BYTECODE: ADR 0015 §hardening — the shipped main process is V8 bytecode (friction
 # against casual reading, NEVER security — docs/18), the sandboxed preload is NOT
 # (preload bytecode forces sandbox:false, a trade we refuse), and the pinned
@@ -353,6 +361,10 @@ run_smoke FLICKER     MOGGING_FLICKER   1 240 flicker
 run_smoke PANESCROLL  MOGGING_PANESCROLL 1 300 panescroll
 run_smoke PANEFIT     MOGGING_PANEFIT   1 240 panefit
 run_smoke REATTACHFIT MOGGING_REATTACHFIT 1 120 reattachfit
+# The dims invariant (smeared-restore root cause): restore respawns at the persisted
+# grid; a typed resume waits for a MEASURED attach (dims-less spawns neither resize nor
+# release it); the headless grace still types it when no client ever measures.
+run_smoke RESTOREDIMS MOGGING_RESTOREDIMS 1 180 restoredims
 run_smoke APPSCROLL   MOGGING_APPSCROLL 1 180 appscroll
 run_smoke CONPTY      MOGGING_CONPTY    1 180 conpty
 run_smoke PERCEPTION  MOGGING_PERCEPTION 1 240 perception
@@ -362,10 +374,6 @@ run_smoke CONTROL2    MOGGING_CONTROL2  1 180 control2
 # RUNTIMESPLIT (ADR 0016): daemon/house-MCP/`mogging` all hosted by the standalone Node
 # helper, shims env-free, runAsNode:false declared. Release blocks on SURVIVE + CONTROL +
 # this (release.yml); the FUSES gate proves the same flip on the packaged artifact.
-# The dims invariant (smeared-restore root cause): restore respawns at the persisted
-# grid; a typed resume waits for a MEASURED attach (dims-less spawns neither resize nor
-# release it); the headless grace still types it when no client ever measures.
-run_smoke RESTOREDIMS MOGGING_RESTOREDIMS 1 180 restoredims
 run_smoke RUNTIMESPLIT MOGGING_RUNTIMESPLIT 1 240 runtimesplit
 run_smoke WORKTREE    MOGGING_WORKTREE  1 240 worktree
 run_smoke REVIEW      MOGGING_REVIEW    1 240 review

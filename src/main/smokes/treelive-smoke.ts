@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, unlinkSync, w
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WATCH_POOL_CAP } from '@backend/features/explorer'
-import { explorerWatchStats } from '../explorer'
+import { explorerWatchStats, setExplorerShellPortForSmoke } from '../explorer'
 
 // Env-gated liveness smoke (MOGGING_TREELIVE, Phase-11/04). The law: WATCH WHAT'S
 // VISIBLE, NOTHING ELSE. Every write below is a REAL fs write from the main process —
@@ -18,7 +18,12 @@ import { explorerWatchStats } from '../explorer'
 //       tier still comes alive when touched;
 //   (e) a HIDDEN window watches nothing (0 batches while blind) and re-shows with ONE
 //       reconcile pass that catches everything it missed;
-//   (f) a CLOSED explorer reports 0 handles and 0 polls.
+//   (f) a CLOSED explorer reports 0 handles and 0 polls;
+//   (g) REOPENING it (same workspace) re-arms everything the close tore down — the
+//       pool rebuilds, a fresh write reaches the screen, and the action guard
+//       dispatches an open instead of refusing "outside-root";
+//   (h) a dir mutated while COLLAPSED (unwatched) re-lists on expand — the cache
+//       follows the watcher, so a stale copy can never resurrect ghost rows.
 // Verdict: out/treelive-result.json.
 
 const TORRENT_DIRS = 5
@@ -279,7 +284,60 @@ export function runTreeLiveSmoke(win: BrowserWindow): void {
       const shutStats = explorerWatchStats()
       const shutOk = shutStats.handles === 0 && shutStats.polls === 0
 
-      const pass = closedZero && watchingOk && liveOk && collapsedOk && torrentOk && poolOk && hiddenOk && shutOk
+      // ── (g) REOPEN, same workspace: everything re-arms ───────────────────────
+      // The wedge this gates: close tears down the pool, the action guard, and the git
+      // registration, but the renderer keeps wsId/rootPath — a reopen that early-returns
+      // on "already there" leaves the dock a still photograph whose actions all refuse
+      // with "outside this folder". Reopen must (1) rebuild the pool, (2) deliver live
+      // changes again, and (3) let the REAL main-process guard dispatch an open.
+      const shellCalls: string[] = []
+      setExplorerShellPortForSmoke({
+        openPath: async (p) => {
+          shellCalls.push(p)
+          return ''
+        },
+        showItemInFolder: () => undefined
+      })
+      await ES(`window.__mogging.explorer.toggle(true)`)
+      await sleep(900)
+      const reopenStats = explorerWatchStats() // expanded is still [live] → root + live
+      // `AAB-…` sorts to the top on purpose (the AGENT-NEW rationale): rows virtualize,
+      // and reveal() can only scroll to a row the batch actually spliced into the model.
+      writeFileSync(join(fx.live, 'AAB-REOPENED.txt'), 'written after a reopen\n')
+      let reopenLanded = false
+      for (let i = 0; i < 10 && !reopenLanded; i++) {
+        await sleep(400)
+        await ES(`window.__mogging.explorer.reveal(${JSON.stringify(join(fx.live, 'AAB-REOPENED.txt'))})`)
+        reopenLanded = await ES<boolean>(`window.__mogging.explorer.rowNames().includes('AAB-REOPENED.txt')`)
+      }
+      const openRes = await ES<{ ok: boolean; reason?: string }>(
+        `window.__mogging.explorer.osOpen(${JSON.stringify(join(fx.live, 'AAB-REOPENED.txt'))})`
+      )
+      setExplorerShellPortForSmoke(null)
+      const reopenOk =
+        reopenStats.handles === 2 && reopenStats.polls === 0 && // the pool re-armed, exactly the visible set
+        reopenLanded && // …and it DELIVERS: a post-reopen write reaches the screen
+        openRes.ok === true && shellCalls.length === 1 // …and the action guard re-armed too
+
+      // ── (h) collapse FORGETS: a dir mutated while unwatched re-lists on expand ──
+      // Collapsing drops the dir from the watch set, and main forgets its listing
+      // signature with it — so a cached renderer copy would go stale silently and
+      // re-expanding would resurrect ghost rows. The cache must follow the watcher.
+      await ES(`window.__mogging.explorer.setExpanded([])`) // collapse all, through the real drop path
+      await sleep(500)
+      unlinkSync(join(fx.live, 'f050.txt')) // the agent strikes while nobody watches `live`
+      await sleep(1200) // past any coalesce window — no batch should carry this
+      await ES(`window.__mogging.explorer.expand(${JSON.stringify(fx.live)})`)
+      await sleep(800)
+      // Anchor the virtualized window AT the neighbourhood: f051 must be there (the fresh
+      // listing landed, the window shows it) and f050 must not (the ghost died with the cache).
+      await ES(`window.__mogging.explorer.reveal(${JSON.stringify(join(fx.live, 'f051.txt'))})`)
+      await sleep(300)
+      const staleNames = await ES<string[]>(`window.__mogging.explorer.rowNames()`)
+      const collapseForgetsOk = staleNames.includes('f051.txt') && !staleNames.includes('f050.txt')
+
+      const pass =
+        closedZero && watchingOk && liveOk && collapsedOk && torrentOk && poolOk && hiddenOk && shutOk && reopenOk && collapseForgetsOk
       result = {
         pass,
         closedZero, closedStats,
@@ -291,6 +349,8 @@ export function runTreeLiveSmoke(win: BrowserWindow): void {
         hiddenOk, hiddenStats, blindBatchCount: blindBatches.length, blindMs,
         resumeBatchCount: resumeBatches.length, shownStats,
         shutOk, shutStats,
+        reopenOk, reopenStats, reopenLanded, openRes, shellCallCount: shellCalls.length,
+        collapseForgetsOk, staleNames: staleNames.filter((n) => n === 'f050.txt' || n === 'f051.txt'),
         platform: process.platform
       }
     } catch (e) {
