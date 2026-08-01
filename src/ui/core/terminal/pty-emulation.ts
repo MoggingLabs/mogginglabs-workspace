@@ -18,13 +18,14 @@ import type { PtyEmulation } from '@contracts'
  * It is not the same constant that chose the backend — which is precisely why neither is
  * recomputed here.
  *
- * KNOWN STRUCTURAL LIMIT (do not chase as a renderer bug): a WIDTH shrink that re-wraps long
- * lines can ERASE up to a viewport's worth of recent output ("blank band in the middle of
- * the pane"). ConPTY's internal buffer is viewport-sized — scrollback exists only in xterm —
- * so conhost discards what its own re-wrap overflows and its answering repaint erases those
- * rows in xterm too. Measured identical with reflow on AND off (build 26200), so no value
- * of this option prevents it; only conhost keeping real scrollback would. The CONPTY gate's
- * width phase pins the bounded-band contract that DOES hold.
+ * WIDTH-RESIZE HISTORY (do not chase as a renderer bug): the OS's ConPTY v1 ERASES up to a
+ * viewport of recent output on a width shrink that re-wraps long lines — its buffer is
+ * viewport-sized, conhost discards its re-wrap overflow, and the repaint erases those rows
+ * in xterm too ("blank band in the middle of the pane"). Measured identical with reflow on
+ * AND off, so no value of THIS option prevents it. The actual fix lives in pty-host.ts:
+ * node-pty's bundled ConPTY v2 (useConptyDll) removed that machinery — the CONPTY gate's
+ * width phase measured lost 18-27/120 wrapped markers on v1, 0 on v2 — and the gate's
+ * bounded-band contract keeps the v1 fallback (MOGGING_CONPTY_V1) sweepable too.
  */
 export function windowsPtyFor(pty: PtyEmulation): { backend: 'conpty'; buildNumber: number } | undefined {
   return pty.backend === 'conpty' ? { backend: 'conpty', buildNumber: pty.buildNumber } : undefined

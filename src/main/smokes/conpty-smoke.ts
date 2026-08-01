@@ -24,18 +24,18 @@ import { app, type BrowserWindow } from 'electron'
 // support floor pty-host enforces, NOT xterm's 21376 reflow threshold (CI's windows-latest is
 // Server 2022 / build 20348, where reflow-off is xterm's correct conservative path).
 //
-// THE WIDTH PHASE (2026-08-01). Width is gated SEPARATELY because its correctness bar is
-// structurally lower, and the gate must say so rather than pretend: ConPTY's internal buffer
-// is VIEWPORT-SIZED (scrollback exists only in xterm), so a width shrink that re-wraps long
-// lines overflows conhost's own buffer, conhost DISCARDS the overflow, and its answering
-// repaint erases those rows in xterm too. Measured on build 26200: a 120-long-marker narrow
-// crossing loses a contiguous band of ~27 trailing markers — identically with xterm reflow
-// on and off (proven both ways), so no renderer configuration can prevent it; only conhost
-// keeping real scrollback would ("blank space in the middle of the pane" as reported). What
-// IS ours to guarantee, and what this phase pins: survivors stay ONCE and IN ORDER (no
-// splice, no duplication), the loss is AT MOST ONE contiguous band bounded by ~two narrow
-// viewports, and no blank rows are left between surviving lines. A regression anywhere in
-// our stack (windowsPty, fit, replay) breaks one of those long before it breaks nothing.
+// THE WIDTH PHASE (2026-08-01). The OS's ConPTY v1 ERASES up to a viewport of output on a
+// width shrink that re-wraps long lines: its buffer is VIEWPORT-SIZED (scrollback exists
+// only in xterm), conhost discards its re-wrap overflow, and its repaint erases those rows
+// in xterm too — measured here as a contiguous band of 18-27 lost markers of 120, identical
+// with xterm reflow on and off ("blank space in the middle of the pane" as reported). The
+// FIX is pty-host.ts's useConptyDll: node-pty's bundled ConPTY v2 (Windows Terminal 1.22's
+// backend) removed that machinery, and this phase measured lost: 0 under it. The assertion
+// is deliberately the BOUNDED-BAND contract rather than lost===0, because the v1 fallback
+// (MOGGING_CONPTY_V1=1, the kill switch) must stay sweepable: survivors ONCE and IN ORDER
+// (a splice or duplication is OUR bug at any conpty version), at most ONE contiguous lost
+// band under ~two narrow viewports, and zero blank rows between surviving lines. `lost` is
+// reported in the verdict, so a v2 regression back to nonzero loss is visible at a glance.
 const MARKS = 120
 const WIDTH_MARKS = 120
 /** Loss ceiling for the width crossing: ~2 narrow viewports of wrapped long lines. */

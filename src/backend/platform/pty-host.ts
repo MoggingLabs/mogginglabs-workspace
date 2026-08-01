@@ -76,7 +76,22 @@ export function spawnPty(
   const proc = pty.spawn(file, args, {
     ...opts,
     // Windows only; node-pty ignores it elsewhere. Explicit = we own the decision.
-    ...(process.platform === 'win32' ? { useConpty: true } : {})
+    //
+    // useConptyDll loads node-pty's BUNDLED ConPTY (Windows Terminal 1.22's rewritten
+    // backend — conpty.dll + OpenConsole.exe, staged into the helper's node_deps) instead
+    // of the OS's kernel32 ConPTY v1. This is the fix for width-resize DATA LOSS: v1's
+    // buffer is viewport-sized, so a shrink that re-wraps long lines overflows it,
+    // conhost discards the overflow, and its repaint erases those rows in xterm too (the
+    // "blank band mid-pane" report). v2 removed that machinery — "we simply don't need
+    // to do anything during a reflow anymore" — and the CONPTY gate's width phase
+    // measures the difference: lost 18-27 of 120 wrapped markers on v1, lost 0 on v2.
+    // Same road VS Code ships (terminal.integrated.windowsUseConptyDll). The env var is
+    // the kill switch if a machine misbehaves — set MOGGING_CONPTY_V1=1 to fall back;
+    // the width gate's bounded-band contract still passes on v1, so both paths stay
+    // sweepable.
+    ...(process.platform === 'win32'
+      ? { useConpty: true, useConptyDll: process.env.MOGGING_CONPTY_V1 !== '1' }
+      : {})
   })
   return { proc, emulation: ptyEmulation() }
 }
