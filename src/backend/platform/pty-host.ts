@@ -89,6 +89,17 @@ export function spawnPty(
     // the kill switch if a machine misbehaves — set MOGGING_CONPTY_V1=1 to fall back;
     // the width gate's bounded-band contract still passes on v1, so both paths stay
     // sweepable.
+    //
+    // KNOWN v2 RESIDUAL (characterized 2026-08-01 by screenshot matrix; upstream class:
+    // microsoft/terminal#15976 "ConPTY buffer gets out-of-sync"): CONSOLE-API output
+    // (cmd's dir, its prompt echo) typed AFTER a narrow-width crossing can paint at
+    // OFFSET rows over preserved history — conhost pads console rows to buffer width,
+    // so v2's internal rewrap counts padded width while every VT terminal wraps content
+    // width, and their cursor-row accounting drifts. Proven independent of xterm config
+    // (identical with reflow on, off, and no windowsPty). VT-native apps (claude, any
+    // TUI) re-paint their own frames and self-heal — the agent path stays clean. v1 does
+    // not have this drift because its destructive repaint ERASES the history the drift
+    // would land on; we chose data preservation. Do not chase this as a renderer bug.
     ...(process.platform === 'win32'
       ? { useConpty: true, useConptyDll: process.env.MOGGING_CONPTY_V1 !== '1' }
       : {})
