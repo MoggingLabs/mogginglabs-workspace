@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { AGENT_CLI_REGISTRY, type AgentCliDefinition } from '@backend/core/agent-clis'
-import { signInTarget } from '@backend/features/agents'
+// The SUBPATH, never the barrel: @backend/features/agents re-exports install.ts, whose
+// import chain reaches node-pty — a native module the CI unit job does not build. The
+// barrel import loaded fine on this Windows box and killed the suite on Ubuntu at
+// import time (run 30680097418), which is exactly why every unit test here imports the
+// module it tests directly.
+import { signInTarget } from '@backend/features/agents/adapters'
 
 /**
  * ONE FACT, TWO SHAPES — and a gate so they cannot drift apart.
