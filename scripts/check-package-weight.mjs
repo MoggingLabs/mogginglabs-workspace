@@ -43,10 +43,15 @@ if (!existsSync(appDir)) {
   process.exit(1)
 }
 
-// Ceilings for the WHOLE unpacked tree. Post-prune it measures ~481MB / ~210 files; Electron
-// itself is ~330MB of that and the pinned Node helper another 88MB, so the floor is high and
-// the movement to watch for is in the hundreds of files, not the tens.
-const MAX_MB = 560
+// Ceilings for the WHOLE unpacked tree. Post-prune the win/linux tree measures ~481MB /
+// ~210 files; Electron itself is ~330MB of that and the pinned Node helper another 88MB,
+// so the floor is high and the movement to watch for is in the hundreds of files, not the
+// tens. macOS gets its own ceiling: the first mac weigh-in (2026-08-01, run 30710089843)
+// measured 593MB with ZERO forbidden shapes — Electron.app's framework and the darwin
+// Node helper are simply bigger — so 620 keeps the same ~5% headroom the others have.
+// The ceiling is only the backstop; the FORBIDDEN scan below is the diagnostic, and it
+// stays platform-blind on purpose.
+const MAX_MB = process.platform === 'darwin' ? 620 : 560
 const MAX_FILES = 400
 
 // Extensions and paths that must never appear in a shipped tree, with the reason each one is

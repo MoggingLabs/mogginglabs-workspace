@@ -95,7 +95,12 @@ export function runDefaultsUxSmoke(win: BrowserWindow): void {
         [...document.querySelectorAll('.modal button')].find((button) => button.textContent?.includes('Manage everywhere'))?.click();
       })()`)
       const managedBadge = await waitTrue(`!!(${rowScript('autoCompactEnabled')})?.querySelector('.agentcfg-setting-badges')?.textContent?.includes('Account default')`, 90)
-      const stopManaging = await execute<boolean>(`!![...((${rowScript('autoCompactEnabled')})?.querySelectorAll('button') || [])].find((button) => button.textContent?.includes('Stop managing everywhere'))`)
+      // POLLED, never a one-shot: every `changed` push from the fan-out re-runs load(),
+      // which blanks the whole panel to a spinner — a one-shot read landing inside that
+      // window sees no row at all, and the badge and this button are rendered from the
+      // SAME value in the SAME pass, so "badge true, button false" only ever meant "you
+      // read mid-reload" (the exact windows-CI signature this went red with).
+      const stopManaging = await waitTrue(`!![...((${rowScript('autoCompactEnabled')})?.querySelectorAll('button') || [])].find((button) => button.textContent?.includes('Stop managing everywhere'))`, 90)
       // Value-agnostic: the switch started from the catalog default — assert every
       // home AGREES on whatever the first save produced, not on a guessed literal.
       // POLLED, like secondSaved below: the fan-out to the secondary homes is async,
@@ -113,14 +118,32 @@ export function runDefaultsUxSmoke(win: BrowserWindow): void {
       }
 
       // 3) The second save is QUIET — rememberKey — and still lands everywhere.
-      await execute(`(() => {
-        const row = ${rowScript('autoCompactEnabled')};
-        row?.querySelector('.switch-input')?.click();
-        [...(row?.querySelectorAll('button') || [])].find((button) => button.textContent?.trim() === 'Save')?.click();
-      })()`)
-      await sleep(700)
+      // The click REPORTS whether it clicked, and retries until the panel is actually
+      // showing the row (a push-driven reload blanks it): the old fire-and-forget
+      // `row?.…click()` was a silent no-op mid-spinner, and every assertion after it
+      // failed over a save that never happened. Atomic per attempt — both controls are
+      // located BEFORE either is clicked, so a retry can never double-toggle the switch.
+      const secondSaveClicked = await waitTrue(
+        `(() => {
+          const row = ${rowScript('autoCompactEnabled')};
+          const save = [...(row?.querySelectorAll('button') || [])].find((button) => button.textContent?.trim() === 'Save');
+          if (!row || !save) return false;
+          row.querySelector('.switch-input')?.click();
+          save.click();
+          return true;
+        })()`,
+        90
+      )
+      // The quiet-assertion is an ABSENCE, and an absence read before anything happened
+      // passes vacuously — wait for the save's primary write to land first.
+      let primaryFlipped = false
+      for (let index = 0; index < 40 && !primaryFlipped; index += 1) {
+        primaryFlipped = autoIn(files.primary) === !firstValue
+        if (!primaryFlipped) await sleep(200)
+      }
       const secondSaveQuiet = await execute<boolean>(`![...document.querySelectorAll('.modal button')].find((button) => button.textContent?.includes('Manage everywhere'))`)
-      const secondSaved = await waitTrue(`(${rowScript('autoCompactEnabled')})?.querySelector('.agentcfg-setting-badges')?.textContent?.includes('Account default')`, 90) &&
+      const secondSaved = secondSaveClicked && primaryFlipped &&
+        await waitTrue(`(${rowScript('autoCompactEnabled')})?.querySelector('.agentcfg-setting-badges')?.textContent?.includes('Account default')`, 90) &&
         await (async () => {
           for (let index = 0; index < 40; index += 1) {
             if (autoIn(files.primary) === !firstValue && autoIn(files.a) === !firstValue && autoIn(files.b) === !firstValue) return true
@@ -155,8 +178,13 @@ export function runDefaultsUxSmoke(win: BrowserWindow): void {
       })()`)
       const pinnedBadge = await waitTrue(`!!(${rowScript('autoCompactEnabled')})?.querySelector('.agentcfg-setting-badges')?.textContent?.includes('Pinned')`, 90)
       // The pin flipped ONLY its own home back to firstValue; the default (now
-      // !firstValue after save 2) still owns the other two.
-      const pinMovedOneHome = autoIn(files.a) === firstValue && autoIn(files.primary) === !firstValue && autoIn(files.b) === !firstValue
+      // !firstValue after save 2) still owns the other two. POLLED like every other
+      // file assertion in this smoke — this was the one one-shot triple read left.
+      let pinMovedOneHome = false
+      for (let index = 0; index < 40 && !pinMovedOneHome; index += 1) {
+        pinMovedOneHome = autoIn(files.a) === firstValue && autoIn(files.primary) === !firstValue && autoIn(files.b) === !firstValue
+        if (!pinMovedOneHome) await sleep(200)
+      }
       const resetReady = await execute<boolean>(`!![...((${rowScript('autoCompactEnabled')})?.querySelectorAll('button') || [])].find((button) => button.textContent?.includes('Reset to default'))`)
       await execute(`[...((${rowScript('autoCompactEnabled')})?.querySelectorAll('button') || [])].find((button) => button.textContent?.includes('Reset to default'))?.click()`)
       const reinherited = await (async () => {

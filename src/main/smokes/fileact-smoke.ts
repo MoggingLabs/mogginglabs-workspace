@@ -1,8 +1,8 @@
-import { app, clipboard, type BrowserWindow } from 'electron'
+import { app, clipboard, ipcMain, type BrowserWindow } from 'electron'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { quotePathForShell, type ShellFlavor } from '@contracts'
+import { TerminalChannels, quotePathForShell, type ShellFlavor } from '@contracts'
 import { setExplorerShellPortForSmoke, type ExplorerShellPort } from '../explorer'
 import { probeContrastAcrossThemes, type AaProbeResult } from './aa-probe'
 
@@ -78,31 +78,12 @@ function makeFixture(): Fixture {
   return { root, outside, hostile }
 }
 
-/**
- * How many PROMPTS the pane has printed. This is the crispest possible proof that Enter was
- * never pressed: a shell prints a fresh prompt after every command it runs, so no matter how
- * many paths we type into it, the count must stay at ONE. We type; the user executes.
- */
-function promptLines(buffer: string): number {
-  if (process.platform === 'win32') {
-    // xterm WRAPS buffer rows, and cmd's prompt is the full fixture path — long enough on a
-    // CI runner (deep temp dirs, narrow pane) that `project>` itself splits across two rows.
-    // A per-line test then counts ZERO prompts and the gate fails arithmetic it never meant
-    // to test. Count occurrences in the rejoined stream: the marker only ever comes from the
-    // prompt (no fixture name contains it), so occurrences == prompts.
-    return (buffer.replace(/\n/g, '').match(/project>/g) ?? []).length
-  }
-  const marker = /[$%#]\s*$|project.*[$%#]/
-  const perLine = buffer.split('\n').filter((l) => marker.test(l.trim())).length
-  if (perLine > 0) return perLine
-  // The POSIX prompt wraps too, on hosts with very long hostnames (the CI mac runner's spans
-  // a full row): 'project' and the '$' land on different rows and the per-line test counts
-  // ZERO prompts that are plainly on screen. Fall back to counting prompt occurrences in the
-  // de-wrapped stream — fallback only, because de-wrapped matching is looser about what sits
-  // between the marker and the sigil. (Typed fixture content never contains 'project': the
-  // sends are all src/-relative.)
-  return (buffer.replace(/\n/g, '').match(/project[^$%#]*[$%#]/g) ?? []).length
-}
+// (The old promptLines heuristic — "still exactly one prompt after N sends" — lived here.
+// It died on 2026-08-01: ConPTY's repaint of a narrow CI grid rewrote the prompt's own
+// buffer row mid-needle, and the gate failed arithmetic it never meant to test, on every
+// windows runner, over a pane that plainly had one prompt. The Enter-proof now reads the
+// renderer→PTY WRITE CHANNEL instead — see the rendererWrites capture below: bytes on a
+// wire cannot be repainted.)
 
 export function runFileActSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 300000) // safety net
@@ -122,6 +103,25 @@ export function runFileActSmoke(win: BrowserWindow): void {
     }
   }
   setExplorerShellPortForSmoke(port)
+
+  // The renderer→PTY write capture (the remote-smoke precedent). Every send and drop below
+  // is asserted on the EXACT BYTES the renderer wrote, not on scraping the pane's buffer:
+  // ConPTY repaints a narrow CI grid aggressively enough to shred a prompt needle mid-line
+  // (the old promptLines heuristic read ZERO prompts over a buffer that plainly had one),
+  // while the write channel cannot be repainted. Focus reports (ESC[I/O, mode 1004) and
+  // other pure control responses ride the same channel — the typed-write filter keeps only
+  // content-bearing writes, and the CANNOT-PRESS-ENTER law is asserted over every captured
+  // write of the whole run: nothing this smoke does may ever put a \r or \n on the wire.
+  const rendererWrites: { id: number; data: string }[] = []
+  const onRendererWrite = (_event: unknown, payload: { id?: number; data?: string }): void => {
+    rendererWrites.push({ id: Number(payload?.id), data: String(payload?.data ?? '') })
+  }
+  ipcMain.on(TerminalChannels.write, onRendererWrite)
+  const typedWrites = (from: number): string[] =>
+    rendererWrites
+      .slice(from)
+      .map((w) => w.data)
+      .filter((d) => !/^\x1b[[\]?]/.test(d)) // control responses/reports, never typed content
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
@@ -190,6 +190,7 @@ export function runFileActSmoke(win: BrowserWindow): void {
       await sleep(300)
       const quotedRel = quotePathForShell(relExpected, flavor) // the pane's cwd IS the root
       const insertText = await ES<string>(`window.__mogging.explorer.insertTextFor(${JSON.stringify(mainTs)})`)
+      let mark = rendererWrites.length
       await ES(`window.__mogging.explorer.sendToPane(${JSON.stringify(mainTs)})`)
       await sleep(1200)
       const paneAfterSend = await ES<string>(`window.__mogging.panes[0].text()`)
@@ -197,14 +198,19 @@ export function runFileActSmoke(win: BrowserWindow): void {
       // so the logical input line is split across buffer rows. Rejoin them before looking —
       // "the last non-empty line" would otherwise be a fragment of the thing we typed.
       const flatBuffer = paneAfterSend.replace(/\n/g, '')
+      const sendWrites = typedWrites(mark)
       const sendOk =
         insertText === quotedRel && // the exact quoted text…
-        !/[\r\n]/.test(insertText) && // …carrying NO carriage return: it cannot press Enter
-        flatBuffer.includes(quotedRel) && // …and it landed on the pane's input line
-        promptLines(paneAfterSend) === 1 // …where nothing ran (a second prompt would mean it did)
+        sendWrites.length === 1 &&
+        sendWrites[0] === ' ' + quotedRel + ' ' && // …is the ONLY thing that reached the wire, byte for byte…
+        flatBuffer.includes(quotedRel) // …and it landed on the pane's input line
+      // (Enter-was-never-pressed is asserted ONCE, globally, at the end: no captured write
+      // of the whole run may carry \r or \n — the wire cannot be repainted, unlike the
+      // prompt-count heuristic ConPTY shredded on narrow CI grids.)
 
       // ── (d) hostile names, end to end ────────────────────────────────────────────
       const hostileRows: Record<string, unknown>[] = []
+      mark = rendererWrites.length
       for (const name of F.hostile) {
         const p = join(F.root, 'src', name)
         const quoted = quotePathForShell(join('src', name), flavor)
@@ -214,6 +220,7 @@ export function runFileActSmoke(win: BrowserWindow): void {
         hostileRows.push({ name, quoted, got, matches: got === quoted })
       }
       await sleep(1500)
+      const hostileWrites = typedWrites(mark)
       const paneAfterHostile = await ES<string>(`window.__mogging.panes[0].text()`)
       // The HTML-tag name only exists where the filesystem allows it — Windows forbids
       // `<`, `>` and `"` in filenames outright, so there it is not an attack surface at all
@@ -241,7 +248,9 @@ export function runFileActSmoke(win: BrowserWindow): void {
         hostileRows.length > 0 &&
         hostileRows.every((r) => r.matches === true) && // each is ONE quoted argument
         !echoed && // no shell metacharacter ever fired
-        promptLines(paneAfterHostile) === 1 && // ENTER WAS NEVER PRESSED: still one prompt, after 7 sends
+        // …and the WIRE agrees: exactly one padded quoted word per send, in order.
+        hostileWrites.length === hostileRows.length &&
+        hostileWrites.every((w, i) => w === ' ' + (hostileRows[i] as { quoted: string }).quoted + ' ') &&
         !domSafe.pwned && !domSafe.injected && // no script ran, no element was injected
         domSafe.rendered !== false && // …and where the tag name CAN exist, it rendered as text
         // …and every fixture file is still on disk. A shell that had run `$(rm -rf …)` or
@@ -318,32 +327,37 @@ export function runFileActSmoke(win: BrowserWindow): void {
           body.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
           return true
         })()`)
-      const countOf = (haystack: string, needle: string): number => haystack.replace(/\n/g, '').split(needle).length - 1
-
-      // An IN-CWD file types RELATIVE — to the cwd of the pane that RECEIVED the drop
-      // (count-delta: the send arm already put one quotedRel in this buffer)…
-      const beforeDrops = await ES<string>(`window.__mogging.panes[0].text()`)
+      // Each drop is asserted on the exact write it produced (the wire cannot be
+      // repainted; a narrow CI grid wraps the long absolute path mid-needle).
+      // An IN-CWD file types RELATIVE — to the cwd of the pane that RECEIVED the drop…
+      mark = rendererWrites.length
       const dropRelSent = await dropOnPane(mainTs, 'FALLBACK-MUST-NOT-BE-TYPED')
       await sleep(900)
-      const afterDropRel = await ES<string>(`window.__mogging.panes[0].text()`)
+      const relDropWrites = typedWrites(mark)
       // …an OUTSIDE path types ABSOLUTE, honestly — never a fake relative…
       const quotedOutside = quotePathForShell(F.outside, flavor)
+      mark = rendererWrites.length
       const dropAbsSent = await dropOnPane(F.outside, 'FALLBACK-MUST-NOT-BE-TYPED')
       await sleep(900)
-      const afterDropAbs = await ES<string>(`window.__mogging.panes[0].text()`)
+      const absDropWrites = typedWrites(mark)
       // …and a marker with NO payload (an older drag) falls back to the quoted
       // text/plain, typed verbatim — the drop degrades, it never goes silent.
+      mark = rendererWrites.length
       const dropFbSent = await dropOnPane('', 'FALLBACK-IS-THE-PAYLOAD')
       await sleep(900)
+      const fbDropWrites = typedWrites(mark)
       const afterDropFb = await ES<string>(`window.__mogging.panes[0].text()`)
       const dragOk =
         payloadOk &&
         dropRelSent && dropAbsSent && dropFbSent &&
-        countOf(afterDropRel, quotedRel) === countOf(beforeDrops, quotedRel) + 1 && // relative, computed by the pane
-        !afterDropRel.includes('FALLBACK-MUST-NOT-BE-TYPED') && // from the raw payload, not the fallback
-        countOf(afterDropAbs, quotedOutside) === 1 && // outside the cwd stays absolute
-        countOf(afterDropFb, 'FALLBACK-IS-THE-PAYLOAD') === 1 && // payload-less marker → the fallback, once
-        promptLines(afterDropFb) === 1 // Enter was never pressed, still
+        relDropWrites.length === 1 && relDropWrites[0] === ' ' + quotedRel + ' ' && // relative, computed by the pane
+        absDropWrites.length === 1 && absDropWrites[0] === ' ' + quotedOutside + ' ' && // outside the cwd stays absolute
+        fbDropWrites.length === 1 && fbDropWrites[0] === ' FALLBACK-IS-THE-PAYLOAD ' // payload-less marker → the fallback, verbatim
+
+      // THE LAW, asserted over the WHOLE run's wire: nothing this smoke did — sends,
+      // hostile names, drops, fallbacks — ever put a carriage return or newline on the
+      // write channel. This is the cannot-press-Enter guarantee in its strongest form.
+      const neverEnter = typedWrites(0).every((w) => !/[\r\n]/.test(w))
 
       // ── AA on the menu's inks ────────────────────────────────────────────────────
       await ES(`window.__mogging.explorer.menuFor(${JSON.stringify(mainTs)})`)
@@ -363,17 +377,18 @@ export function runFileActSmoke(win: BrowserWindow): void {
       // theme is a hook that rotted, and a green gate over nothing measured is a lie.
       const aaOk = aa.failures.length === 0 && aa.missing.length === 0
 
-      const pass = delegateOk && refusalsOk && copyOk && sendOk && hostileOk && menuOk && dragOk && aaOk
+      const pass = delegateOk && refusalsOk && copyOk && sendOk && hostileOk && menuOk && dragOk && neverEnter && aaOk
       result = {
         pass,
         delegateOk, spy, openRes, revealRes,
         refusalsOk, outsideRes, goneRes, junkRes,
         copyOk, copiedAbs, copiedRel, relExpected,
-        sendOk, insertText, quotedRel, paneTail: flatBuffer.slice(-120),
-        hostileOk, hostileRows, survivors, domSafe, echoed,
-        promptsAfterSend: promptLines(paneAfterSend), promptsAfterHostile: promptLines(paneAfterHostile),
+        sendOk, insertText, quotedRel, sendWrites, paneTail: flatBuffer.slice(-120),
+        hostileOk, hostileRows, hostileWrites, survivors, domSafe, echoed,
         menuOk, menuKb,
-        dragOk, payloadOk, drag, dropTail: afterDropFb.replace(/\n/g, '').slice(-200),
+        dragOk, payloadOk, drag, relDropWrites, absDropWrites, fbDropWrites,
+        neverEnter, writeCount: rendererWrites.length,
+        dropTail: afterDropFb.replace(/\n/g, '').slice(-200),
         aaOk, aaFailures: aa.failures, aaWorst: aa.worst, aaMissing: aa.missing,
         platform: process.platform
       }

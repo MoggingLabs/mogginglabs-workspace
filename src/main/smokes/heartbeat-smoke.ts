@@ -90,23 +90,49 @@ export async function runHeartbeatSmoke(): Promise<void> {
     r.lossJournaled = readClientLog().includes('heartbeat-lost')
 
     // ── B. busy + muted: streaming output is liveness — the client must NOT be shot ──────
+    // TWO clients, deliberately. The old single-client shape armed a 300ms heartbeat
+    // (shoots at ~900ms of inbound silence) at `welcome`, then sat through TWO unbounded
+    // Windows-slow gaps — ConPTY creation inside the spawn reply, and cmd.exe's first
+    // output — with nothing refreshing liveness while the daemon's pongs were muted. On a
+    // loaded runner either gap alone exceeds 900ms, and the client under test was shot
+    // before the torrent existed: measuring runner cold-start, not the busy-is-alive law.
+    // So a BOOTSTRAP client (heartbeat explicitly off) pays the cold-start bill and gets
+    // the pane STREAMING first; only then does the measured client attach — its inbound
+    // stream is live from the first millisecond, which is the shape the law is about.
+    let ticks = 0
+    const bootB = new DaemonClient(
+      ep,
+      {
+        onData: (id, d) => {
+          if (id === '9902' && d.includes('mogging-tick')) ticks++
+        }
+      },
+      { kind: 'app', heartbeatMs: 0 }
+    )
+    clients.push(bootB)
+    await bootB.connect()
+    await bootB.spawn('9902', { cwd: '' })
+    // A command that streams forever; the pane's data messages keep lastSeen fresh.
+    const torrent =
+      process.platform === 'win32' ? 'for /l %i in () do @echo mogging-tick\r' : 'while :; do echo mogging-tick; done\n'
+    bootB.input('9902', torrent)
+    const bootDeadline = Date.now() + 20_000 // generous: ConPTY start-up is the slow part
+    while (ticks === 0 && Date.now() < bootDeadline) await delay(100)
+    r.paneStreamed = ticks > 0 // an environment death here must read as ITS OWN flag, not busyNotShot's
     let bClosed = 0
     const clientB = new DaemonClient(ep, { onClose: () => bClosed++ }, { kind: 'app', heartbeatMs: 300 })
     clients.push(clientB)
     await clientB.connect()
-    await clientB.spawn('9902', { cwd: '' })
-    // A command that streams forever; the pane's data messages keep lastSeen fresh.
-    const torrent =
-      process.platform === 'win32' ? 'for /l %i in () do @echo mogging-tick\r' : 'while :; do echo mogging-tick; done\n'
-    clientB.input('9902', torrent)
+    clientB.attach('9902') // replies immediately; the live stream refreshes lastSeen from the start
     const bStart = Date.now()
     while (Date.now() - bStart < 2500) {
       if (bClosed > 0) break
       await delay(100)
     }
-    r.busyNotShot = bClosed === 0
+    r.busyNotShot = ticks > 0 && bClosed === 0
     clientB.kill('9902') // stop the torrent with the pane
     clientB.dispose()
+    bootB.dispose()
 
     // ── C. after the mute: pongs answer, a QUIET client stays connected ──────────────────
     const muteRemaining = muteStartedBy + MUTE_MS + 1000 - Date.now()

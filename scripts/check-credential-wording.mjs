@@ -89,6 +89,16 @@ const DENIED = [
  * would quietly bless whatever that file said next.
  */
 const ALLOWED = [
+  // ── The 2026-08-01 full-feature audit's finding ABOUT this gate: it argues the scan
+  // should cover src/main too, and makes the argument by MENTIONING the banned phrases
+  // as the lies they are ("the false 'no keys stored' sentence…"). Scrubbing the quotes
+  // would gut the finding; the line-pin means any rewrite re-earns its exception.
+  {
+    file: 'docs/research/2026-08-01-full-feature-audit.md',
+    line: 839,
+    contains: "the false 'no keys stored' sentence gets independently re-typed",
+    reason: 'an audit finding about this gate quotes the banned phrases as mentions, to argue the scan is too narrow'
+  },
   // ── ADR 0016 retirements: the two dated records that legitimately keep the words.
   // ADR 0002 stands VERBATIM (an explicit ADR-0016 guardrail) — its 2026-07-01 text is
   // the decision record, and ADR 0016 §1 is what bounds it. The productization research
