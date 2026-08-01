@@ -102,9 +102,12 @@ export function runDefaultsUxSmoke(win: BrowserWindow): void {
       // and a one-shot read here raced it — red on the CI Windows sweep (run
       // 30690209434) and once locally on slow I/O, green on every re-run. The badge
       // only proves the PRIMARY write; the secondary files earn their own wait.
+      // `firstValue` outlives the loop: the SECOND save below asserts every home flips
+      // to its negation.
       let firstSaveEverywhere = false
+      let firstValue = autoIn(files.primary)
       for (let attempt = 0; attempt < 40 && !firstSaveEverywhere; attempt += 1) {
-        const firstValue = autoIn(files.primary)
+        firstValue = autoIn(files.primary)
         firstSaveEverywhere = firstValue !== undefined && autoIn(files.a) === firstValue && autoIn(files.b) === firstValue
         if (!firstSaveEverywhere) await sleep(250)
       }
