@@ -356,48 +356,56 @@ export function runRemoteSmoke(win: BrowserWindow): void {
       // reports the tty foreground process cwd. Prove the daemon accepts it only while a
       // submitted command owns the pane, and rejects a delayed frame after a real prompt.
       await ES(`window.__remoteContextEvents=[]; window.bridge.on('terminal:cwd', (e) => { if (e.id === ${base + 2}) window.__remoteContextEvents.push(e) }); true`)
-      // BALANCED AND SELF-SEQUENCED — two Windows lessons, both about the daemon's real
-      // arming arithmetic (cwd-state.ts): `pendingStarts` is a COUNTER (+1 per submitted
-      // line, −1 per prompt boundary) and `commandActive = pendingStarts > 0`.
+      // SELF-SEQUENCED — the frames are the ORIGINAL four, because the daemon's arming
+      // arithmetic depends on their exact shape (see below). What was broken on Windows is
+      // only the SPACING: a line typed while the previous `node -e` still runs is stdin to
+      // THAT process, silently swallowed. Cold node.exe under Defender costs seconds here
+      // (POSIX ~40ms), so the old fixed 500ms gaps lost frames and left the arm asserting
+      // over a sequence that never happened. Each step now ends with a visible sentinel,
+      // and the next is not typed until that sentinel appears.
       //
-      //  1. Every command that opens a window must CLOSE it. The old shape typed four
-      //     commands but printed only two prompt frames, so the counter never returned to
-      //     zero and the stale frame stayed armed — it was ACCEPTED on the windows runner,
-      //     failing the negative assertion. It only passed on POSIX by luck: the cheap `ps`
-      //     tracker calls acceptDetected(null) (which ZEROES the counter) far more often
-      //     than Windows' ~1s PowerShell/CIM probe. Each step below now prints its payload
-      //     and then a closing prompt frame, so the arithmetic is deterministic everywhere.
-      //  2. A line typed while the previous `node -e` is still running is stdin to THAT
-      //     process, not a command — silently swallowed. So each step ends with a visible
-      //     sentinel and the next one is not typed until that sentinel appears: cmd.exe is
-      //     provably back at a prompt. Cold node.exe under Defender costs up to 1.5s here
-      //     (POSIX ~40ms), which is what made the old fixed 500ms gaps lose frames.
+      // WHY THE SHAPE IS LOAD-BEARING (cwd-state.ts + session.ts:615-701): an accepted
+      // process/git frame calls acceptDetected(), which ZEROES pendingStarts and latches
+      // `detected` — and acceptCommandStart() early-returns while `detected` is set. Step
+      // D's prompt therefore lands with the counter at zero and RETIRES the window. It
+      // must also CHANGE the cwd (git-selected -> remote), because remoteContextArmed is
+      // recomputed only when a snapshot actually publishes: a same-cwd prompt is deduped,
+      // leaves the flag stale, and the delayed frame this arm exists to refuse is then
+      // accepted. (Learned the hard way — an earlier rewrite added closing prompts to B
+      // and C, which made D's prompt a dedup and broke exactly that.)
       const initialPrompt = `\x1b]633;P;MoggingPromptCwdRaw=${remoteCwd}\x1b\\`
       const opaqueCwd = '/srv/opaque-worktree'
       const opaqueFrame = `\x1b]633;P;MoggingProcessCwdRaw=4242;${opaqueCwd}\x1b\\`
       const gitObservedCwd = '/srv/git-selected-worktree'
       const gitFrame = `\x1b]633;P;MoggingGitCwdRaw=${gitObservedCwd}\x1b\\`
       const staleFrame = '\x1b]633;P;MoggingProcessCwdRaw=4343;/srv/stale-background\x1b\\'
-      const ctxStep = async (label: string, source: string): Promise<boolean> => {
+      /** Type one node command and wait until it PROVABLY ran (its sentinel reached the
+       *  pane); `evented` additionally waits for the event it was meant to produce. */
+      const ctxStep = async (label: string, source: string, evented = false, tries = 120): Promise<boolean> => {
         const src = `${source};process.stdout.write(${JSON.stringify(label + '\n')})`
         await ES(
           `window.bridge.send('terminal:write', { id: ${base + 2}, data: ${JSON.stringify(nodeEvalCommand(src) + '\r')} })`
         )
-        for (let i = 0; i < 60; i++) {
-          if ((await bufferText(base + 2)).includes(label)) return true
+        for (let i = 0; i < tries; i++) {
+          const done = (await bufferText(base + 2)).includes(label)
+          if (done && !evented) return true
+          // Step A's frame is what latches remoteCwdLive, and the daemon arms the next
+          // window on the NEXT submitted line — so typing B before that latch leaves B's
+          // frame unarmed and silently refused (the windows red). Wait for the EVENT.
+          if (done && (await ES<boolean>('window.__remoteContextEvents.length > 0'))) return true
           await sleep(500)
         }
         return false
       }
       const w = (frame: string): string => `process.stdout.write(${JSON.stringify(frame)})`
-      // A: open, print the shell cwd (this is what latches remoteCwdLive), close.
-      const ctxShellSeen = await ctxStep('CTXA_DONE', w(initialPrompt))
-      // B: open, the process frame lands INSIDE this armed window, then close.
-      const ctxOpaqueSeen = await ctxStep('CTXB_DONE', `${w(opaqueFrame)};${w(initialPrompt)}`)
-      // C: same shape for the git-observed frame.
-      const ctxGitSeen = await ctxStep('CTXC_DONE', `${w(gitFrame)};${w(initialPrompt)}`)
-      // D: open, close IMMEDIATELY, and only then let a delayed background frame speak —
-      // it must be refused, because the prompt boundary already retired the window.
+      // A: the shell cwd — latches remoteCwdLive. 60s: the first cold node.exe on a
+      // windows runner is the slowest single step in this gate.
+      const ctxShellSeen = await ctxStep('CTXA_DONE', w(initialPrompt), true)
+      // B / C: each opens its own window by being typed; its frame lands inside it.
+      const ctxOpaqueSeen = await ctxStep('CTXB_DONE', w(opaqueFrame))
+      const ctxGitSeen = await ctxStep('CTXC_DONE', w(gitFrame))
+      // D: a real prompt retires the window, and only THEN does a delayed background
+      // frame speak — it must be refused.
       const staleSource = [
         w(initialPrompt),
         `setTimeout(()=>{${w(staleFrame)}},200)`,
