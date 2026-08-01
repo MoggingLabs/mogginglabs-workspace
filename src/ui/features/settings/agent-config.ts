@@ -2,6 +2,7 @@ import {
   AgentConfigChannels,
   BrowserChannels,
   type AgentConfigMutationResult,
+  type AgentConfigPromotableEntry,
   type AgentConfigProviderId,
   type AgentConfigProviderSummary,
   type AgentConfigScopeOption,
@@ -32,6 +33,11 @@ export interface AgentConfigWorkspace {
 }
 
 let controlSequence = 0
+
+/** ADR 0022 rollout: cross-account defaults surface per-provider, Claude Code
+ *  first — each provider's home enumeration + codec behavior is certified by its
+ *  own gate before the tier reaches it. Widening this set IS the rollout. */
+const DEFAULTS_PROVIDERS = new Set<AgentConfigProviderId>(['claude'])
 
 function targetKey(target: AgentConfigTarget): string {
   return `${target.scope}\u0000${target.targetId}\u0000${target.execution.kind === 'ssh' ? `ssh:${target.execution.hostId}` : 'local'}`
@@ -273,6 +279,7 @@ export function createAgentConfigWorkspace(onBack: () => void): AgentConfigWorks
   let agent: AgentInfo | undefined
   let summary: AgentConfigProviderSummary | undefined
   let snapshot: AgentConfigSnapshot | null = null
+  let promotable: AgentConfigPromotableEntry[] = []
   let selectedCategory = ''
   let query = ''
   let loadEpoch = 0
@@ -285,12 +292,16 @@ export function createAgentConfigWorkspace(onBack: () => void): AgentConfigWorks
     if (!provider) return
     const epoch = ++loadEpoch
     root.replaceChildren(el('div', { class: 'agentcfg-loading' }, [Spinner(), el('span', { text: 'Reading provider settings…' })]))
-    const [next, summaries] = await Promise.all([
+    const [next, summaries, suggestions] = await Promise.all([
       invoke<AgentConfigSnapshot | null>(AgentConfigChannels.snapshot, { provider, ...(target ? { target } : {}) }),
-      invoke<AgentConfigProviderSummary[]>(AgentConfigChannels.providers)
-    ]).catch(() => [null, []] as [AgentConfigSnapshot | null, AgentConfigProviderSummary[]])
+      invoke<AgentConfigProviderSummary[]>(AgentConfigChannels.providers),
+      DEFAULTS_PROVIDERS.has(provider)
+        ? invoke<AgentConfigPromotableEntry[]>(AgentConfigChannels.promotable, { provider }).catch(() => [])
+        : Promise.resolve([])
+    ]).catch(() => [null, [], []] as [AgentConfigSnapshot | null, AgentConfigProviderSummary[], AgentConfigPromotableEntry[]])
     if (epoch !== loadEpoch) return
     snapshot = next
+    promotable = suggestions
     summary = summaries.find((candidate) => candidate.provider === provider)
     if (!snapshot) {
       renderUnavailable()
@@ -394,10 +405,43 @@ export function createAgentConfigWorkspace(onBack: () => void): AgentConfigWorks
     ])
     ownership.value = state.desired?.ownership ?? 'enforce'
 
+    // ADR 0022: the cross-account controls render only where the tier is real —
+    // an allowlisted provider, an account-layer target, a key the provider accepts
+    // at an account layer, and at least one pointer profile beside the primary.
+    const accountCount = currentSnapshot.scopes.filter((entry) => entry.target.scope === 'profile').length + 1
+    const defaultsEligible = !!provider && DEFAULTS_PROVIDERS.has(provider) && writable && accountCount > 1 &&
+      (currentSnapshot.target.scope === 'user' || currentSnapshot.target.scope === 'profile') &&
+      (setting.scopes.includes('user') || setting.scopes.includes('profile'))
+    const applies = defaultsEligible
+      ? el('select', { class: 'input agentcfg-applies', ariaLabel: `Applies to for ${setting.title}` }, [
+          el('option', { value: 'all', text: 'All accounts' }),
+          el('option', { value: 'this', text: 'This account only' })
+        ])
+      : null
+    if (applies) applies.value = state.managedBy === 'pin' ? 'this' : 'all'
+
+    /** The honesty beat: the FIRST save that reaches across accounts is announced
+     *  once per provider — after that, `rememberKey` keeps it quiet. */
+    async function consentCrossAccount(title: string): Promise<boolean> {
+      return confirmDialog({
+        title: `Manage across all ${accountCount} accounts?`,
+        message: `This now manages “${title}” across all ${accountCount} of your ${currentSnapshot.providerName} accounts, including your primary ${provider === 'claude' ? '~/.claude' : 'configuration home'}. Drift will be restored; pin an account to differ.`,
+        confirmLabel: 'Manage everywhere',
+        rememberKey: `agentcfg-defaults:${provider}`
+      })
+    }
+
     const statusBadges: HTMLElement[] = []
     if (setting.surface === 'tui') statusBadges.push(Pill({ text: 'TUI', tone: 'accent' }))
     if (setting.stability !== 'stable') statusBadges.push(Pill({ text: setting.stability, tone: setting.stability === 'deprecated' ? 'warning' : 'neutral' }))
     if (setting.sensitive) statusBadges.push(Pill({ text: 'Secret hidden', tone: 'neutral' }))
+    if (state.managedBy) statusBadges.push(Pill({
+      text: state.managedBy === 'pin' ? 'Pinned' : 'Account default',
+      tone: state.managedBy === 'pin' ? 'neutral' : 'accent',
+      title: state.managedBy === 'pin'
+        ? 'This account keeps its own value; every other account follows the shared default.'
+        : 'Every account of this provider follows this value — including the primary home.'
+    }))
     if (state.desired) statusBadges.push(Pill({ text: syncLabel(state.sync), tone: syncTone(state.sync) }))
 
     async function save(operation: 'set' | 'unset'): Promise<void> {
@@ -423,16 +467,62 @@ export function createAgentConfigWorkspace(onBack: () => void): AgentConfigWorks
         })
         if (!confirmed) return
       }
-      const result = await invoke<AgentConfigMutationResult>(AgentConfigChannels.set, {
+      // ADR 0022: the Applies-to control routes the save. "All accounts" authors a
+      // cross-account default (announced once); "This account only" pins this home.
+      // Rows outside the tier keep the exact legacy scoped-save path.
+      let result: AgentConfigMutationResult
+      let savedTitle = ownership.value === 'enforce' ? 'Setting is now managed' : 'Setting applied'
+      if (applies && applies.value === 'all') {
+        if (!await consentCrossAccount(humanTitle(setting.title))) return
+        result = await invoke<AgentConfigMutationResult>(AgentConfigChannels.setDefault, {
+          provider,
+          target: currentSnapshot.target,
+          settingId: setting.id,
+          operation,
+          ...(operation === 'set' ? { value } : {}),
+          tier: 'default'
+        })
+        savedTitle = `Managed across all ${accountCount} accounts`
+      } else if (applies) {
+        result = await invoke<AgentConfigMutationResult>(AgentConfigChannels.setDefault, {
+          provider,
+          target: currentSnapshot.target,
+          settingId: setting.id,
+          operation,
+          ...(operation === 'set' ? { value } : {}),
+          tier: 'pin'
+        })
+        savedTitle = 'Pinned to this account'
+      } else {
+        result = await invoke<AgentConfigMutationResult>(AgentConfigChannels.set, {
+          provider,
+          target: currentSnapshot.target,
+          settingId: setting.id,
+          operation,
+          ...(operation === 'set' ? { value } : {}),
+          ownership: ownership.value
+        })
+      }
+      showToast({
+        title: result.ok ? savedTitle : 'Setting was not changed',
+        body: result.reason,
+        tone: result.ok ? 'success' : 'danger'
+      })
+      if (result.ok) await load(currentSnapshot.target)
+    }
+
+    async function clearTier(tier: 'default' | 'pin'): Promise<void> {
+      if (!provider || !snapshot) return
+      const result = await invoke<AgentConfigMutationResult>(AgentConfigChannels.clearDefault, {
         provider,
         target: currentSnapshot.target,
         settingId: setting.id,
-        operation,
-        ...(operation === 'set' ? { value } : {}),
-        ownership: ownership.value
+        tier
       })
       showToast({
-        title: result.ok ? (ownership.value === 'enforce' ? 'Setting is now managed' : 'Setting applied') : 'Setting was not changed',
+        title: result.ok
+          ? tier === 'pin' ? 'This account follows the default again' : 'No longer managed across accounts'
+          : 'Nothing was changed',
         body: result.reason,
         tone: result.ok ? 'success' : 'danger'
       })
@@ -469,6 +559,7 @@ export function createAgentConfigWorkspace(onBack: () => void): AgentConfigWorks
     control.el.addEventListener('change', armSave)
     const actionRow = writable
       ? el('div', { class: 'agentcfg-setting-actions' }, [
+          applies ? el('label', { class: 'agentcfg-ownership-label' }, [el('span', { text: 'Applies to:' }), applies]) : null,
           el('label', { class: 'agentcfg-ownership-label' }, [el('span', { text: 'On drift:' }), ownership]),
           saveBtn,
           currentSnapshot.target.scope !== 'session' && (state.selected.present || state.desired)
@@ -477,13 +568,60 @@ export function createAgentConfigWorkspace(onBack: () => void): AgentConfigWorks
         ])
       : el('div', { class: 'agentcfg-readonly' }, [icon('info', 14), el('span', { text: disabledReason ?? 'Read-only in Workspace.' })])
 
-    const releaseRow = state.desired
+    // A tier-managed row replaces the generic release affordances with the tier's
+    // own verbs: a pin resets to the shared default; a default can stop managing
+    // everywhere (files keep their last value — release, never a blanking).
+    const releaseRow = state.managedBy
       ? el('div', { class: 'agentcfg-release' }, [
-          el('span', { text: state.desired.ownership === 'enforce' ? 'Workspace will restore this value if the file drifts.' : 'This intent applies once.' }),
-          Button({ label: 'Keep value & release', variant: 'ghost', size: 'sm', onClick: () => void release('keep') }),
-          currentSnapshot.target.scope !== 'session'
-            ? Button({ label: 'Restore original', variant: 'outline', size: 'sm', onClick: () => void release('restore') })
-            : null
+          el('span', {
+            text: state.managedBy === 'pin'
+              ? 'Pinned — this account differs from the shared default.'
+              : 'Account default — every account follows this value; drift is restored.'
+          }),
+          state.managedBy === 'pin'
+            ? Button({ label: 'Reset to default', variant: 'outline', size: 'sm', onClick: () => void clearTier('pin') })
+            : Button({ label: 'Stop managing everywhere', variant: 'ghost', size: 'sm', onClick: () => void clearTier('default') })
+        ])
+      : state.desired
+        ? el('div', { class: 'agentcfg-release' }, [
+            el('span', { text: state.desired.ownership === 'enforce' ? 'Workspace will restore this value if the file drifts.' : 'This intent applies once.' }),
+            Button({ label: 'Keep value & release', variant: 'ghost', size: 'sm', onClick: () => void release('keep') }),
+            currentSnapshot.target.scope !== 'session'
+              ? Button({ label: 'Restore original', variant: 'outline', size: 'sm', onClick: () => void release('restore') })
+              : null
+          ])
+        : null
+
+    // The smart-promote chip: sameness that already exists, offered back. Only a
+    // SUGGESTION — it writes nothing without a click, and the click still walks
+    // through the same consent as any first cross-account save.
+    const suggestion = defaultsEligible && !state.managedBy && !state.desired
+      ? promotable.find((entry) => entry.settingId === setting.id && entry.surface === setting.surface)
+      : undefined
+    const promoteChip = suggestion
+      ? el('div', { class: 'agentcfg-promote' }, [
+          Button({
+            label: `All ${suggestion.homes} accounts use ${valueText(suggestion.value)} — make this the default?`,
+            variant: 'outline',
+            size: 'sm',
+            onClick: async () => {
+              if (!await consentCrossAccount(humanTitle(setting.title))) return
+              const result = await invoke<AgentConfigMutationResult>(AgentConfigChannels.setDefault, {
+                provider,
+                target: currentSnapshot.target,
+                settingId: setting.id,
+                operation: 'set',
+                value: suggestion.value,
+                tier: 'default'
+              })
+              showToast({
+                title: result.ok ? `Managed across all ${accountCount} accounts` : 'Setting was not changed',
+                body: result.reason,
+                tone: result.ok ? 'success' : 'danger'
+              })
+              if (result.ok) await load(currentSnapshot.target)
+            }
+          })
         ])
       : null
 
@@ -504,10 +642,13 @@ export function createAgentConfigWorkspace(onBack: () => void): AgentConfigWorks
           ? sourceLine(
               'Desired',
               state.desired.operation === 'unset' ? 'Remove from layer' : valueText(state.desired.value),
-              `Workspace · ${state.desired.ownership === 'enforce' ? 'enforced' : 'apply once'}`
+              state.managedBy
+                ? state.managedBy === 'pin' ? 'Workspace · pinned to this account' : 'Workspace · account default'
+                : `Workspace · ${state.desired.ownership === 'enforce' ? 'enforced' : 'apply once'}`
             )
           : null
       ]),
+      promoteChip,
       el('div', { class: 'agentcfg-editor' }, [control.el, actionRow]),
       releaseRow
     ])

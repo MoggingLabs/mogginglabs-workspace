@@ -7,6 +7,10 @@ import { runShot } from './smokes/shot'
 import { runFsListSmoke } from './smokes/fslist-smoke'
 import { runGlobalHooksSmoke } from './smokes/globalhooks-smoke'
 import { runAgentSettingsSmoke } from './smokes/agentsettings-smoke'
+import { runDefaultStoreSmoke } from './smokes/defaultstore-smoke'
+import { runProfileDefaultsSmoke } from './smokes/profiledefaults-smoke'
+import { runDefaultsUxSmoke } from './smokes/defaultsux-smoke'
+import { runDefaultsMilestoneSmoke } from './smokes/defaultsmilestone-smoke'
 import { runSetAgentConfigSmoke } from './smokes/setagentcfg-smoke'
 import { runCwdSmoke } from './smokes/cwd-smoke'
 import { runMcpSmoke } from './smokes/mcp-smoke'
@@ -230,6 +234,8 @@ const SMOKE_ENV: readonly string[] = [
   // Phase 11 — Files: the explorer's seven.
   'MOGGING_FSLIST', 'MOGGING_FILETREE', 'MOGGING_EXPLORER', 'MOGGING_EXPLORERRACE', 'MOGGING_TREELIVE', 'MOGGING_TREEGIT',
   'MOGGING_FILEACT', 'MOGGING_FILESMILESTONE', 'MOGGING_AGENTCFG', 'MOGGING_GLOBALHOOKS',
+  // Shared account defaults (ADR 0022, the phase-defaults pack).
+  'MOGGING_DEFAULTSTORE', 'MOGGING_PROFILEDEFAULTS', 'MOGGING_DEFAULTSUX', 'MOGGING_DEFAULTSMILESTONE',
   // ALERTAGREE pack (2026-07-18): the shipped notify artifacts' parity corpus.
   'MOGGING_NOTIFYPARITY'
 ]
@@ -362,6 +368,30 @@ async function beforeAppSettings(): Promise<boolean> {
   // Windowless agent-settings smoke: the catalog + codecs + scope writers, no daemon, no window.
   if (process.env.MOGGING_AGENTCFG) {
     await runAgentSettingsSmoke()
+    return true
+  }
+
+  // Windowless default-tier store smoke (ADR 0022 step 01): tier rows round-trip,
+  // the legacy listing stays blind, secret-shaped defaults are refused at the
+  // persistence boundary. Store only — no config home is touched.
+  if (process.env.MOGGING_DEFAULTSTORE) {
+    await runDefaultStoreSmoke()
+    return true
+  }
+
+  // Windowless fan-out smoke (ADR 0022 step 02): one authored default reaches three
+  // isolated claude homes (primary included) through the existing enforce writer;
+  // pins, implicit pins, honest snapshot labels, the secret wall. Zero network.
+  if (process.env.MOGGING_PROFILEDEFAULTS) {
+    await runProfileDefaultsSmoke()
+    return true
+  }
+
+  // Windowless composed milestone (ADR 0022 step 05): THE authority on
+  // "phase-defaults done" — set → pin → change → adopt → drift-restore → reset →
+  // release → deny-secret, one story on four claude homes, zero network.
+  if (process.env.MOGGING_DEFAULTSMILESTONE) {
+    await runDefaultsMilestoneSmoke()
     return true
   }
 
@@ -629,6 +659,8 @@ function afterWindow(win: BrowserWindow): void {
     runSetShellSmoke(win) // env-gated settings-shell smoke: grouped nav, cards, measured spacing + AA (Phase-8.5/04)
   } else if (process.env.MOGGING_SETAGENTCFG) {
     runSetAgentConfigSmoke(win) // five-provider settings catalog, typed controls, real scope writes, remote honesty
+  } else if (process.env.MOGGING_DEFAULTSUX) {
+    runDefaultsUxSmoke(win) // ADR 0022 defaults face: Applies-to, once-only consent, promote chip, pin + reset (phase-defaults/04)
   } else if (process.env.MOGGING_SETINTEG) {
     runSetIntegSmoke(win) // env-gated integrations smoke: disclosure, attention-through-fold, hit targets (Phase-8.5/05)
   } else if (process.env.MOGGING_CONNLIVE) {

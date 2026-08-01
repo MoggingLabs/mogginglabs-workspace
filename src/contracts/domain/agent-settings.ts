@@ -18,6 +18,23 @@ export type AgentConfigScope =
 export type AgentConfigSurface = 'runtime' | 'tui'
 
 export type AgentConfigOwnership = 'once' | 'enforce'
+
+/** The cross-account tier (ADR 0022). `'default'` is a provider-level value that fans
+ *  out to EVERY account home; `'pin'` is one account's exception, which wins for its
+ *  own key only. Absent ⇒ a legacy scoped override, unchanged in meaning. The tier is
+ *  orthogonal to `AgentConfigScope` — it compiles into the real provider layers and
+ *  never widens that union. */
+export type AgentConfigTier = 'default' | 'pin'
+
+/** What a persisted row's `tier` cell may hold: the two AUTHORED tiers, plus
+ *  `'compiled'` — an engine-written per-home enforce row produced by fan-out
+ *  (`applyAccountDefaults`). Compiled rows ARE visible to the legacy listing (they
+ *  are real enforce rows riding the one writer); only authored tiers are blind. */
+export type AgentConfigRowTier = AgentConfigTier | 'compiled'
+
+/** Sentinel `targetId` for `tier: 'default'` rows: they name every account of a
+ *  provider, not one home. Never a valid workspace or profile id (see ID shapes). */
+export const AGENT_CONFIG_ALL_ACCOUNTS = '__all__'
 export type AgentConfigIntentOperation = 'set' | 'unset'
 export type AgentConfigReleaseBehavior = 'keep' | 'restore'
 export type AgentConfigStability = 'stable' | 'experimental' | 'deprecated' | 'internal'
@@ -166,6 +183,9 @@ export interface AgentConfigSettingState {
   message?: string
   constrained?: boolean
   activationPending?: boolean
+  /** ADR 0022: this home's value is managed by the cross-account tier — the honest
+   *  source label ("Account default" / a per-account pin) for the scope picker. */
+  managedBy?: 'account-default' | 'pin'
 }
 
 export interface AgentConfigProviderSummary {
@@ -201,6 +221,11 @@ export interface AgentConfigOverrideRecord {
   provider: AgentConfigProviderId
   scope: AgentConfigScope
   targetId: string
+  /** ADR 0022: `'default'` (targetId `__all__`) or `'pin'` (targetId = profileId)
+   *  are AUTHORED tiers — desired-state input only, never returned by the legacy
+   *  listing, so the enforce machinery stays blind to sentinels. `'compiled'` marks
+   *  the per-home enforce rows fan-out derives from them (fully visible). */
+  tier?: AgentConfigRowTier
   surface: AgentConfigSurface
   settingId: string
   path: string[]
