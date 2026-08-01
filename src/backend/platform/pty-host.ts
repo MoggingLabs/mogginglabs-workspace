@@ -77,9 +77,12 @@ export function spawnPty(
     ...opts,
     // Windows only; node-pty ignores it elsewhere. Explicit = we own the decision.
     //
-    // useConptyDll loads node-pty's BUNDLED ConPTY (Windows Terminal 1.22's rewritten
-    // backend — conpty.dll + OpenConsole.exe, staged into the helper's node_deps) instead
-    // of the OS's kernel32 ConPTY v1. This is the fix for width-resize DATA LOSS: v1's
+    // useConptyDll loads the BUNDLED ConPTY (Windows Terminal's rewritten backend —
+    // conpty.dll + OpenConsole.exe) instead of the OS's kernel32 ConPTY v1. The pair is
+    // PINNED to the newest Microsoft release, not to what stable node-pty happens to
+    // repackage: build-node-helper.mjs CONPTY_PIN vendors it (build/conpty/<version>/)
+    // and overlays it over every staged tree; check-conpty-pin.mjs byte-compares so a
+    // silent npm restage of the older pair fails the sweep. This is the fix for width-resize DATA LOSS: v1's
     // buffer is viewport-sized, so a shrink that re-wraps long lines overflows it,
     // conhost discards the overflow, and its repaint erases those rows in xterm too (the
     // "blank band mid-pane" report). v2 removed that machinery — "we simply don't need

@@ -190,6 +190,10 @@ run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs
 # The preload allowlist: every channel map spread into AllChannels (a forgotten spread
+# The staged conpty.dll/OpenConsole.exe must byte-match the vendored pin — npm restages
+# the tarball's older pair on every install; a missed overlay is a silent downgrade of
+# every Windows pane's terminal backend (see build-node-helper.mjs CONPTY_PIN).
+run_static CONPTYPIN node scripts/check-conpty-pin.mjs
 # refuses a whole feature IPC surface with nothing but "channel not allowed" to show).
 run_static CHANNELS node scripts/check-channels.mjs
 run_static AGENTCAT node scripts/check-agent-settings-catalog.mjs

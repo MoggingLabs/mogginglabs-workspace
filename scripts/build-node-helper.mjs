@@ -67,6 +67,53 @@ const STAMP = join(ROOT, 'build', 'node-helper', `${PLATFORM}-${ARCH}.stamp.json
 // non-builtin externals). Versions come from the INSTALLED packages, never a range —
 // the helper must carry exactly what the app was built against.
 const NATIVE_DEPS = ['node-pty', 'better-sqlite3']
+
+// ── The ConPTY pin (vendored in build/conpty/<version>/) ─────────────────────────────
+// pty-host.ts spawns with useConptyDll, so the conpty.dll+OpenConsole.exe pair BUNDLED
+// WITH NODE-PTY is the backend every Windows pane runs — and stable node-pty lags the
+// Windows Terminal releases it repackages (1.1.0 carries 1.23, Oct 2025). The pair's
+// API surface is the stable pseudoconsole contract, so the newest released pair drops
+// in under the same loader: we vendor it and OVERLAY it here, after npm stages the
+// tarball's own copy. Overlaid in BOTH stamp paths (a stamped tree predating the pin
+// must not sail through with the old pair) and BEFORE the probe, so a broken overlay
+// dies here with a stack, never as a red gate later. check-conpty-pin.mjs byte-compares
+// the staged copies against the vendor so drift fails the sweep.
+const CONPTY_PIN = '1.25.260303002'
+
+/** Copy one vendored conpty file over a staged one, surviving a MAPPED target (a live
+ *  daemon holds the dll): NTFS allows renaming a mapped file, so swap by rename. */
+function replaceConptyFile(src, dest) {
+  try {
+    copyFileSync(src, dest)
+  } catch {
+    renameSync(dest, dest + '.stale-' + process.pid)
+    copyFileSync(src, dest)
+    rmSync(dest + '.stale-' + process.pid, { force: true }) // best effort; mapped survives til exit
+  }
+}
+
+/** Overlay the pinned conpty pair into a tree holding node-pty at its top level
+ *  (the helper's node_deps, or the repo's node_modules for dev/in-proc). */
+function overlayConpty(treeDir) {
+  if (PLATFORM !== 'win32') return
+  const src = join(ROOT, 'build', 'conpty', CONPTY_PIN, `win10-${ARCH}`)
+  for (const f of ['conpty.dll', 'OpenConsole.exe']) {
+    if (!existsSync(join(src, f))) {
+      console.error(`
+node-helper: vendored conpty ${CONPTY_PIN} is missing ${f} (${src})
+`)
+      process.exit(1)
+    }
+  }
+  // Both layouts node-pty has shipped the pair under — the loader reads prebuilds/,
+  // build/Release/ exists on locally-rebuilt trees; patch whichever is present.
+  for (const rel of [join('prebuilds', `win32-${ARCH}`, 'conpty'), join('build', 'Release', 'conpty')]) {
+    const destDir = join(treeDir, 'node-pty', rel)
+    if (!existsSync(dirname(destDir))) continue
+    mkdirSync(destDir, { recursive: true })
+    for (const f of ['conpty.dll', 'OpenConsole.exe']) replaceConptyFile(join(src, f), join(destDir, f))
+  }
+}
 const depVersions = Object.fromEntries(
   NATIVE_DEPS.map((name) => [name, JSON.parse(readFileSync(join(ROOT, 'node_modules', name, 'package.json'), 'utf8')).version])
 )
@@ -77,6 +124,11 @@ if (!process.env.MOGGING_HELPER_FORCE) {
   try {
     const have = JSON.parse(readFileSync(STAMP, 'utf8'))
     if (JSON.stringify(have) === JSON.stringify(wanted) && existsSync(join(OUT, EXE)) && existsSync(join(OUT, HELPER_DEPS_DIR))) {
+      // The conpty pin overlays on the stamp-skip path too: the stamp records dep
+      // VERSIONS, not the pin, so a tree built before the pin (or before a pin bump)
+      // would otherwise sail through with the tarball's older pair.
+      overlayConpty(join(OUT, HELPER_DEPS_DIR))
+      overlayConpty(join(ROOT, 'node_modules'))
       console.log(`  node helper OK — v${HELPER_NODE_VERSION} ${PLATFORM}-${ARCH} already built (stamp matches)`)
       process.exit(0)
     }
@@ -221,6 +273,12 @@ if (PLATFORM !== 'win32') {
     }
   }
 }
+
+// ── 2a. The ConPTY pin ────────────────────────────────────────────────────────────────
+// Overlay the vendored pair over what the npm tarball staged — BEFORE the probe, so the
+// probe's real pty spawn runs against the pinned backend and a bad pair dies here.
+overlayConpty(depsDir)
+overlayConpty(join(ROOT, 'node_modules'))
 
 // ── 3. Prove it: the helper itself must load both addons and do real work ─────────────
 // A pty spawn (node-pty) and an insert/select round-trip (better-sqlite3), executed BY
