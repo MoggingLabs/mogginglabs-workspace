@@ -1,6 +1,7 @@
 import {
   FsChannels,
   GitChannels,
+  SystemChannels,
   TemplateChannels,
   WorkspaceChannels,
   WorktreeChannels,
@@ -12,7 +13,9 @@ import {
   type ProviderMixTemplate,
   type RemoveWorktreeResult,
   type ResolvedLayout,
-  type WorkspaceState
+  type ToolchainStatus,
+  type WorkspaceState,
+  type WorktreePreflight
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 
@@ -48,6 +51,16 @@ export const wizardClient = {
   /** Read persisted state for the recent-folder typeahead (read-only). */
   loadState: (): Promise<WorkspaceState | null> =>
     getBridge().invoke(WorkspaceChannels.loadState) as Promise<WorkspaceState | null>,
+
+  /** Can this folder be isolated AT ALL — asked before the toggle is offered, so the box
+   *  can never enable itself on a machine where every `git worktree add` is doomed. */
+  preflightWorktree: (repo: string): Promise<WorktreePreflight> =>
+    getBridge().invoke(WorktreeChannels.preflight, repo) as Promise<WorktreePreflight>,
+
+  /** Re-read the live PATH. The fix for "I installed git after the app started" — which is
+   *  the actual reason isolation fails on a real first run. */
+  repairPath: (): Promise<ToolchainStatus> =>
+    getBridge().invoke(SystemChannels.repairPath) as Promise<ToolchainStatus>,
 
   /** One isolated git worktree in the repo (Phase-3/03) — random slug/branch. */
   createWorktree: (repo: string): Promise<CreateWorktreeResult> =>

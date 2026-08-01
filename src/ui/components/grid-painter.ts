@@ -36,6 +36,19 @@ export interface GridPainterOpts {
   onChange: (spec: GridSpecModel) => void
   /** Chip content for slot k (0-based, reading order); null = plain shell tile. */
   slotChip?: (slot: number) => { color: string; mark: HTMLElement | null; label: string } | null
+  /**
+   * PAINT MODE (the agent-placement redesign). When this returns non-null, a brush is
+   * armed: press/drag on the canvas PAINTS terminals (onPaint per slot) instead of
+   * merging, and the merge preview stays out of the way. When null, the canvas keeps its
+   * structural gestures exactly as before — drag merges, a click on a merged tile splits
+   * — and a plain click on an UNMERGED tile asks the host to open its picker
+   * (onPickSlot). The two modes never overlap, which is what makes each learnable.
+   */
+  brush?: () => string | null
+  /** Paint `slot` with the armed brush. Fired live, per tile, as the pointer crosses it. */
+  onPaint?: (slot: number) => void
+  /** A plain no-brush click (or Enter) on an unmerged tile — open the per-terminal picker. */
+  onPickSlot?: (slot: number, anchor: DOMRect) => void
 }
 
 export interface GridPainterHandle {
@@ -171,13 +184,23 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
   })
   lattice.addEventListener('pointerleave', () => paintHover(0, 0))
 
-  // ── SHAPE canvas (merge / unmerge / live chips) ───────────────────────────
+  // ── SHAPE canvas (merge / unmerge / paint / live chips) ───────────────────
   interface DragState {
     anchor: { r: number; c: number }
     current: { r: number; c: number }
     moved: boolean
   }
   let drag: DragState | null = null
+  /** Slots painted by the CURRENT gesture — each fires onPaint once per pass, so
+   *  wobbling the pointer inside one tile cannot spam the host. */
+  let paintDrag: Set<number> | null = null
+
+  /** The region (terminal) index a grid cell belongs to. */
+  const regionAt = (cell: { r: number; c: number }): number =>
+    spec.regions.findIndex(
+      (region) =>
+        cell.r >= region.r && cell.r < region.r + region.rs && cell.c >= region.c && cell.c < region.c + region.cs
+    )
 
   const cellAt = (event: PointerEvent): { r: number; c: number } | null => {
     const box = canvas.getBoundingClientRect()
@@ -213,11 +236,31 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
     })
   }
 
+  /** Paint the region under the pointer, once per gesture pass. Live — the tile takes its
+   *  chip while the pointer is still moving, which is what makes a sweep feel like a
+   *  brushstroke instead of a form submit. */
+  const paintAt = (event: PointerEvent): void => {
+    if (!paintDrag) return
+    const cell = cellAt(event)
+    if (!cell) return
+    const index = regionAt(cell)
+    if (index < 0 || paintDrag.has(index)) return
+    paintDrag.add(index)
+    opts.onPaint?.(index)
+  }
+
   canvas.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return
     const cell = cellAt(event)
     if (!cell) return
-    drag = { anchor: cell, current: cell, moved: false }
+    // A brush is armed: this gesture PAINTS. Structural gestures wait until the brush is
+    // put down — overloading one drag with both meanings would make each unlearnable.
+    if (opts.brush?.()) {
+      paintDrag = new Set()
+      paintAt(event)
+    } else {
+      drag = { anchor: cell, current: cell, moved: false }
+    }
     try {
       canvas.setPointerCapture(event.pointerId)
     } catch {
@@ -226,6 +269,7 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
     }
   })
   canvas.addEventListener('pointermove', (event) => {
+    if (paintDrag) return paintAt(event)
     if (!drag) return
     const cell = cellAt(event)
     if (!cell) return
@@ -234,6 +278,10 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
     paintMergePreview()
   })
   const endDrag = (commit: boolean): void => {
+    if (paintDrag) {
+      paintDrag = null
+      return
+    }
     if (!drag) return
     const state = drag
     drag = null
@@ -257,19 +305,19 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
       }
       return
     }
-    // A plain click: on a merged tile, split it back apart.
-    const index = spec.regions.findIndex(
-      (region) =>
-        state.anchor.r >= region.r &&
-        state.anchor.r < region.r + region.rs &&
-        state.anchor.c >= region.c &&
-        state.anchor.c < region.c + region.cs
-    )
+    // A plain click, no brush armed: a merged tile splits back apart (the structural
+    // affordance the gates pin); an unmerged tile opens ITS OWN picker — the click-to-
+    // pick half of the placement model, for whoever never discovers the brush.
+    const index = regionAt(state.anchor)
     const region = spec.regions[index]
-    if (region && (region.rs > 1 || region.cs > 1)) {
+    if (!region) return
+    if (region.rs > 1 || region.cs > 1) {
       spec = unmergeRegion(spec, index)
       render()
       opts.onChange(spec)
+    } else if (opts.onPickSlot) {
+      const tile = canvas.querySelectorAll<HTMLElement>('.gp-region')[index]
+      if (tile) opts.onPickSlot(index, tile.getBoundingClientRect())
     }
   }
   canvas.addEventListener('pointerup', () => endDrag(true))
@@ -279,6 +327,8 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
     paintActive()
     paintHover(0, 0)
     canvas.innerHTML = ''
+    // An armed brush changes what a press means — the cursor should say so before the press.
+    canvas.classList.toggle('is-painting', !!opts.brush?.())
     canvas.style.gridTemplateRows = `repeat(${spec.rows}, 1fr)`
     canvas.style.gridTemplateColumns = `repeat(${spec.cols}, 1fr)`
     spec.regions.forEach((region, i) => {
@@ -302,13 +352,19 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
       ) as HTMLButtonElement
       tile.style.gridArea = `${region.r + 1} / ${region.c + 1} / span ${region.rs} / span ${region.cs}`
       if (chip?.color) tile.style.setProperty('--gp-accent', chip.color)
-      // Pointer gestures live on the canvas; keyboard unmerge rides the button itself.
+      // Pointer gestures live on the canvas; the keyboard rides the button itself and
+      // mirrors the no-brush click exactly: merged splits, unmerged opens its picker.
+      // (With a brush armed, Enter paints — the keyboard's brushstroke.)
       tile.addEventListener('keydown', (event) => {
-        if ((event.key === 'Enter' || event.key === ' ') && merged) {
-          event.preventDefault()
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        if (opts.brush?.()) return opts.onPaint?.(i)
+        if (merged) {
           spec = unmergeRegion(spec, i)
           render()
           opts.onChange(spec)
+        } else {
+          opts.onPickSlot?.(i, tile.getBoundingClientRect())
         }
       })
       canvas.append(tile)

@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { createWorktree, listWorktrees, removeWorktree } from '@backend/features/worktrees'
+import { createWorktree, listWorktrees, preflightWorktrees, removeWorktree } from '@backend/features/worktrees'
 import {
   WorktreeChannels,
   type CreateWorktreeRequest,
@@ -32,6 +32,9 @@ export function registerWorktrees(): void {
   })
   ipcMain.handle(WorktreeChannels.list, (_e, repo: string) =>
     typeof repo === 'string' && repo ? listWorktrees(repo) : []
+  )
+  ipcMain.handle(WorktreeChannels.preflight, (_e, repo: string) =>
+    typeof repo === 'string' && repo ? preflightWorktrees(repo) : { ok: false, reason: 'not-a-repo' }
   )
   ipcMain.handle(WorktreeChannels.remove, (_e, req: RemoveWorktreeRequest) => {
     const fault = wizardAuditFaults()

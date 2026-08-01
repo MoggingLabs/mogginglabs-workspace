@@ -41,6 +41,43 @@ export interface AgentCliConfigCapabilities {
   sessionOverlay: AgentCliSessionOverlay
 }
 
+/**
+ * The install one-liner, STRUCTURED — the same command `installHint` shows the user, as argv
+ * this app can actually run.
+ *
+ * `installHint` stays the thing a human reads and copies; it is prose and must never be
+ * parsed. One-click setup needs to spawn without a shell (no quoting surface, real exit
+ * codes, and the ability to resolve `npm` to `npm.cmd` on Windows before spawning it), so
+ * the same fact is carried twice, deliberately, in the two shapes it is needed in. The gate
+ * below proves they still agree.
+ */
+export interface AgentInstallStep {
+  /** A LOGICAL tool name the runner resolves on the live PATH — never a literal path. */
+  file: 'npm' | 'python' | 'aider-install'
+  args: readonly string[]
+}
+
+export interface AgentInstallSpec {
+  /** The runtime that must exist before any step can run. Setup bootstraps it if missing. */
+  requires: 'node' | 'python'
+  steps: readonly AgentInstallStep[]
+}
+
+/**
+ * How this CLI is signed in, once its pane exists.
+ *
+ * ADR 0002 in full force: these are the PROVIDER'S OWN commands, and the app does nothing
+ * with them but type them into a terminal the user is watching. It brokers no auth, sees no
+ * token, and stores nothing. Install and sign-in are deliberately separate moments — you
+ * cannot log a CLI in before it has a terminal to log in from.
+ */
+export interface AgentSignIn {
+  /** Typed into a pane where the CLI is ALREADY running — its own slash command. */
+  inSession?: string
+  /** Typed into a plain shell — the CLI's standalone login verb. */
+  shell?: string
+}
+
 export interface AgentCliDefinition {
   id: AgentCliId
   name: string
@@ -51,6 +88,8 @@ export interface AgentCliDefinition {
    *  "codex resume <id>") — exact-session resume across a profile failover. */
   resumeTakesSessionId?: boolean
   installHint?: string
+  installSpec?: AgentInstallSpec
+  signIn?: AgentSignIn
   config: AgentCliConfigCapabilities
 }
 
@@ -68,6 +107,8 @@ export const AGENT_CLI_REGISTRY = [
     resumeArgs: ['--resume'],
     resumeTakesSessionId: true,
     installHint: 'npm install -g @anthropic-ai/claude-code',
+    installSpec: { requires: 'node', steps: [{ file: 'npm', args: ['install', '-g', '@anthropic-ai/claude-code'] }] },
+    signIn: { inSession: '/login', shell: 'claude' },
     config: {
       pointerEnv: 'CLAUDE_CONFIG_DIR',
       surfaces: [{ id: 'runtime', format: 'json' }],
@@ -90,6 +131,8 @@ export const AGENT_CLI_REGISTRY = [
     resumeArgs: ['resume'],
     resumeTakesSessionId: true,
     installHint: 'npm install -g @openai/codex',
+    installSpec: { requires: 'node', steps: [{ file: 'npm', args: ['install', '-g', '@openai/codex'] }] },
+    signIn: { shell: 'codex login' },
     config: {
       pointerEnv: 'CODEX_HOME',
       surfaces: [{ id: 'runtime', format: 'toml' }],
@@ -111,6 +154,8 @@ export const AGENT_CLI_REGISTRY = [
     versionArgs: ['--version'],
     resumeArgs: ['--resume'],
     installHint: 'npm install -g @google/gemini-cli',
+    installSpec: { requires: 'node', steps: [{ file: 'npm', args: ['install', '-g', '@google/gemini-cli'] }] },
+    signIn: { inSession: '/auth', shell: 'gemini' },
     config: {
       pointerEnv: 'GEMINI_CLI_HOME',
       surfaces: [{ id: 'runtime', format: 'jsonc' }],
@@ -132,6 +177,16 @@ export const AGENT_CLI_REGISTRY = [
     versionArgs: ['--version'],
     resumeArgs: ['--restore-chat-history'],
     installHint: 'python -m pip install aider-install && aider-install',
+    // Two real steps behind one `&&` in the prose. Aider authenticates by API key rather than
+    // a login verb, so it carries no `signIn` — and the sign-in banner correctly never offers
+    // one for it instead of inventing a command that does not exist.
+    installSpec: {
+      requires: 'python',
+      steps: [
+        { file: 'python', args: ['-m', 'pip', 'install', 'aider-install'] },
+        { file: 'aider-install', args: [] }
+      ]
+    },
     config: {
       surfaces: [{ id: 'runtime', format: 'yaml' }],
       scopes: ['session', 'project', 'user'],
@@ -157,6 +212,8 @@ export const AGENT_CLI_REGISTRY = [
     versionArgs: ['--version'],
     resumeArgs: ['--continue'],
     installHint: 'npm install -g opencode-ai',
+    installSpec: { requires: 'node', steps: [{ file: 'npm', args: ['install', '-g', 'opencode-ai'] }] },
+    signIn: { shell: 'opencode auth login' },
     config: {
       surfaces: [
         { id: 'runtime', format: 'jsonc' },

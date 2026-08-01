@@ -11,21 +11,85 @@ import { join, resolve, sep } from 'node:path'
 import type {
   CreateWorktreeResult,
   RemoveWorktreeResult,
-  WorktreeInfo
+  WorktreeInfo,
+  WorktreePreflight,
+  WorktreePreflightReason
 } from '@contracts'
+import { resolveOnPath } from '../../platform/env-path'
 
-const git = (cwd: string, args: string[]): Promise<{ ok: boolean; stdout: string; error?: string }> =>
+/** Metadata calls (rev-parse, status, worktree list) answer in milliseconds; a slow one is a
+ *  hung git, not a big repo. */
+const QUICK_MS = 15_000
+/** `git worktree add` CHECKS OUT THE WHOLE TREE. On a real repo that is thousands of files,
+ *  and with several agents isolating at once, on a spinning disk, behind Windows Defender's
+ *  on-write scanner, it is minutes — not seconds. The old 15s ceiling turned a slow-but-fine
+ *  checkout into "Could not isolate every agent", and the rollback then deleted the work the
+ *  timeout had interrupted. A checkout gets time; a HUNG git still cannot hang forever. */
+const CHECKOUT_MS = 10 * 60_000
+
+const git = (
+  cwd: string,
+  args: string[],
+  timeout = QUICK_MS
+): Promise<{ ok: boolean; stdout: string; error?: string; timedOut?: boolean }> =>
   new Promise((resolveExec) => {
     execFile(
       'git',
       ['-C', cwd, ...args],
-      { encoding: 'utf8', windowsHide: true, timeout: 15000 },
+      { encoding: 'utf8', windowsHide: true, timeout },
       (err, stdout, stderr) => {
-        if (err) resolveExec({ ok: false, stdout: String(stdout), error: String(stderr || err.message).slice(0, 400) })
-        else resolveExec({ ok: true, stdout: String(stdout) })
+        if (!err) return resolveExec({ ok: true, stdout: String(stdout) })
+        // execFile reports a timeout as a KILL, not an error code — without this the user
+        // gets git's (empty) stderr and no idea that anything was ever waited for.
+        const timedOut = (err as NodeJS.ErrnoException & { killed?: boolean }).killed === true
+        const missing = (err as NodeJS.ErrnoException).code === 'ENOENT'
+        const message = timedOut
+          ? `git took longer than ${Math.round(timeout / 1000)}s and was stopped`
+          : missing
+            ? 'git could not be run — it is not on this app’s PATH'
+            : String(stderr || err.message)
+        resolveExec({ ok: false, stdout: String(stdout), error: message.slice(0, 400), timedOut })
       }
     )
   })
+
+/**
+ * Can `repo` be isolated? Every answer here is one the UI can act on, and it is asked BEFORE
+ * the toggle is offered rather than discovered at Launch — see WorktreePreflight for why that
+ * distinction cost a user their whole first attempt.
+ */
+export async function preflightWorktrees(repo: string): Promise<WorktreePreflight> {
+  const refuse = (reason: WorktreePreflightReason, detail?: string): WorktreePreflight => ({ ok: false, reason, detail })
+  if (!repo.trim()) return refuse('not-a-repo')
+  // Asked of the PATH rather than by running git, so "not installed" and "installed but
+  // invisible to this process" produce the same, true, actionable answer.
+  if (!resolveOnPath('git')) return refuse('no-git')
+
+  const inside = await git(repo, ['rev-parse', '--is-inside-work-tree'])
+  if (!inside.ok) {
+    // git ran but said no. A missing binary was already ruled out above, so anything left
+    // that mentions a repository is the ordinary "this folder isn't one".
+    return /not a git repos|does not appear to be a git repos/i.test(inside.error ?? '')
+      ? refuse('not-a-repo')
+      : refuse('unsupported', inside.error)
+  }
+  if (inside.stdout.trim() !== 'true') return refuse('not-a-repo')
+
+  // A repo with no commits has no HEAD to fork a worktree from. `git worktree add -b` fails
+  // with "invalid reference: HEAD", which reads like a bug in this app rather than "commit
+  // something first".
+  const head = await git(repo, ['rev-parse', '--verify', '--quiet', 'HEAD'])
+  if (!head.ok || !head.stdout.trim()) return refuse('no-commits')
+
+  // The managed root has to be creatable, and finding that out now beats finding it out
+  // after the first three worktrees already exist.
+  try {
+    mkdirSync(worktreesRoot(repo), { recursive: true })
+  } catch (e) {
+    return refuse('not-writable', String(e).slice(0, 200))
+  }
+  return { ok: true, reason: 'ok' }
+}
 
 const worktreesRoot = (repo: string): string => join(repo, '.mogging', 'worktrees')
 
@@ -71,7 +135,9 @@ export async function createWorktree(repo: string): Promise<CreateWorktreeResult
     const path = join(root, slug)
     const branch = `mogging/${slug}`
     const baseRes = await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])
-    const res = await git(repo, ['worktree', 'add', path, '-b', branch])
+    // The one call that copies a whole working tree — it gets the checkout budget, not the
+    // metadata one (see CHECKOUT_MS).
+    const res = await git(repo, ['worktree', 'add', path, '-b', branch], CHECKOUT_MS)
     if (!res.ok) return { ok: false, error: res.error }
     // Record the fork base INSIDE the worktree's git dir (invisible to git status) —
     // the review surface (3/04) diffs against exactly this.

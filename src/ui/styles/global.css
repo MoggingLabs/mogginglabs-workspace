@@ -74,6 +74,32 @@
      where a 0.4 alpha over a wide blur washes out to nothing. */
   --accent-glow-strong: color-mix(in srgb, var(--accent) 80%, transparent);
 
+  /* ── RING WIDTHS — one answer for the whole app ───────────────────────────────
+     Every focus ring, every attention outline, one token each. They used to be
+     hand-written per selector (fourteen `outline: 2px`, one `box-shadow: 0 0 0 1px`
+     on the rail's attention tab) and the inconsistency was visible: the thinnest of
+     them read as PIXELATED rather than thin.
+
+     That is not an illusion and it is not a colour problem. A 1–2px outline traced
+     around a border-radius is drawn by the compositor as an anti-aliased arc; at a
+     fractional device pixel ratio (150% Windows scaling, any non-integer zoom) the
+     ring's own width lands between physical pixels, so the straight edges snap and
+     the corners fringe. Below ~3px there are not enough pixels across the stroke for
+     the anti-aliasing to hide that. At 3px the straights are solid and the corners
+     have room to resolve — the ring reads as one drawn shape.
+
+     Deliberately 3px and not more: this is a focus indicator, not a highlight. The
+     attention ring is 2px because it wraps an entire workspace tab rather than a
+     control, and a 3px halo around a full-width row is a different, louder thing.
+
+     --ring-inset is for rings drawn INSIDE their element (gutters, tiles flush
+     against a neighbour): the offset must equal the width, or a thicker ring simply
+     eats the content it was meant to frame. */
+  --ring-w: 3px;
+  --ring-offset: 2px;
+  --ring-inset: calc(var(--ring-w) * -1);
+  --ring-w-attn: 2px;
+
   /* Semantic. */
   --success: #3fc873; /* exit 0 */
   --danger: #f0554b; /* non-zero exit */
@@ -308,9 +334,12 @@ textarea {
   color: inherit;
 }
 
+/* THE app-wide focus ring. Every other :focus-visible rule in this file is a variation on
+   this one and now shares its width token, so "thicker" is a one-line change and can never
+   again mean "thicker in eleven places and not the other four". */
 :focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: var(--ring-w) solid var(--accent);
+  outline-offset: var(--ring-offset);
 }
 
 ::selection {
@@ -1867,12 +1896,12 @@ textarea {
   0%,
   100% {
     box-shadow:
-      0 0 0 1px var(--accent),
+      0 0 0 var(--ring-w-attn) var(--accent),
       0 0 12px var(--accent-glow);
   }
   50% {
     box-shadow:
-      0 0 0 1px var(--accent-glow),
+      0 0 0 var(--ring-w-attn) var(--accent-glow),
       0 0 2px transparent;
   }
 }
@@ -1885,14 +1914,14 @@ textarea {
   .workspace-tab.is-alerting {
     animation: none !important;
     box-shadow:
-      0 0 0 1px var(--accent),
+      0 0 0 var(--ring-w-attn) var(--accent),
       0 0 12px var(--accent-glow);
   }
 }
 :root.motion-calm .workspace-tab.is-alerting {
   animation: none !important;
   box-shadow:
-    0 0 0 1px var(--accent),
+    0 0 0 var(--ring-w-attn) var(--accent),
     0 0 12px var(--accent-glow);
 }
 
@@ -2710,8 +2739,8 @@ textarea {
   background: var(--bg-elevated);
 }
 .ws-move-row:focus-visible {
-  outline: 2px solid var(--accent-glow);
-  outline-offset: -2px;
+  outline: var(--ring-w) solid var(--accent-glow);
+  outline-offset: var(--ring-inset);
 }
 .ws-move-row.is-selected {
   background: var(--accent-weak);
@@ -3007,6 +3036,93 @@ textarea {
   padding: var(--sp-1) calc(var(--sp-4) + var(--sp-1)) var(--sp-1) 6px; /* right lane: the slide bar + its float gap */
 }
 
+/* ── The sign-in offer (agents/signin-banner.ts) ───────────────────────────────────────
+   A strip of pane CHROME between the header and the buffer — laid out, not floated. That
+   is the whole reason it looks like this: anything overlaying the terminal would cover the
+   output the user is trying to read, and the one thing worse than not knowing a CLI is
+   signed out is being told so on top of the message that says it.
+
+   Informational blue, not alarm orange: nothing is broken and nothing is waiting on a
+   rescue. It is the last step of getting started, and it is optional — hence the dismiss. */
+.pane-signin {
+  /* Its own size container — the banner is a SIBLING of .pane-header, so it cannot see the
+     `pane-bar` container next door. It reacts to the pane's width by measuring its own. */
+  container-type: inline-size;
+  container-name: pane-signin;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border-top: 1px solid color-mix(in srgb, var(--info) 35%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--info) 35%, transparent);
+  background: color-mix(in srgb, var(--info) 12%, transparent);
+  color: var(--text-hi);
+  font-size: var(--fs-11);
+}
+.pane-signin svg {
+  flex: none;
+  color: var(--info);
+}
+.pane-signin-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The command is SHOWN, always. One click runs it, and the user should be able to see
+   exactly what that click will type before they make it — an app that types into your
+   terminal owes you that much. First thing to go when the pane is narrow. */
+.pane-signin-cmd {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-mid);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-signin-action {
+  flex: none;
+  margin-left: auto;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--info);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--info);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pane-signin-action:hover {
+  background: color-mix(in srgb, var(--info) 18%, transparent);
+}
+.pane-signin-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-1);
+  border: 0;
+  background: none;
+  color: var(--text-lo);
+  cursor: pointer;
+}
+.pane-signin-close:hover {
+  color: var(--text-hi);
+}
+/* A pane too narrow for all of it drops the literal command before the sentence — the
+   sentence is what makes the button make sense. */
+@container pane-signin (max-width: 420px) {
+  .pane-signin-cmd {
+    display: none;
+  }
+}
+
 /* Expanded pane (full / full-height / full-width): covered siblings hide — but with
    `visibility`, NOT `display:none`. The distinction is load-bearing (the restore-flicker
    root cause): each pane's IntersectionObserver watches its slot, and `display:none`
@@ -3165,8 +3281,8 @@ textarea {
    would draw one, but a 2px track with an outset outline reads as a floating box; inset it and
    tint the seam, exactly as the docks do. */
 .layout-gutter:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: -2px;
+  outline: var(--ring-w) solid var(--focus);
+  outline-offset: var(--ring-inset);
   background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 /* The visual track is 2px; the DRAG target must not be. An invisible overhang keeps
@@ -3604,7 +3720,7 @@ body.pane-dragging * {
 /* The landing flash after a search jump — an outline, not motion, so it needs no
    reduced-motion carve-out. */
 .search-hit-flash {
-  outline: 2px solid var(--accent);
+  outline: var(--ring-w) solid var(--accent);
   outline-offset: 3px;
   border-radius: var(--r-sm);
 }
@@ -3661,7 +3777,7 @@ body.pane-dragging * {
 }
 /* A keyboard user could not see where they were: there was no focus rule at all. */
 .settings-nav-item:focus-visible {
-  outline: 2px solid var(--accent-glow);
+  outline: var(--ring-w) solid var(--accent-glow);
   outline-offset: 2px;
 }
 .settings-nav-item.is-active {
@@ -3887,7 +4003,7 @@ body.pane-dragging * {
   background: var(--bg-elevated);
 }
 .theme-tile:focus-visible {
-  outline: 2px solid var(--accent-glow);
+  outline: var(--ring-w) solid var(--accent-glow);
   outline-offset: 2px;
 }
 .theme-tile.is-active {
@@ -4264,6 +4380,79 @@ body.pane-dragging * {
   gap: var(--sp-4);
   padding-top: var(--sp-4);
   border-top: 1px solid var(--border);
+  /* The alert takes a row of its own above the actions — see .wizard-alert. */
+  flex-wrap: wrap;
+}
+/* WHY A LAUNCH FAILURE GETS ITS OWN BLOCK.
+   It used to be written into the path bar's status chip: a one-line pill, sized for "no
+   repo — fine", ellipsised at maybe forty characters. So when `git worktree add` failed,
+   the sentence that explained it — git's own words, the only thing that could have told
+   the user what to do — was truncated into nothing, and the app appeared to fail for no
+   reason. A failure that takes a sentence to state gets a place a sentence fits, stays put
+   until dismissed, and offers itself for copying. */
+.wizard-alert {
+  order: -1;
+  flex: 1 0 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--border));
+  border-radius: var(--r-sm);
+  background: var(--danger-weak);
+  color: var(--danger-ink);
+  font-size: var(--fs-12);
+}
+.wizard-alert svg {
+  flex: none;
+  margin-top: 1px;
+}
+.wizard-alert-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* The whole message, wrapped — never clipped. That is the entire point of this element. */
+  overflow-wrap: anywhere;
+}
+.wizard-alert-copy,
+.wizard-alert-close {
+  flex: none;
+  padding: 0 var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font-size: var(--fs-11);
+  cursor: pointer;
+}
+.wizard-alert-close {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-1);
+}
+.wizard-alert-copy:hover,
+.wizard-alert-close:hover {
+  border-color: var(--danger);
+}
+/* The inline repair button beside a blocked option ("Find Git"). Accent-outlined because
+   it is an ACTION offered inside an explanation, and the explanation must not read as if
+   it ends in a dead end. */
+.wizard-inline-fix {
+  flex: none;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--accent-ink);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.wizard-inline-fix:hover:not(:disabled) {
+  background: var(--accent-weak);
+}
+.wizard-inline-fix:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 .wizard-footer-actions {
   display: flex;
@@ -4602,7 +4791,7 @@ body.pane-dragging * {
   cursor: not-allowed;
 }
 .gp-cell:focus-visible {
-  outline: 2px solid var(--accent-glow);
+  outline: var(--ring-w) solid var(--accent-glow);
   outline-offset: 1px;
 }
 .gp-canvas {
@@ -4616,7 +4805,16 @@ body.pane-dragging * {
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--bg-inset);
-  touch-action: none; /* the merge drag owns the pointer */
+  touch-action: none; /* the merge/paint drag owns the pointer */
+}
+/* A brush is armed: the press now paints, and the cursor says so BEFORE the press. The
+   accent edge marks the whole canvas as the brush's target surface. */
+.gp-canvas.is-painting {
+  cursor: crosshair;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.gp-canvas.is-painting .gp-region {
+  cursor: crosshair;
 }
 .gp-region {
   position: relative;
@@ -4642,7 +4840,7 @@ body.pane-dragging * {
   border-color: color-mix(in srgb, var(--gp-accent, var(--accent)) 60%, var(--border));
 }
 .gp-region:focus-visible {
-  outline: 2px solid var(--accent-glow);
+  outline: var(--ring-w) solid var(--accent-glow);
   outline-offset: 1px;
 }
 .gp-region.is-merged {
@@ -4725,17 +4923,115 @@ body.pane-dragging * {
   font-size: var(--fs-11);
   white-space: nowrap;
 }
-.wizard-fill {
+/* ── The agent PALETTE (placement redesign, 2026-08-01) ────────────────────────────────
+   One chip per installed agent (+ custom + shell), and one global Clear. A chip is a
+   BRUSH: armed, it paints its agent onto the layout canvas. The armed state borrows the
+   tool-chip family's on-state (accent wash + accent edge) plus a ring — a brush you are
+   holding must be findable at a glance from the canvas you are painting on. */
+.wizard-palette {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--sp-2);
 }
-.wizard-fills {
-  display: flex;
+.wizard-chip-wrap {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+}
+.wizard-chip {
+  display: inline-flex;
   align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--fs-12);
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-3);
+  border-radius: var(--r-full);
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-mid);
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease);
+}
+/* The ▾ shares the pill: same border, glued to the chip's right edge, its own hit target. */
+.wizard-chip-wrap .wizard-chip {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.wizard-chip-wrap .wizard-chip:only-child {
+  border-radius: var(--r-full);
+  padding-right: var(--sp-3);
+}
+.wizard-chip-menu {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-1);
+  border: 1px solid var(--border);
+  border-left: 0;
+  border-top-right-radius: var(--r-full);
+  border-bottom-right-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-lo);
+  cursor: pointer;
+  transition:
+    color var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease);
+}
+.wizard-chip:hover,
+.wizard-chip-menu:hover {
+  border-color: var(--border-strong);
+  color: var(--text-hi);
+}
+.wizard-chip.is-armed {
+  background: var(--accent-weak);
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.wizard-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The live readout — how many terminals this agent owns. An OUTPUT: counts stopped being
+   inputs when the steppers left. */
+.wizard-chip-count {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--text-lo);
+}
+.wizard-chip.is-armed .wizard-chip-count {
+  color: var(--accent-ink);
+}
+.wizard-brush-hint {
+  margin: 0;
+}
+/* Profile rows — only providers with >1 profile render one (they rode the deleted
+   per-agent cards before). */
+.wizard-profiles {
+  display: flex;
   flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+}
+.wizard-profiles:empty {
+  display: none;
+}
+.wizard-profile-row {
+  display: inline-flex;
+  align-items: center;
   gap: var(--sp-2);
+  min-width: 0;
+}
+.wizard-profile-name {
+  flex: none;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  white-space: nowrap;
 }
 .wizard-agents {
   display: grid;
@@ -4756,12 +5052,16 @@ body.pane-dragging * {
 .wizard-agent-card:hover {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
-.wizard-agent-card.is-missing {
-  opacity: 0.75;
-}
-.wizard-agent-card .wizard-agent-tail {
-  justify-content: space-between;
-  width: 100%;
+/* (.is-missing dimming lives with the setup component's wizard-fusion rules: dimming the
+   whole card put a primary Install button at 75% opacity, which read as disabled.) */
+/* The Install action rides the card's ONE row, pushed to the right edge — the card is a
+   single line of content (the old second controls row left with the steppers, and a lone
+   button on its own row just doubled the card's height). */
+.wizard-agent-head .wizard-agent-action {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
 }
 /* The custom row and the empty state span the whole grid. */
 .wizard-agent-row {
@@ -4788,20 +5088,12 @@ body.pane-dragging * {
   flex: none;
   margin-left: auto; /* no zero-width spacer element — the audit's REMOVE */
 }
-.wizard-agent-row :is(.stepper, .wizard-profile-select, .wizard-agent-copy, .wizard-recheck),
-.wizard-agent-card :is(.stepper, .wizard-profile-select, .wizard-agent-copy, .wizard-recheck) {
+.wizard-agent-row :is(.stepper, .wizard-recheck),
+.wizard-agent-card :is(.stepper, .wizard-recheck) {
   height: var(--wz-ctl);
 }
-.wizard-agent-card .wizard-profile-select {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.wizard-agent-card .wizard-agent-install {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  min-width: 0;
-}
+/* (The per-card "Fill all ×N" button and the per-card profile select left with the
+   steppers — fills live on the chips' ▾ menus, profiles in .wizard-profiles.) */
 .wizard-agent-name {
   flex: 0 1 auto;
   min-width: 0;
@@ -5056,7 +5348,7 @@ body.pane-dragging * {
   background: var(--accent-contrast);
 }
 .switch-input:focus-visible + .switch-track {
-  outline: 2px solid var(--accent-glow);
+  outline: var(--ring-w) solid var(--accent-glow);
   outline-offset: 2px;
 }
 .switch-input:disabled + .switch-track {
@@ -5220,8 +5512,8 @@ body.pane-dragging * {
   background: var(--bg-elevated);
 }
 .fb-row:focus-visible {
-  outline: 2px solid var(--accent-glow);
-  outline-offset: -2px;
+  outline: var(--ring-w) solid var(--accent-glow);
+  outline-offset: var(--ring-inset);
 }
 .fb-row.is-selected {
   background: var(--accent-weak);
@@ -5335,8 +5627,8 @@ body.pane-dragging * {
   background: var(--bg-elevated);
 }
 .ft-row:focus-visible {
-  outline: 2px solid var(--accent-glow);
-  outline-offset: -2px;
+  outline: var(--ring-w) solid var(--accent-glow);
+  outline-offset: var(--ring-inset);
 }
 .ft-row.is-selected {
   background: var(--accent-weak);
@@ -5525,8 +5817,8 @@ body.pane-dragging * {
 }
 .explorer-dock-handle:focus-visible,
 .browser-dock-handle:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: -2px;
+  outline: var(--ring-w) solid var(--focus);
+  outline-offset: var(--ring-inset);
   background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 .explorer-dock-handle:hover {
@@ -7120,7 +7412,7 @@ body.pane-dragging * {
   border-color: var(--border-strong);
 }
 .prov-row:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: var(--ring-w) solid var(--accent);
   outline-offset: 2px;
 }
 .prov-avatar {
@@ -7168,19 +7460,8 @@ body.pane-dragging * {
   color: var(--text-lo);
   font-size: var(--fs-11);
 }
-.prov-cmd {
-  align-self: flex-start;
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  color: var(--text-mid);
-  background: var(--bg-inset);
-  border-radius: var(--r-sm);
-  padding: 2px var(--sp-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
-}
+/* (`.prov-cmd` — the row's inline one-liner — went with the copy-the-command affordance.
+   The setup panel below the row carries the command now, in `.agent-setup-cmd`.) */
 .prov-actions {
   display: flex;
   gap: var(--sp-1);
@@ -7219,6 +7500,286 @@ body.pane-dragging * {
   border-radius: var(--r-sm);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* ── One-click agent setup (agents/setup-panel.ts) ─────────────────────────────────────
+   The SAME control in three places — Home's checklist, the wizard's agent cards, and
+   Settings › Agent CLIs — because "install this CLI" is one job and must not look like
+   three. The component is deliberately TWO elements:
+
+     .agent-setup-action   the primary control (Install / Retry / a running indicator),
+                           placed INLINE where each surface's controls already live —
+                           never a button floating under a list;
+     .agent-setup          the progress block — named steps with verdicts, the remedy on
+                           a failure, the transcript behind Details — hidden at rest and
+                           rendered full-width under the row it belongs to, FUSED to it
+                           (screenshot-verified: the earlier one-element cut left the
+                           button and progress orphaned between cards).
+
+   No install command appears anywhere in this component (explicit direction). The step
+   list exists because a run can take minutes (a Node install over a slow line), and a
+   spinner with no nouns beside it is indistinguishable from a hang. */
+.agent-setup-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+  min-width: 0;
+}
+/* Same anatomy for the three inline non-button states: small, quiet, one line. */
+.agent-setup-running,
+.agent-setup-ready,
+.agent-setup-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+.agent-setup-running {
+  color: var(--text-mid);
+}
+.agent-setup-ready {
+  color: var(--success);
+}
+.agent-setup-notice {
+  color: var(--warning);
+  white-space: normal;
+}
+
+/* The progress block. Base geometry only — each surface's own rule fuses its edges. */
+.agent-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.agent-setup-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--danger-ink);
+  font-size: var(--fs-12);
+}
+.agent-setup-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.agent-setup-step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-11);
+}
+/* Marks share one fixed-width column, so the five icons form a RAIL — the alignment is
+   what makes the list read as one drawn object instead of five stacked lines. */
+.agent-setup-step-mark {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  margin-top: 1px;
+  color: var(--text-lo);
+}
+.agent-setup-step.is-done .agent-setup-step-mark,
+.agent-setup-step.is-skipped .agent-setup-step-mark {
+  color: var(--success);
+}
+.agent-setup-step.is-failed .agent-setup-step-mark {
+  color: var(--danger);
+}
+.agent-setup-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.agent-setup-step-label {
+  color: var(--text-mid);
+}
+.agent-setup-step.is-running .agent-setup-step-label,
+.agent-setup-step.is-failed .agent-setup-step-label {
+  color: var(--text-hi);
+}
+/* A step that has not run yet says so by receding — nothing here may read as a claim
+   about work that has not happened. */
+.agent-setup-step.is-pending {
+  opacity: 0.55;
+}
+.agent-setup-step-note {
+  color: var(--text-lo);
+  overflow-wrap: anywhere;
+}
+/* THE REMEDY. The reason a failure is reported as a step at all: a sentence saying what
+   to DO, in the same place as the thing that went wrong. Styled to be read. */
+.agent-setup-step-remedy {
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid var(--danger);
+  background: var(--danger-weak);
+  color: var(--danger-ink);
+  overflow-wrap: anywhere;
+}
+.agent-setup-verdict {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--success);
+  font-size: var(--fs-12);
+}
+.agent-setup-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.agent-setup-details-toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-lo);
+  font-size: var(--fs-11);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.agent-setup-details-toggle:hover {
+  color: var(--text-mid);
+}
+.agent-setup-log {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  max-height: 200px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-mid);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agent-setup--compact .agent-setup-log {
+  max-height: 140px;
+}
+
+/* ── Surface fusion: Settings › Agent CLIs ─────────────────────────────────────────────
+   The CARD is .prov-item now (it used to be .prov-row, which left anything appended
+   after the row — the setup progress, the install log — floating OUTSIDE the visual
+   card, as orphaned chrome between providers). The row keeps the click affordance and
+   its padding; the item carries border/background; children below the row separate with
+   hairlines INSIDE the card, and indent to the row's text column so the whole card
+   shares one left edge. */
+.prov-item {
+  /* The text column's left edge: row padding + the 34px avatar + the row gap. Defined
+     here as a variable so the avatar's width lives in ONE place for the indent rule. */
+  --prov-indent: calc(var(--sp-3) + 34px + var(--sp-3));
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  overflow: hidden;
+  transition: border-color var(--dur-1) var(--ease);
+}
+.prov-item:has(.prov-row:hover) {
+  border-color: var(--border-strong);
+}
+.prov-row {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+/* The ring stays inside the card's clipped corners. */
+.prov-row:focus-visible {
+  outline-offset: var(--ring-inset);
+}
+.prov-item > .agent-setup {
+  border-top: 1px solid var(--border);
+  padding: var(--sp-3);
+  padding-left: var(--prov-indent);
+}
+.prov-item > .prov-log {
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+
+/* ── Surface fusion: Home's checklist ──────────────────────────────────────────────────
+   One inset list, uniform rows: logo tile · name · Install, with every button in the
+   same right-hand column (the before-shot showed five different-width buttons at five
+   x-positions, each trailing its command — the exact "not visually glued" complaint). */
+.firstrun-cli-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+.firstrun-cli-missing {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  min-height: 44px;
+  padding: var(--sp-2) var(--sp-3);
+}
+.firstrun-cli-missing + .firstrun-cli-missing {
+  border-top: 1px solid var(--border);
+}
+.firstrun-cli-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+/* Not installed yet — the mark waits in grayscale and lights up in brand color the
+   moment the roster flips (the same rule Settings' avatars follow). */
+.firstrun-cli-missing .provider-logo {
+  filter: grayscale(1) opacity(0.55);
+}
+.firstrun-cli-name {
+  font-size: var(--fs-12);
+  color: var(--text-hi);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.firstrun-cli-missing .agent-setup {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-2);
+}
+
+/* ── Surface fusion: the wizard's agent cards ─────────────────────────────────────────
+   A missing card keeps the installed card's two-row anatomy — head, then controls —
+   with Install sitting exactly where the stepper sits, right-aligned. Only the head
+   dims: a primary button at 75% card opacity read as broken. */
+.wizard-agent-card.is-missing {
+  opacity: 1;
+}
+.wizard-agent-card.is-missing .wizard-agent-head {
+  opacity: 0.8;
+}
+/* The waiting-in-grayscale mark — the SAME rule Settings' avatars and Home's rows use.
+   Since the "not installed" pill left (redundancy pass), this is the shared visual verb
+   for "not here yet" on all three surfaces, and it lights up in brand color on install. */
+.wizard-agent-card.is-missing .provider-logo {
+  filter: grayscale(1) opacity(0.55);
+}
+.wizard-agent-card .agent-setup {
+  width: 100%;
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-2);
 }
 
 /* Agent CLI configuration: one catalog, rendered one category at a time. */
@@ -8100,8 +8661,8 @@ body.pane-dragging * {
 .browser-dock.agent-driving {
   /* A steady base ring so reduced-motion still reads the state (the glow below is the
      animated layer the blanket clamp becalms to a single pass). */
-  outline: 2px solid color-mix(in srgb, var(--accent) 75%, transparent);
-  outline-offset: -2px;
+  outline: var(--ring-w) solid color-mix(in srgb, var(--accent) 75%, transparent);
+  outline-offset: var(--ring-inset);
 }
 /* The pulsing inner glow — Comet's "assistant is working" shimmer, clean-room. */
 .browser-dock.agent-driving::before {
@@ -9264,36 +9825,10 @@ body.pane-dragging * {
   flex-direction: column;
   gap: var(--sp-1);
 }
-.firstrun-cli-missing {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  flex-wrap: wrap;
-}
-/* 8.5/06: the code chip shrinks (and scrolls) so the copy button holds its baseline
-   on the same line instead of wrapping below — the audit's First-run complaint. */
-.firstrun-cli-missing .firstrun-cli-cmd {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.firstrun-cli-name {
-  font-size: var(--fs-11);
-  color: var(--text-mid);
-  min-width: 88px;
-}
-.firstrun-cli-cmd,
-.wizard-agent-cmd {
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  color: var(--text-mid);
-  background: var(--bg-inset);
-  border-radius: var(--r-sm);
-  padding: var(--sp-1) var(--sp-2);
-  overflow-x: auto;
-  white-space: nowrap;
-}
-.firstrun-copy,
-.wizard-agent-copy,
+/* (The missing-CLI rows' layout — and, before it, the copy-the-one-liner chips this
+   surface used to carry — now live with the setup component: "Surface fusion: Home's
+   checklist" beside the .agent-setup rules. One block owns the whole family so the three
+   surfaces cannot drift apart again.) */
 .wizard-recheck,
 .firstrun-action {
   flex: none;
@@ -9308,8 +9843,6 @@ body.pane-dragging * {
   padding: 3px var(--sp-2);
   cursor: pointer;
 }
-.firstrun-copy:hover,
-.wizard-agent-copy:hover,
 .wizard-recheck:hover,
 .firstrun-action:hover {
   border-color: var(--accent);
@@ -9317,12 +9850,6 @@ body.pane-dragging * {
 }
 .firstrun-action {
   align-self: flex-start;
-}
-.wizard-agent-install {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-  min-width: 0;
 }
 .wizard-agents-empty {
   display: flex;
@@ -10836,7 +11363,7 @@ body.pane-dragging * {
   color: var(--accent-ink);
 }
 .cc-toggle:focus-visible {
-  outline: 2px solid var(--accent-glow);
+  outline: var(--ring-w) solid var(--accent-glow);
   outline-offset: 2px;
   border-radius: var(--r-sm);
 }

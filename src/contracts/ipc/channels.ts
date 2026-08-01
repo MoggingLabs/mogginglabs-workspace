@@ -65,7 +65,17 @@ export const AgentChannels = {
   // or elevated. Explicit user click only; no credentials involved (ADR 0002).
   install: 'agents:install', // (agentId) -> AgentInstallStart ({ ok, reason? })
   installStates: 'agents:installStates', // -> AgentInstallState[] (snapshot, so a late-mounted tab catches up)
-  installChanged: 'agents:installChanged' // main -> renderer: AgentInstallState (progress + verdict pushes)
+  installChanged: 'agents:installChanged', // main -> renderer: AgentInstallState (progress + verdict pushes)
+  // One-click setup: the same destination as `install`, on a machine that isn't ready —
+  // it bootstraps the runtime, fixes the global-install permissions, repairs PATH, installs
+  // and then VERIFIES. Reports named steps with remedies, never a bare exit code.
+  setup: 'agents:setup', // (agentId) -> AgentSetupStart
+  setupCancel: 'agents:setupCancel', // (agentId) -> void
+  setupStates: 'agents:setupStates', // -> AgentSetupState[] (snapshot for a late-mounted UI)
+  setupChanged: 'agents:setupChanged', // main -> renderer: AgentSetupState
+  // Sign-in happens AFTER the terminals exist — the app types the provider's own command
+  // into a pane the user is watching and handles no credential (ADR 0002).
+  signIn: 'agents:signIn' // (agentId) -> AgentSignInTarget | null
 } as const
 
 export const AgentConfigChannels = {
@@ -124,7 +134,8 @@ export const ShellChannels = {
 export const WorktreeChannels = {
   create: 'worktrees:create', // (CreateWorktreeRequest) -> CreateWorktreeResult
   list: 'worktrees:list', // (repo) -> WorktreeInfo[] (managed worktrees only)
-  remove: 'worktrees:remove' // (RemoveWorktreeRequest) -> RemoveWorktreeResult (dirty-safe)
+  remove: 'worktrees:remove', // (RemoveWorktreeRequest) -> RemoveWorktreeResult (dirty-safe)
+  preflight: 'worktrees:preflight' // (repo) -> WorktreePreflight — asked BEFORE the toggle is offered
 } as const
 
 export const BoardChannels = {
@@ -181,7 +192,13 @@ export const FsChannels = {
 } as const
 
 export const SystemChannels = {
-  machine: 'system:machine' // -> MachineSpec (cpu count + total RAM; the pane budget's raw inputs)
+  machine: 'system:machine', // -> MachineSpec (cpu count + total RAM; the pane budget's raw inputs)
+  // The toolchain seam: whether THIS PROCESS can run git/node/npm, which is not the same
+  // question as whether they are installed. `repairPath` re-reads the live PATH (registry /
+  // login shell) and answers with the refreshed truth — the one-click fix for "I installed
+  // it after the app started, and the app still can't see it".
+  toolchain: 'system:toolchain', // -> ToolchainStatus
+  repairPath: 'system:repairPath' // -> ToolchainStatus (re-resolve first, then report)
 } as const
 
 export const ExplorerChannels = {

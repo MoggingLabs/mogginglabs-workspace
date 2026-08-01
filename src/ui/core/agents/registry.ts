@@ -36,6 +36,12 @@ function initialize(): void {
     const state = payload as AgentInstallState
     if (state.phase !== 'running') void refreshAgentRegistry()
   })
+  // One-click setup lands the same way: the moment it succeeds, every surface that asks
+  // "is this installed" must agree, because there is only one answer to that question.
+  getBridge().on(AgentChannels.setupChanged, (payload) => {
+    const state = payload as { phase?: string }
+    if (state?.phase && state.phase !== 'running') void refreshAgentRegistry()
+  })
   window.addEventListener('focus', refresh)
   document.addEventListener('visibilitychange', refresh)
   // Covers a CLI installed/uninstalled in an already-open external terminal.

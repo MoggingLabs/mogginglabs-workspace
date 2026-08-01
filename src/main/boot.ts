@@ -44,6 +44,7 @@ import { registerServices } from './services'
 import { startDaemonBackend } from './daemon-relay'
 import { DaemonMigrationDeferredError } from './daemon-migrate'
 import { installCliRuntime } from './cli-runtime'
+import { applyLivePathToProcess } from '@backend/platform/env-path'
 import { installDeepLinkListeners, registerDeepLink, initialDeepLinkCwd, initialControlCommand } from './deep-link'
 import { CONTROL_COLD_START_DELAY_MS, ControlChannels, WorkspaceChannels } from '@contracts'
 import { initAutoUpdate } from './updater'
@@ -245,6 +246,26 @@ export function bootMain({ harness = false, hooks }: BootOptions = {}): void {
         fatal(err, 'cli-runtime')
         return
       }
+
+      // THE PATH REPAIR, before anything is spawned. A desktop process inherits ONE
+      // environment block — on Windows from the `explorer.exe` that has been running since
+      // login — and never learns of a tool installed afterwards. Measured on a real install:
+      // the registry carried `C:\Program Files\Git\cmd` and this process did not, so
+      // `execFile('git', …)` was ENOENT and every `git worktree add` the wizard issued failed
+      // with "Could not isolate every agent". The same rot hides a freshly installed agent CLI
+      // from detection and hides `npm` from the installer that needs it.
+      //
+      // So: read the PATH that is true NOW (the registry on Windows, the login shell on POSIX
+      // — where installers and rc files actually write), union the well-known bin dirs, and
+      // merge. APPENDED, so cli-runtime's own dir keeps index 0. Awaited because the daemon
+      // spawns from this same block and must inherit the repair; capped because a pathological
+      // login shell must never be able to hold boot open. (Panes are repaired a second time,
+      // per spawn, in daemon-relay: a DETACHED daemon can predate this process entirely.)
+      const repaired = await Promise.race([
+        applyLivePathToProcess().catch(() => [] as string[]),
+        new Promise<string[]>((resolve) => setTimeout(() => resolve([]), 4000))
+      ])
+      if (repaired.length) console.warn(`[env] PATH repaired — the launch environment was missing ${repaired.join(', ')}`)
 
       assertNativeModules() // stale/missing .node -> exit 1 with the rebuild command, never a broken window
       // Windows < 18309 would silently get a winpty, whose resize semantics the UI does not model.

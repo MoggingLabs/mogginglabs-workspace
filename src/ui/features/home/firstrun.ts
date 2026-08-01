@@ -1,6 +1,5 @@
 import { AgentChannels, IntegrationsChannels, type AgentInfo } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { copyText } from '../../core/clipboard/clipboard-port'
 import { el, icon, providerLogo, showToast } from '../../components'
 import { getWorkspaces } from '../../core/workspace/workspace-info-port'
 import { openWizard } from '../../core/workspace/wizard-port'
@@ -8,6 +7,7 @@ import { setActiveView } from '../../core/shell/view-port'
 import { requestSettingsTab } from '../../core/shell/settings-tab-port'
 import { requestIntegrationsFocus } from '../../core/shell/integrations-focus-port'
 import { getTelemetry } from '../../core/telemetry'
+import { createAgentSetupPanel, type AgentSetupPanelHandle } from '../agents/setup-panel'
 
 /**
  * First-run checklist (Phase-6/06): a dismissible "Get set up" card on Home,
@@ -59,6 +59,10 @@ export function createFirstRun(): {
    *  contrast are all produced by the real path. Empty in production (and tree-shaken). */
   let forcedMissing = new Set<string>()
 
+  /** Live setup panels on the "install a CLI" row — each owns an IPC subscription, and the
+   *  row is rebuilt from scratch on every refresh. */
+  const setupPanels: AgentSetupPanelHandle[] = []
+
   const dismissBtn = el(
     'button',
     { class: 'firstrun-dismiss icon-btn', type: 'button', ariaLabel: 'Dismiss setup' },
@@ -81,23 +85,9 @@ export function createFirstRun(): {
 
   let completedToasted = false
 
-  const copyBtn = (text: string): HTMLElement => {
-    const b = el('button', { class: 'firstrun-copy', type: 'button' }, [icon('copy', 12), el('span', { text: 'Copy' })])
-    b.title = text
-    b.onclick = (): void => {
-      // copyText never rejects and answers truthfully — main verifies the write took (a
-      // clipboard held open by another process is a silent no-op), so the label only ever
-      // claims what actually happened.
-      void copyText(text).then((ok) => {
-        const label = b.querySelector('span')
-        if (label) {
-          label.textContent = ok ? 'Copied' : 'Copy failed'
-          setTimeout(() => (label.textContent = 'Copy'), 1400)
-        }
-      })
-    }
-    return b
-  }
+  // (The row's copy-the-command button lived here. The setup panel carries its own — same
+  // affordance, same honest "Copied"/"Copy failed" label, now sitting under the button that
+  // does the work instead of standing in for it.)
 
   const rowEl = (opts: {
     done: boolean
@@ -117,6 +107,7 @@ export function createFirstRun(): {
     ])
 
   async function computeRows(): Promise<RowState[]> {
+    for (const panel of setupPanels.splice(0)) panel.dispose()
     const [detected, servers] = await Promise.all([
       bridge.invoke(AgentChannels.detect).catch(() => []) as Promise<AgentInfo[]>,
       bridge.invoke(IntegrationsChannels.serversList).catch(() => []) as Promise<{ builtIn?: boolean }[]>
@@ -138,16 +129,31 @@ export function createFirstRun(): {
         ])
       )
     }
-    for (const m of missing) {
-      if (!m.installHint) continue
-      cliDetail.append(
-        el('div', { class: 'firstrun-cli-missing' }, [
-          providerLogo(m.id, 13),
-          el('span', { class: 'firstrun-cli-name', text: m.name }),
-          el('code', { class: 'firstrun-cli-cmd', text: m.installHint }),
-          copyBtn(m.installHint)
-        ])
-      )
+    // The checklist's whole job is to get a first-time user to a working agent, so this is
+    // where a copy-a-command chip did the most damage: step one of three, and it handed
+    // back a terminal task. Now: ONE aligned list — logo, name, an identical Install
+    // button on every row, sharing a right-hand column — and no command in sight (explicit
+    // direction; the transcript behind Details still shows what ran). The install itself is
+    // the same one-click setup the wizard and Settings use: it bootstraps npm/Node, fixes
+    // global-install permissions, repairs PATH, verifies. README's "we never install for
+    // you" was about brokering AUTH; the CLI is still yours and still self-authenticates,
+    // and the command run is the provider's own (ADR 0002).
+    if (missing.some((m) => m.installHint)) {
+      const list = el('div', { class: 'firstrun-cli-list' })
+      for (const m of missing) {
+        if (!m.installHint) continue
+        const panel = createAgentSetupPanel({ agentId: m.id, name: m.name, compact: true })
+        setupPanels.push(panel)
+        list.append(
+          el('div', { class: 'firstrun-cli-missing' }, [
+            el('span', { class: 'firstrun-cli-logo' }, [providerLogo(m.id, 16)]),
+            el('span', { class: 'firstrun-cli-name', text: m.name }),
+            panel.action,
+            panel.el
+          ])
+        )
+      }
+      cliDetail.append(list)
     }
 
     // ② First workspace — done when one exists.

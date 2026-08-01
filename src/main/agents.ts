@@ -4,9 +4,11 @@ import {
   buildLaunchCommand,
   codexTitleArgs,
   InstallService,
+  SetupService,
   poolProviderSessions,
   probeLogin,
-  resumeSessionIdFromFile
+  resumeSessionIdFromFile,
+  signInTarget
 } from '@backend/features/agents'
 import { resolveHome } from '@backend/features/usage'
 import { AgentChannels, type AgentCommandRequest, type AgentCommandResult, type AgentInfo } from '@contracts'
@@ -27,6 +29,7 @@ import { consumeRestoreResumeSessionId } from './session-restore'
 // background pty (the provider's own one-liner, run on an explicit click).
 
 let installs: InstallService | null = null
+let setups: SetupService | null = null
 let detectOverride: AgentInfo[] | null = null
 
 export function registerAgents(getWin: () => BrowserWindow | null): void {
@@ -35,6 +38,14 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
       getWin()?.webContents.send(AgentChannels.installChanged, state)
     } catch {
       /* window gone — the snapshot channel catches the UI up on remount */
+    }
+    if (state.phase === 'succeeded') void refreshAgentSettingsForCli(state.agentId)
+  })
+  setups = new SetupService((state) => {
+    try {
+      getWin()?.webContents.send(AgentChannels.setupChanged, state)
+    } catch {
+      /* window gone — setupStates catches a remounted UI up */
     }
     if (state.phase === 'succeeded') void refreshAgentSettingsForCli(state.agentId)
   })
@@ -169,19 +180,34 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
       else if (state?.email && state.email.toLowerCase() !== profile.email.toLowerCase())
         signIn = { expected: profile.email, actual: state.email }
     }
-    return { ok: true, command, signIn }
+    // The plain "not signed in at all" case — the one a first-time user is actually in, and
+    // the one the profile-email check above structurally cannot see. `undefined` from the
+    // probe means UNKNOWABLE (no probe for this provider, or an unreadable home) and must
+    // never be reported as signed-out: an offer to fix a problem nobody has is its own bug.
+    let needsSignIn: AgentCommandResult['needsSignIn']
+    const loginState = probeLogin(req.agentId, profile ?? null)
+    if (loginState?.signedIn === false) needsSignIn = signInTarget(req.agentId) ?? undefined
+    return { ok: true, command, signIn, needsSignIn }
   })
   ipcMain.handle(AgentChannels.install, (_e, agentId: string) => installs!.start(String(agentId)))
   ipcMain.handle(AgentChannels.installStates, async () => {
     await maybeFault(AgentChannels.installStates) // finding 39's seam: Settings § Providers' read
     return installs?.states() ?? []
   })
+  ipcMain.handle(AgentChannels.setup, (_e, agentId: string) => setups!.start(String(agentId)))
+  ipcMain.handle(AgentChannels.setupCancel, (_e, agentId: string) => setups?.cancel(String(agentId)))
+  ipcMain.handle(AgentChannels.setupStates, () => setups?.snapshot() ?? [])
+  // A pointer to the provider's own login verb — no credential, no browser, no token. The
+  // renderer types it into a pane; that is the whole transaction (ADR 0002).
+  ipcMain.handle(AgentChannels.signIn, (_e, agentId: string) => signInTarget(String(agentId)))
 }
 
 /** App quitting: kill any in-flight ephemeral install terminals. */
 export function disposeAgentInstalls(): void {
   installs?.dispose()
   installs = null
+  setups?.dispose()
+  setups = null
   detectOverride = null
 }
 

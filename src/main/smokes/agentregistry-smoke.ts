@@ -73,18 +73,26 @@ export function runAgentRegistrySmoke(win: BrowserWindow): void {
     await ES(`window.__mogging.templates.openWizard()`)
     await sleep(350)
     const wizard = await ES<boolean>(`(() => {
-      // The roster renders provider CARDS since the wizard redesign (the old
-      // .wizard-agent-row survives only as the custom-command row) — this
-      // selector went stale with it and the check silently matched nothing.
-      const row = [...document.querySelectorAll('.wizard-agent-card, .wizard-agent-row')].find((item) => item.textContent?.includes('Audit Codex'))
-      return !!row && row.classList.contains('is-missing') === ${!installed} && !!row.querySelector('.stepper') === ${installed}
+      // The placement redesign (2026-08-01): an INSTALLED agent is a palette CHIP (a
+      // paintable brush — the steppers are gone); a MISSING one is still a card whose
+      // whole job is the one-click Install. The registry flip must move the provider
+      // between those two homes, so both are asserted, each in both directions.
+      const chip = [...document.querySelectorAll('#view-wizard .wizard-chip')].find((item) => item.textContent?.includes('Audit Codex'))
+      const card = [...document.querySelectorAll('#view-wizard .wizard-agent-card')].find((item) => item.textContent?.includes('Audit Codex'))
+      return !!chip === ${installed} && !!card === ${!installed} && (!card || card.classList.contains('is-missing'))
     })()`)
 
     await ES(`window.__mogging.view('settings'); window.__mogging.settingsTab('providers')`)
     await sleep(350)
     const settings = await ES<boolean>(`(() => {
+      // No resting status pill since the redundancy pass (2026-08-01): an installed row
+      // states its presence through the version sub-line, a missing one through its
+      // Install button — each asserted in BOTH directions so neither can linger.
       const row = document.querySelector('.prov-item[data-provider="codex"]')
-      return !!row && row.textContent?.includes(${JSON.stringify(installed ? 'Available' : 'Not installed')}) === true
+      if (!row) return false
+      const detected = row.textContent?.includes('Detected on PATH') === true
+      const install = !!row.querySelector('.agent-setup-action .btn')
+      return detected === ${installed} && install === ${!installed}
     })()`)
     return { palette, paneMenu, board, wizard, settings }
   }

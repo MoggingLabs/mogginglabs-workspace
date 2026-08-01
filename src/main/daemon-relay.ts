@@ -405,7 +405,17 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     // none: the key would ride SSH to another machine (not our env to hand out).
     const workspaceId = typeof req.workspaceId === 'string' ? req.workspaceId : undefined
     const agentId = typeof req.agentId === 'string' ? req.agentId : undefined
-    const env = remote ? undefined : resolveServiceKeyEnv(workspaceId, agentId)
+    // The pane's environment: vault service keys, plus THE PATH REPAIR.
+    //
+    // The daemon is detached and outlives the app (ADR 0006), so its own `process.env` can be
+    // several launches older than this one — older than the Git or npm install that the user
+    // did five minutes ago. Boot repairs main's PATH; this hands that repair to each pane, so
+    // a terminal can run a CLI installed after the daemon started without restarting anything.
+    // Local panes only: a remote pane's PATH belongs to the far-side machine, and shipping
+    // this one over SSH would name directories that do not exist there.
+    const env = remote
+      ? undefined
+      : { ...(resolveServiceKeyEnv(workspaceId, agentId) ?? {}), ...(process.env.PATH ? { PATH: process.env.PATH } : {}) }
     // `run` (spawn-run launch delivery): typed by the SESSION at spawn — local panes only
     // (a remote launch is typed after the SSH bootstrap proves the far-side shell).
     const run = remote || typeof req.run !== 'string' || !req.run ? undefined : req.run

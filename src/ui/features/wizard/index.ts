@@ -1,11 +1,19 @@
 import type { ShellContext, UiFeature } from '../../core/registry/feature-registry'
 import { IntegrationsChannels, ProfileChannels, RemoteChannels } from '@contracts'
-import type { AgentInfo, AgentProfile, McpServerEntry, ProviderCount, ProviderMixTemplate, RecentWorkspace, RemoteHost } from '@contracts'
+import type {
+  AgentInfo,
+  AgentProfile,
+  McpServerEntry,
+  ProviderCount,
+  ProviderMixTemplate,
+  RecentWorkspace,
+  RemoteHost,
+  WorktreePreflight
+} from '@contracts'
 import type { PathStatus } from '../../components/input'
 import { copyText } from '../../core/clipboard/clipboard-port'
 import {
   Button,
-  Pill,
   clear,
   createCheckbox,
   createFolderBrowser,
@@ -14,8 +22,10 @@ import {
   createStepper,
   el,
   icon,
+  openContextMenu,
   providerAccent,
   providerLogo,
+  type ContextMenuEntry,
   type ElChild,
   type FolderBrowserHandle,
   type GridPainterHandle,
@@ -45,8 +55,9 @@ import { activeView, goBack, setActiveView } from '../../core/shell/view-port'
 import { getTelemetry } from '../../core/telemetry'
 import { getBridge } from '../../core/ipc/bridge'
 import { wizardClient } from './wizard.client'
-import { createPathSelection, type PathSelectionHandle, type PathState } from './path-selection'
+import { createPathSelection, type PathOrigin, type PathSelectionHandle, type PathState } from './path-selection'
 import { getAgentRegistry, onAgentRegistryChange, refreshAgentRegistry } from '../../core/agents/registry'
+import { createAgentSetupPanel, type AgentSetupPanelHandle } from '../agents/setup-panel'
 
 // Provider identity (accent + official mark) lives in components/provider-logo —
 // one source for the wizard, settings, usage, and pane chrome.
@@ -128,11 +139,30 @@ export const wizardFeature: UiFeature = {
     let barTouched = false // typing in the bar outranks the late-arriving home default
     let gridSpec: GridSpecModel = specForPanes(defaultPaneCount())
     let paneCount = gridSpec.regions.length
-    let counts = new Map<string, number>() // provider id -> count
+    // THE ASSIGNMENT (placement redesign, 2026-08-01) — per-TERMINAL, not per-provider.
+    // slots[k] names what terminal k runs: a provider id, 'custom' (the command in
+    // `customCmd`), or null for a plain shell. Reading order, aligned with
+    // gridSpec.regions. This replaced the counts-Map model on explicit direction: counts
+    // could say HOW MANY of each agent but never WHERE one goes, and every quick-fill
+    // button was a patch over that indirection. Counts are now derived readouts.
+    let slots: (string | null)[] = Array<string | null>(paneCount).fill(null)
+    // The armed brush: a provider id, 'custom', or 'shell' (paints a plain shell).
+    // null = nothing armed; canvas clicks open the per-terminal picker instead.
+    let brush: string | null = null
     let customCmd = ''
-    let customCount = 0
     let isRepo = false // set by the folder field's git probe
     let isolate = false // Phase-3/03: one git worktree per agent pane
+    // Whether isolation is POSSIBLE here, answered by main before the toggle is offered.
+    // `isRepo` alone was not enough and the gap cost a user their first launch: probeGit
+    // degrades to reading `.git/HEAD` when git cannot be RUN at all (the classic case — git
+    // installed after the app started, so it is on the system PATH and invisible to this
+    // process), so a folder read as a repo, the box enabled itself, and every `git worktree
+    // add` then failed at Launch. null = not asked yet.
+    let isolatePreflight: WorktreePreflight | null = null
+    /** The folder the current answer (or in-flight question) belongs to — one probe per
+     *  folder, however many times the selection re-emits it. */
+    let preflightCwd: string | null = null
+    let preflightSeq = 0
     let remoteHost: { hostId: string; name: string } | null = null // Phase-4/05
     let localCwd = ''
     let remoteCwd = ''
@@ -191,10 +221,13 @@ export const wizardFeature: UiFeature = {
 
     const applyRoster = (next: readonly AgentInfo[]): void => {
       roster = [...next]
-      // A CLI removed while this page is open cannot remain invisibly assigned.
-      for (const [id] of counts) {
-        if (roster.some((agent) => agent.id === id && agent.installed)) continue
-        counts.delete(id)
+      // A CLI removed while this page is open cannot remain invisibly assigned — its
+      // terminals fall back to plain shells. ('custom' and 'shell' are not roster ids.)
+      slots = slots.map((id) =>
+        id && id !== 'custom' && !roster.some((agent) => agent.id === id && agent.installed) ? null : id
+      )
+      if (brush && brush !== 'custom' && brush !== 'shell' && !roster.some((a) => a.id === brush && a.installed)) {
+        brush = null // the armed brush's CLI is gone; painting nothing beats painting a ghost
       }
       normalizeAssignmentsToCapacity()
       renderRoster()
@@ -208,6 +241,7 @@ export const wizardFeature: UiFeature = {
       openGeneration++
       selection?.dispose()
       cdLine?.dispose()
+      for (const panel of setupPanels.splice(0)) panel.dispose()
       launching = false
       goBack()
     }
@@ -239,10 +273,14 @@ export const wizardFeature: UiFeature = {
           : 0
       capacity = effectivePaneCapacity(ctx.content, machineSpec(), livePaneCount(), railAllowance)
       setGridSpec(specForPanes(Math.min(prefill?.paneCount ?? defaultPaneCount(), capacity.maxPanes)))
-      counts = new Map()
+      slots = Array<string | null>(paneCount).fill(null)
+      brush = null
       customCmd = ''
-      customCount = 0
       isolate = false
+      // A fresh page must not inherit the last one's verdict about a folder it may not
+      // even be looking at any more.
+      isolatePreflight = null
+      preflightCwd = null
       remoteHost = null
       roster = [...getAgentRegistry()]
       presets = []
@@ -255,7 +293,13 @@ export const wizardFeature: UiFeature = {
       if (prefill?.mix) applyMix(prefill.mix)
 
       render()
-      requestAnimationFrame(() => path.focus()) // focus only once the view is painted
+      // Focus lands on the CD LINE, not the folder bar. The bar already holds a real, usable
+      // answer the moment the page opens (your home folder — see the homeDir call below), so
+      // focusing it invited you to retype something that was already correct. The cd line is
+      // the empty control: it is where a keystroke actually means something, and it is the
+      // one that behaves like the terminal this app is made of. Falls back to the bar if the
+      // cd line could not be built.
+      requestAnimationFrame(() => (cdLine ? cdLine.input.focus() : path.focus()))
       getTelemetry().captureEvent({ name: 'wizard.opened', props: { prefilled: !!prefill } })
 
       // The cd line's `~` target — and, when nothing was prefilled, THE default:
@@ -342,67 +386,60 @@ export const wizardFeature: UiFeature = {
       paneCount = gridSpec.regions.length
     }
 
-    /** Seed counts/custom from a preset mix; grow the grid to fit the mix. */
+    /** Seed the slots from a preset/prefill mix; grow the grid to fit the mix. Mix order
+     *  fills from terminal 0 — a mix carries no placement, so first-come is the honest
+     *  expansion (and matches what the old counts model launched). */
     function applyMix(mix: ProviderCount[]): void {
-      counts = new Map()
       customCmd = ''
-      customCount = 0
-      let total = 0
+      const flat: string[] = []
       for (const m of mix) {
         if (m.count <= 0) continue
-        if (m.provider === 'shell') {
-          total += m.count
-        } else if (m.provider.startsWith('custom:')) {
+        if (m.provider === 'shell') continue // shells are the default; they claim no slot
+        if (m.provider.startsWith('custom:')) {
           customCmd = m.provider.slice('custom:'.length)
-          customCount = m.count
-          total += m.count
+          for (let i = 0; i < m.count; i++) flat.push('custom')
         } else {
           // A preset outlives its CLIs. A mix naming a provider that is no longer
-          // installed must not become an assignment: its roster row has no stepper
-          // ("not found on PATH"), so the count would be invisible and unfixable —
-          // and Launch would type a command the shell cannot find. applyRoster
-          // enforces exactly this invariant when the registry CHANGES; the preset/
-          // prefill path lands here. An EMPTY roster means detection has not
-          // answered yet — keep the mix; the open() refresh prunes with real data.
+          // installed must not become an assignment — Launch would type a command the
+          // shell cannot find. applyRoster enforces exactly this invariant when the
+          // registry CHANGES; the preset/prefill path lands here. An EMPTY roster means
+          // detection has not answered yet — keep the mix; the open() refresh prunes
+          // with real data.
           if (roster.length && !roster.some((a) => a.id === m.provider && a.installed)) continue
-          counts.set(m.provider, m.count)
-          total += m.count
+          for (let i = 0; i < m.count; i++) flat.push(m.provider)
         }
       }
+      const shells = mix.filter((m) => m.provider === 'shell').reduce((s, m) => s + m.count, 0)
+      const total = flat.length + shells
       if (total > paneCount) setGridSpec(specForPanes(Math.min(capacity.maxPanes, total)))
-      normalizeAssignmentsToCapacity()
+      slots = Array<string | null>(paneCount).fill(null)
+      flat.slice(0, paneCount).forEach((id, i) => (slots[i] = id))
     }
 
-    /** Keep the persisted model, steppers, preview, and eventual manifest within
-     * the selected grid. Earlier assignments win deterministically on shrink. */
+    /** Keep the assignment aligned with the grid: one entry per terminal, by index, so a
+     *  resize keeps what it can and a shrink drops from the end — the same terminals the
+     *  shrink itself removed. Custom entries with no command cannot survive either. */
     function normalizeAssignmentsToCapacity(): void {
-      let remaining = paneCount
-      const next = new Map<string, number>()
-      for (const [id, raw] of counts) {
-        const count = Math.min(remaining, Math.max(0, Math.floor(Number(raw) || 0)))
-        if (count) next.set(id, count)
-        remaining -= count
-      }
-      counts = next
-      customCount = customCmd.trim()
-        ? Math.min(remaining, Math.max(0, Math.floor(Number(customCount) || 0)))
-        : 0
+      if (slots.length < paneCount) slots = [...slots, ...Array<string | null>(paneCount - slots.length).fill(null)]
+      else if (slots.length > paneCount) slots = slots.slice(0, paneCount)
+      if (!customCmd.trim()) slots = slots.map((id) => (id === 'custom' ? null : id))
     }
 
-    const assignedTotal = (): number =>
-      Array.from(counts.values()).reduce((s, n) => s + n, 0) + (customCmd.trim() ? customCount : 0)
+    const assignedTotal = (): number => slots.filter(Boolean).length
 
-    /** Slot-order assignment expansion (mirrors the backend's resolveLayout). */
+    /** How many terminals `id` owns right now — the chips' ×N readouts. */
+    const countOf = (id: string): number => slots.filter((s) => s === id).length
+
+    /** The per-terminal assignment, in slot order — THE launch manifest. Unlike the old
+     *  counts expansion, this preserves WHERE the user put each agent. */
     function expandAssignments(): string[] {
-      const out: string[] = []
-      for (const a of roster) {
-        const n = counts.get(a.id) ?? 0
-        for (let i = 0; i < n; i++) out.push(a.id)
-      }
       const cmd = customCmd.trim()
-      for (let i = 0; i < customCount && cmd; i++) out.push(`custom:${cmd}`)
-      while (out.length < paneCount) out.push('shell')
-      return out.slice(0, paneCount)
+      return Array.from({ length: paneCount }, (_, i) => {
+        const id = slots[i]
+        if (!id) return 'shell'
+        if (id === 'custom') return cmd ? `custom:${cmd}` : 'shell'
+        return id
+      })
     }
 
     const providerColor = (id: string): string => providerAccent(id)
@@ -433,32 +470,39 @@ export const wizardFeature: UiFeature = {
           regions: gridSpec.regions.map((region) => ({ ...region }))
         },
         customCmd: customCmd.trim(),
-        customCount,
-        counts: new Map(counts),
+        // THE PLACEMENT, slot by slot — what the user painted is what opens. `skipAgents`
+        // means exactly that: every terminal is a plain shell, whatever was painted.
+        assignments: skipAgents ? Array<string>(paneCount).fill('shell') : expandAssignments(),
+        hasBlankCustom: !skipAgents && slots.includes('custom') && !customCmd.trim(),
         remoteHost: remoteHost ? { ...remoteHost } : null,
         profileByProvider: new Map(profileByProvider),
         scopeTools: pickableServers.length > 0,
         selectedTools: [...selectedTools]
       }
+      // BOTH surfaces get the whole message. The chip keeps it verbatim (it is the
+      // machine-readable one — WIZARDFAIL reads `.path-input-status` and matches on the
+      // text, so shortening it here would quietly retire the gate); the alert is the one a
+      // human can actually READ, because the chip is a single ellipsised line and git's
+      // explanation never survived it.
       const refuse = (message: string): false => {
         path.setStatus({ kind: 'warn', text: message })
-        whereSection.scrollIntoView({ block: 'nearest' })
-        path.focus()
+        showLaunchAlert(message)
         return false
       }
       if (!currentOpen(generation)) return false
-      if (!skipAgents && snap.customCount > 0 && !snap.customCmd) {
+      if (snap.hasBlankCustom) {
         return refuse('Enter a custom command or set its count to zero.')
       }
 
+      // The mix is the ASSIGNMENT's multiset, in roster order — presets, the resolve
+      // validation, and telemetry all still speak counts; only placement is new.
       const mix: ProviderCount[] = []
-      if (!skipAgents) {
-        for (const a of roster) {
-          const n = snap.counts.get(a.id) ?? 0
-          if (n > 0) mix.push({ provider: a.id, count: n })
-        }
-        if (snap.customCount > 0 && snap.customCmd) mix.push({ provider: `custom:${snap.customCmd}`, count: snap.customCount })
+      for (const a of roster) {
+        const n = snap.assignments.filter((id) => id === a.id).length
+        if (n > 0) mix.push({ provider: a.id, count: n })
       }
+      const customTotal = snap.assignments.filter((id) => id.startsWith('custom:')).length
+      if (customTotal > 0) mix.push({ provider: `custom:${snap.customCmd}`, count: customTotal })
       const assigned = mix.reduce((s, m) => s + m.count, 0)
       if (snap.paneCount - assigned > 0) mix.push({ provider: 'shell', count: snap.paneCount - assigned })
 
@@ -486,7 +530,10 @@ export const wizardFeature: UiFeature = {
       }
 
       // EXACT resolve: the painter's pane count IS the layout (three panes is a real
-      // arrangement there, never "a 4-grid minus one").
+      // arrangement there, never "a 4-grid minus one"). The resolve VALIDATES the mix
+      // (and is WIZARDFAIL's fault seam), but the assignments the workspace opens with
+      // are snap.assignments — the resolve's own expansion is counts-ordered and would
+      // throw away where the user painted each agent.
       let resolved: { paneCount: number; assignments: string[] }
       try {
         resolved = await wizardClient.resolve(mix, true)
@@ -526,7 +573,7 @@ export const wizardFeature: UiFeature = {
         // Every job SETTLES before any verdict is reached: a rollback issued while a
         // sibling create was still in flight could not name its path and would leak
         // the worktree (WIZARDFAIL asserts leak-zero on partial failure).
-        const jobs: Promise<{ path: string } | { error?: string } | null>[] = resolved.assignments.map((assignment) =>
+        const jobs: Promise<{ path: string } | { error?: string } | null>[] = snap.assignments.map((assignment) =>
           assignment && assignment !== 'shell'
             ? wizardClient
                 .createWorktree(snap.cwd)
@@ -559,12 +606,15 @@ export const wizardFeature: UiFeature = {
           name: snap.name.trim() || basename(snap.cwd) || 'Workspace',
           cwd: snap.remoteHost ? '' : snap.cwd,
           paneCount: resolved.paneCount,
-          assignments: resolved.assignments,
+          // snap.assignments, not resolved.assignments: same multiset (the resolve took
+          // its mix FROM these), but slot-ordered — terminal 3 runs what was painted on
+          // terminal 3, not whatever the counts expansion happened to put there.
+          assignments: snap.assignments,
           paneCwds: snap.remoteHost ? undefined : paneCwds,
           remotes: selectedRemote
             ? Array<{ hostId: string; name: string; cwd?: string } | null>(resolved.paneCount).fill(selectedRemote)
             : undefined,
-          profileIds: resolved.assignments.map((a) => (a && snap.profileByProvider.has(a) ? snap.profileByProvider.get(a)! : null)),
+          profileIds: snap.assignments.map((a) => (a && snap.profileByProvider.has(a) ? snap.profileByProvider.get(a)! : null)),
           // Scope only when there ARE connected servers to scope (else leave the
           // CLIs' global config untouched — no silent stripping, 8/09).
           tools: snap.scopeTools ? snap.selectedTools : undefined,
@@ -582,8 +632,8 @@ export const wizardFeature: UiFeature = {
         name: 'wizard.completed',
         props: {
           panes: resolved.paneCount,
-          agents: resolved.assignments.filter((a) => a && a !== 'shell').length,
-          custom: snap.customCount > 0,
+          agents: snap.assignments.filter((a) => a && a !== 'shell').length,
+          custom: snap.assignments.some((a) => a.startsWith('custom:')),
           skipped_agents: skipAgents,
           merged: snap.gridSpec.regions.some((region) => region.rs > 1 || region.cs > 1),
           isolated: paneCwds !== undefined // a boolean — never the paths (ADR 0005)
@@ -613,6 +663,9 @@ export const wizardFeature: UiFeature = {
     let painter!: GridPainterHandle
     let agentsCaption!: HTMLElement
     let rosterHost!: HTMLElement
+    let paletteHost!: HTMLElement
+    let brushHint!: HTMLElement
+    let profilesHost!: HTMLElement
     let presetsHost!: HTMLElement
     let toolsSection!: HTMLElement
     let toolsHost!: HTMLElement
@@ -624,15 +677,20 @@ export const wizardFeature: UiFeature = {
     let saveBtn!: HTMLButtonElement
     let isolateBox!: ReturnType<typeof createCheckbox>
     let isolateHint!: HTMLElement
+    let isolateFix!: HTMLButtonElement
+    let launchAlert!: HTMLElement
     let customInput!: HTMLInputElement
-    const steppers = new Map<string, StepperHandle>()
     let customStepper: StepperHandle | null = null
+    /** Live setup panels on the roster's missing-CLI cards — each owns an IPC subscription. */
+    const setupPanels: AgentSetupPanelHandle[] = []
 
-    /** Push a programmatic mix (prefill, preset, Clear) back into the custom row. */
+    /** Push the slots' truth back into the custom row — value, ceiling, enablement. */
     function syncCustom(): void {
       if (!customInput || !customStepper) return
       if (customInput.value !== customCmd) customInput.value = customCmd
-      customStepper.setValue(customCount)
+      const mine = countOf('custom')
+      customStepper.setValue(mine)
+      customStepper.setMax(mine + (paneCount - assignedTotal()))
       customStepper.setDisabled(!customCmd.trim())
     }
 
@@ -661,7 +719,6 @@ export const wizardFeature: UiFeature = {
       cdLine?.dispose()
       clear(body)
       clear(footer)
-      steppers.clear()
       customStepper = null
       chosenLine = el('p', { class: 'wizard-chosen' }) // the selection's subscriber writes it
       // Rebuilt with the page: its subscribers close over this render's DOM.
@@ -743,7 +800,7 @@ export const wizardFeature: UiFeature = {
           nameInputEl.placeholder = auto || 'Workspace name'
         }
         updateChosen()
-        syncIsolate()
+        probeIsolation(origin)
       })
 
       // A prefilled folder (Ctrl+T from a workspace, a board card) is the selection;
@@ -901,8 +958,16 @@ export const wizardFeature: UiFeature = {
         maxPanes: capacity.maxPanes,
         onChange: (spec) => {
           setGridSpec(spec)
-          refreshAgents()
+          // Placement follows the grid by index; the palette's readouts and the custom
+          // stepper's ceiling both move with it.
+          renderAgentControls()
         },
+        // THE PLACEMENT SURFACE (redesign, 2026-08-01): with a chip armed, the canvas
+        // paints agents; bare, a click on a terminal opens its own picker. Structural
+        // gestures (drag-merge, click-splits-merged) are untouched.
+        brush: () => brush,
+        onPaint: paintSlot,
+        onPickSlot: openSlotPicker,
         slotChip: (slot) => {
           const id = expandAssignments()[slot]
           if (!id || id === 'shell') return null
@@ -964,7 +1029,21 @@ export const wizardFeature: UiFeature = {
       return `This screen fits up to ${capacity.maxPanes} terminals (${capacity.maxCols} across, ${capacity.maxRows} down at the minimum pane size).`
     }
 
-    // ── Agents ───────────────────────────────────────────────────────────────
+    // ── Agents — the PLACEMENT PALETTE (redesign, 2026-08-01) ────────────────
+    //
+    // The counts-and-steppers roster is gone (explicit direction: "counts say how many,
+    // never WHERE — and every quick-fill button was a patch over that"). The model now:
+    //
+    //   · a CHIP per installed agent (+ custom + shell). Click arms it as the BRUSH;
+    //     the layout canvas then paints that agent onto any terminal you click or drag
+    //     across. Click the chip again to put the brush down.
+    //   · double-click a chip — or its ▾ menu — fills every terminal (or just the empty
+    //     ones) with that agent. The old global "Fill all" (which round-robined through
+    //     EVERY installed CLI) and its siblings are gone; one global Clear remains.
+    //   · click a terminal with NO brush armed and it opens its own picker — the
+    //     zero-learning-curve path to the same placement.
+    //
+    // Each chip wears a live ×N readout — counts became outputs, not inputs.
     function buildAgents(): HTMLElement {
       agentsCaption = el('span', { class: 'wizard-sec-hint', text: agentsText() })
       meterFill = el('span', { class: 'wizard-meter-fill' })
@@ -973,24 +1052,23 @@ export const wizardFeature: UiFeature = {
         el('span', { class: 'wizard-meter-track' }, [meterFill]),
         meterLabel
       ])
+      paletteHost = el('div', { class: 'wizard-palette', role: 'toolbar', ariaLabel: 'Agent brushes' })
+      brushHint = el('p', { class: 'wizard-hint wizard-brush-hint' })
+      profilesHost = el('div', { class: 'wizard-profiles' })
       rosterHost = el('div', { class: 'wizard-agents' })
 
-      const fills = el('div', { class: 'wizard-fills' }, [
-        Button({ label: 'Fill all', size: 'sm', title: 'Fill every pane, cycling through installed agents', onClick: () => quickFill('all') }),
-        Button({ label: 'One of each', size: 'sm', onClick: () => quickFill('each') }),
-        Button({ label: 'Split evenly', size: 'sm', onClick: () => quickFill('split') }),
-        Button({ label: 'Clear', size: 'sm', variant: 'danger', onClick: () => quickFill('clear') })
-      ])
-
-      // Custom command — any CLI, verbatim. Label only; never a stored credential.
+      // Custom command — any CLI, verbatim. Label only; never a stored credential. The
+      // stepper survived the redesign as a VIEW over the slots (value = how many
+      // terminals run the custom command; stepping assigns/releases them) — it is also
+      // the keyboard path KBAPG pins: spinbutton semantics, clamping, disabled-when-blank.
       customStepper = createStepper({
-        value: customCount,
+        value: countOf('custom'),
         min: 0,
-        max: customCount + (paneCount - assignedTotal()),
+        max: countOf('custom') + (paneCount - assignedTotal()),
         ariaLabel: 'Custom command count',
         onChange: (n) => {
-          customCount = n
-          refreshAgents()
+          setSlotCount('custom', n)
+          renderAgentControls()
         }
       })
       customInput = el('input', {
@@ -1001,12 +1079,10 @@ export const wizardFeature: UiFeature = {
         ariaLabel: 'Custom command',
         onInput: (e) => {
           customCmd = (e.target as HTMLInputElement).value
-          if (!customCmd.trim()) {
-            customCount = 0
-            customStepper?.setValue(0)
-          }
-          customStepper?.setDisabled(!customCmd.trim())
-          refreshAgents()
+          // An empty command can own no panes: normalize strips its slots, and an armed
+          // custom brush goes down with them.
+          if (!customCmd.trim() && brush === 'custom') brush = null
+          renderAgentControls()
         }
       })
       customStepper.setDisabled(!customCmd.trim())
@@ -1016,9 +1092,11 @@ export const wizardFeature: UiFeature = {
       ])
 
       const sec = section('Agents', '', el('span', { class: 'wizard-agents-tools' }, [meter]), [
-        el('div', { class: 'wizard-fill' }, [fills]),
-        rosterHost,
-        customRow
+        paletteHost,
+        brushHint,
+        customRow,
+        profilesHost,
+        rosterHost
       ])
       const head = sec.querySelector('.wizard-sec-head')
       head?.insertBefore(agentsCaption, head.children[1] ?? null)
@@ -1026,36 +1104,232 @@ export const wizardFeature: UiFeature = {
     }
 
     function agentsText(): string {
-      return `Which agents launch in your ${paneCount} ${plural(paneCount)} — or keep plain shells.`
+      return `Who runs in your ${paneCount} ${plural(paneCount)} — paint them on, or leave shells.`
     }
 
-    function quickFill(kind: 'all' | 'each' | 'split' | 'clear'): void {
-      const installed = roster.filter((a) => a.installed)
-      counts = new Map()
-      customCount = 0
-      if (kind !== 'clear' && installed.length) {
-        if (kind === 'all') {
-          for (let i = 0; i < paneCount; i++) {
-            const a = installed[i % installed.length]
-            counts.set(a.id, (counts.get(a.id) ?? 0) + 1)
-          }
-        } else if (kind === 'each') {
-          installed.slice(0, paneCount).forEach((a) => counts.set(a.id, 1))
-        } else {
-          const each = Math.floor(paneCount / installed.length)
-          let rem = paneCount - each * installed.length
-          for (const a of installed) counts.set(a.id, each + (rem-- > 0 ? 1 : 0))
+    function brushHintText(): string {
+      if (!brush) return 'Pick an agent, then click or sweep across the layout to place it — or click any terminal to choose.'
+      if (brush === 'shell') return 'Painting plain shells — click or sweep across terminals to clear them back.'
+      const name = brush === 'custom' ? 'the custom command' : (roster.find((a) => a.id === brush)?.name ?? brush)
+      return `Painting ${name} — click or sweep across the layout. Double-click the chip to fill every terminal. Click the chip again to stop.`
+    }
+
+    /** Grow or shrink `id`'s slot count to n: new ones take the first empty terminals,
+     *  releases come off the end — the stepper's view of the same placement model. */
+    function setSlotCount(id: string, n: number): void {
+      let current = countOf(id)
+      for (let i = slots.length - 1; current > n && i >= 0; i--) {
+        if (slots[i] === id) {
+          slots[i] = null
+          current--
         }
       }
-      renderRoster()
+      for (let i = 0; current < n && i < slots.length; i++) {
+        if (slots[i] === null) {
+          slots[i] = id
+          current++
+        }
+      }
     }
 
-    /** The roster + custom row. Rebuilt when the roster or the mix changes. */
+    /** Arm (or disarm) a brush. A custom brush with no command is refused by pointing at
+     *  the problem: the input takes focus instead of the chip taking state. */
+    function armBrush(id: string): void {
+      if (id === 'custom' && !customCmd.trim()) {
+        customInput?.focus()
+        return
+      }
+      brush = brush === id ? null : id
+      renderAgentControls()
+    }
+
+    function fillAllWith(id: string): void {
+      if (id === 'custom' && !customCmd.trim()) {
+        customInput?.focus()
+        return
+      }
+      slots = Array<string | null>(paneCount).fill(id === 'shell' ? null : id)
+      renderAgentControls()
+      getTelemetry().captureEvent({ name: 'wizard.fill_one', props: { panes: paneCount } })
+    }
+
+    function fillEmptyWith(id: string): void {
+      if (id === 'custom' && !customCmd.trim()) {
+        customInput?.focus()
+        return
+      }
+      slots = slots.map((s) => s ?? (id === 'shell' ? null : id))
+      renderAgentControls()
+    }
+
+    function clearAssignments(): void {
+      slots = Array<string | null>(paneCount).fill(null)
+      brush = null
+      renderAgentControls()
+    }
+
+    /** Paint one terminal with the armed brush (the painter's onPaint). The full control
+     *  refresh, not just the canvas: the chips' ×N readouts move WITH the stroke, which
+     *  is what makes painting feel accounted for. */
+    function paintSlot(slot: number): void {
+      if (!brush || slot < 0 || slot >= slots.length) return
+      slots[slot] = brush === 'shell' ? null : brush
+      renderAgentControls()
+    }
+
+    /** The no-brush click on a terminal: its own picker, anchored to the tile. */
+    function openSlotPicker(slot: number, anchor: DOMRect): void {
+      const entries: ContextMenuEntry[] = roster
+        .filter((a) => a.installed)
+        .map((a) => ({
+          label: a.name,
+          hint: slots[slot] === a.id ? 'current' : undefined,
+          onSelect: () => {
+            slots[slot] = a.id
+            renderAgentControls()
+          }
+        }))
+      const cmd = customCmd.trim()
+      entries.push({
+        label: 'Custom command',
+        hint: cmd ? (cmd.length > 24 ? cmd.slice(0, 23) + '…' : cmd) : 'type one below first',
+        disabled: !cmd,
+        onSelect: () => {
+          slots[slot] = 'custom'
+          renderAgentControls()
+        }
+      })
+      entries.push({
+        label: 'Plain shell',
+        hint: slots[slot] === null ? 'current' : undefined,
+        onSelect: () => {
+          slots[slot] = null
+          renderAgentControls()
+        }
+      })
+      openContextMenu({
+        items: entries,
+        x: anchor.left,
+        y: anchor.bottom + 4,
+        ariaLabel: `Terminal ${slot + 1} — choose what runs here`
+      })
+    }
+
+    /** One chip: logo · name · live ×N · a ▾ fills menu. Click arms it as the brush. */
+    function paletteChip(id: string, name: string, logoSize = 14): HTMLElement {
+      const armed = brush === id
+      const n = id === 'shell' ? paneCount - assignedTotal() : countOf(id)
+      const body = el(
+        'button',
+        {
+          class: `wizard-chip${armed ? ' is-armed' : ''}`,
+          type: 'button',
+          title: armed ? `Painting ${name} — click to stop` : `Paint terminals with ${name}`,
+          ariaLabel: `${name} brush${n ? ` — ${n} assigned` : ''}`,
+          onClick: () => armBrush(id),
+          onDblclick: () => fillAllWith(id)
+        },
+        [
+          providerLogo(id === 'custom' ? 'custom:' : id, logoSize),
+          el('span', { class: 'wizard-chip-name', text: name }),
+          n > 0 ? el('span', { class: 'wizard-chip-count', text: `×${n}` }) : null
+        ]
+      )
+      body.dataset.chip = id
+      body.setAttribute('aria-pressed', String(armed))
+      if (id === 'shell') return el('span', { class: 'wizard-chip-wrap' }, [body])
+      const empty = paneCount - assignedTotal()
+      const menu = el(
+        'button',
+        {
+          class: 'wizard-chip-menu',
+          type: 'button',
+          ariaLabel: `${name} — fill options`,
+          onClick: (e) => {
+            e.stopPropagation()
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+            openContextMenu({
+              items: [
+                { label: `Fill all ${paneCount} ${plural(paneCount)}`, onSelect: () => fillAllWith(id) },
+                {
+                  label: `Fill ${empty} empty ${plural(empty)}`,
+                  disabled: empty === 0,
+                  onSelect: () => fillEmptyWith(id)
+                }
+              ],
+              x: r.left,
+              y: r.bottom + 4,
+              returnFocus: e.currentTarget as HTMLElement,
+              ariaLabel: `${name} fills`
+            })
+          }
+        },
+        [icon('chevron-down', 12)]
+      )
+      return el('span', { class: 'wizard-chip-wrap' }, [body, menu])
+    }
+
+    function renderPalette(): void {
+      if (!paletteHost) return
+      // A rebuild must not eat the keyboard: whoever held focus gets it back by chip id.
+      const focused = (document.activeElement as HTMLElement | null)?.dataset?.chip ?? null
+      clear(paletteHost)
+      for (const a of roster.filter((agent) => agent.installed)) paletteHost.append(paletteChip(a.id, a.name))
+      if (customCmd.trim() || countOf('custom') > 0) paletteHost.append(paletteChip('custom', 'Custom'))
+      paletteHost.append(paletteChip('shell', 'Shell'))
+      paletteHost.append(
+        Button({
+          label: 'Clear',
+          size: 'sm',
+          variant: 'danger',
+          title: 'Every terminal back to a plain shell',
+          onClick: clearAssignments
+        })
+      )
+      if (focused) paletteHost.querySelector<HTMLElement>(`[data-chip="${focused}"]`)?.focus()
+      if (brushHint) brushHint.textContent = brushHintText()
+    }
+
+    function renderProfiles(): void {
+      if (!profilesHost) return
+      clear(profilesHost)
+      // Profile picker (4/04), now one compact row per provider that HAS a choice —
+      // it used to ride the (deleted) per-agent cards.
+      for (const a of roster.filter((agent) => agent.installed)) {
+        const mine = profilesCache.filter((p) => p.provider === a.id).sort((x, y) => x.order - y.order)
+        if (mine.length < 2) continue
+        const sel = el('select', { class: 'input input-sm wizard-profile-select', ariaLabel: `${a.name} profile` }) as HTMLSelectElement
+        for (const p of mine) sel.append(new Option(p.name, p.id))
+        sel.value = profileByProvider.get(a.id) ?? mine[0].id
+        sel.addEventListener('change', () => profileByProvider.set(a.id, sel.value))
+        profilesHost.append(
+          el('label', { class: 'wizard-profile-row' }, [
+            providerLogo(a.id, 13),
+            el('span', { class: 'wizard-profile-name', text: `${a.name} profile` }),
+            sel
+          ])
+        )
+      }
+    }
+
+    /** Everything the palette model touches, in one call: chips, custom row, meter,
+     *  painter chips. The one entry point for every placement mutation. */
+    function renderAgentControls(): void {
+      normalizeAssignmentsToCapacity()
+      renderPalette()
+      syncCustom()
+      refreshAgents()
+    }
+
+    /** The agents subtree: palette + profiles + the missing-CLI cards. Rebuilt when the
+     *  roster or the profiles list changes; pure placement moves take renderAgentControls. */
     function renderRoster(): void {
       if (!rosterHost) return
       normalizeAssignmentsToCapacity()
       clear(rosterHost)
-      steppers.clear()
+      // Each rebuild throws the previous cards away; their setup panels hold a live IPC
+      // subscription apiece, so they must be released with the DOM that owned them.
+      for (const panel of setupPanels.splice(0)) panel.dispose()
 
       const noneInstalled = roster.length > 0 && roster.every((a) => !a.installed)
       if (!roster.length || noneInstalled) {
@@ -1081,7 +1355,7 @@ export const wizardFeature: UiFeature = {
             el('span', {
               class: 'wizard-hint',
               text: roster.length
-                ? 'No agent CLIs on your PATH yet. Copy an install command below, run it in a terminal, then re-check.'
+                ? 'No agent CLIs installed yet — pick one below and hit Install. It handles the dependencies too.'
                 : 'Looking for agent CLIs (Claude Code, Codex, Gemini, Aider, OpenCode) on your PATH…'
             }),
             recheck
@@ -1089,70 +1363,40 @@ export const wizardFeature: UiFeature = {
         )
       }
 
+      // Installed agents live in the PALETTE now; only the missing ones still take a
+      // card — its whole job is the one-click Install (setup-panel.ts, no command shown;
+      // the transcript behind Details still records what ran). The moment one installs,
+      // the registry push re-renders and it graduates into a chip.
       for (const a of roster) {
-        const s = createStepper({
-          value: counts.get(a.id) ?? 0,
-          min: 0,
-          max: (counts.get(a.id) ?? 0) + (paneCount - assignedTotal()),
-          ariaLabel: `${a.name} count`,
-          onChange: (n) => {
-            counts.set(a.id, n)
-            refreshAgents()
-          }
+        if (a.installed || !a.installHint) continue
+        const panel = createAgentSetupPanel({
+          agentId: a.id,
+          name: a.name,
+          compact: true,
+          onInstalled: () => void refreshAgentRegistry()
         })
-        steppers.set(a.id, s)
-
-        // Profile picker (4/04): shown only when this provider has >1 profile.
-        const mine = profilesCache.filter((p) => p.provider === a.id).sort((x, y) => x.order - y.order)
-        let profSel: HTMLSelectElement | null = null
-        if (a.installed && mine.length > 1) {
-          profSel = el('select', { class: 'input wizard-profile-select', ariaLabel: `${a.name} profile` }) as HTMLSelectElement
-          for (const p of mine) profSel.append(new Option(p.name, p.id))
-          profSel.value = profileByProvider.get(a.id) ?? mine[0].id
-          profSel.addEventListener('change', () => profileByProvider.set(a.id, profSel!.value))
-        }
-
-        // Missing CLI: show the provider's OWN install one-liner with a copy
-        // button (we never install — 6/06). Installed: the count stepper.
-        const installHint =
-          !a.installed && a.installHint
-            ? (() => {
-                const copy = el('button', { class: 'wizard-agent-copy', type: 'button', text: 'Copy' })
-                copy.title = a.installHint
-                copy.onclick = (): void => {
-                  // copyText never rejects and answers truthfully — main verifies the write
-                  // took (a clipboard held open by another process is a silent no-op), so
-                  // the label only ever claims what actually happened.
-                  void copyText(a.installHint!).then((ok) => {
-                    copy.textContent = ok ? 'Copied' : 'Copy failed'
-                    setTimeout(() => (copy.textContent = 'Copy'), 1400)
-                  })
-                }
-                return el('span', { class: 'wizard-agent-install' }, [
-                  el('code', { class: 'wizard-agent-cmd', text: a.installHint }),
-                  copy
-                ])
-              })()
-            : null
-
-        // A CARD per provider, packed into a responsive grid — the line-per-CLI
-        // rows left a prairie of empty middle on any wide window.
+        setupPanels.push(panel)
+        // ONE row — logo, name, Install right-aligned (2026-08-01, height complaint).
+        // The old two-row anatomy (head row, controls row) existed so missing cards
+        // matched installed cards' stepper row; installed agents are palette chips now,
+        // so the second row held nothing but a floating button and doubled the card's
+        // height for no content. No "not installed" pill either (redundancy pass): the
+        // Install button and the grayscale mark already say it. The setup progress still
+        // unfolds full-width below while a run is live.
         rosterHost.append(
-          el('div', { class: 'wizard-agent-card' + (a.installed ? '' : ' is-missing') }, [
+          el('div', { class: 'wizard-agent-card is-missing' }, [
             el('span', { class: 'wizard-agent-head' }, [
               providerLogo(a.id, 18),
               el('span', { class: 'wizard-agent-name', text: a.name }),
-              a.installed ? null : Pill({ text: 'not on PATH', tone: 'warning' })
+              el('span', { class: 'wizard-agent-action' }, [panel.action])
             ]),
-            el('span', { class: 'wizard-agent-tail' }, [installHint, profSel, a.installed ? s.el : null])
+            panel.el
           ])
         )
       }
 
-      // The custom-command row is always visible now — a mix that carries one is
-      // pushed back into its controls here.
-      syncCustom()
-      refreshAgents()
+      renderProfiles()
+      renderAgentControls()
     }
 
     // ── Agent tools (8/09 + the store/inventory split) — ALWAYS visible ──────
@@ -1227,14 +1471,24 @@ export const wizardFeature: UiFeature = {
       const ownedSelection = selection
 
       isolateBox = createCheckbox({
-        checked: isolate && isRepo,
-        disabled: !isRepo,
+        // Disabled until the preflight SAYS it can work. Enabling first and failing at
+        // Launch is what this replaces.
+        checked: false,
+        disabled: true,
         label: 'Isolate each agent in its own git worktree',
         onChange: (checked) => {
           isolate = checked
         }
       })
       isolateHint = el('span', { class: 'wizard-hint' })
+      isolateFix = el('button', {
+        class: 'wizard-inline-fix',
+        type: 'button',
+        text: 'Find Git',
+        hidden: true,
+        title: 'Re-read your PATH — picks up anything installed since this app started',
+        onClick: repairToolPath
+      }) as HTMLButtonElement
 
       // Remote target (4/05): mutually exclusive with a local folder — choosing a
       // host turns the folder box into a plain remote-cwd string (no local probing).
@@ -1282,7 +1536,7 @@ export const wizardFeature: UiFeature = {
       })
 
       return section('Options', '', null, [
-        el('div', { class: 'wizard-option-row' }, [isolateBox.el, isolateHint]),
+        el('div', { class: 'wizard-option-row' }, [isolateBox.el, isolateHint, isolateFix]),
         el('div', { class: 'wizard-option-row' }, [
           el('span', { class: 'wizard-option-label', text: 'Runs on' }),
           remoteSelect,
@@ -1315,12 +1569,15 @@ export const wizardFeature: UiFeature = {
 
     function savePreset(): void {
       const presetName = `${expandAssignments().filter((a) => a !== 'shell').length} agents · ${paneCount} panes`
+      // A preset stays a MIX (counts, no placement) — it must apply onto any future grid
+      // size, and first-come expansion is how applyMix has always seeded one.
       const mix: ProviderCount[] = []
       for (const a of roster) {
-        const n = counts.get(a.id) ?? 0
+        const n = countOf(a.id)
         if (n > 0) mix.push({ provider: a.id, count: n })
       }
-      if (customCount > 0 && customCmd.trim()) mix.push({ provider: `custom:${customCmd.trim()}`, count: customCount })
+      const customTotal = countOf('custom')
+      if (customTotal > 0 && customCmd.trim()) mix.push({ provider: `custom:${customCmd.trim()}`, count: customTotal })
       const preset = { id: crypto.randomUUID(), name: presetName, mix }
       void wizardClient.savePreset(preset).then(() => {
         presets = [...presets, preset]
@@ -1398,18 +1655,97 @@ export const wizardFeature: UiFeature = {
       }
     }
 
-    /** Worktree isolation is only meaningful on a git repo — and only truly OFF
+    /**
+     * Ask main whether THIS folder can actually be isolated, and repaint the toggle.
+     *
+     * Fired from the selection subscriber, so it follows every folder change. Two rules
+     * shape when it actually spends an IPC:
+     *
+     *   · Once per FOLDER, not once per emit. The subscriber fires several times for a
+     *     single change (the synchronous one, then the resolve's), and the preflight's
+     *     answer depends on the path alone.
+     *   · Immediately for a discrete choice (prefill, browse, a recent, a cd) — in PARALLEL
+     *     with the folder's own git probe rather than behind it, so the toggle comes alive
+     *     as early as it possibly can. A path being TYPED is the exception: it waits for the
+     *     350ms debounce, or every keystroke would spawn git.
+     *
+     * A monotonic token means a slow answer for folder A can never repaint a toggle that
+     * now belongs to folder B.
+     */
+    function probeIsolation(origin: PathOrigin): void {
+      const s = selection.state()
+      const target = s.remote ? '' : s.cwd.trim()
+      if (target && target === preflightCwd) return syncIsolate() // already asked about this one
+      const token = ++preflightSeq
+      isolatePreflight = null
+      preflightCwd = null
+      if (!target || (origin === 'bar' && s.probing)) return syncIsolate() // nothing to ask yet
+      preflightCwd = target
+      syncIsolate() // paint "checking…" before the round trip
+      const settle = (pf: WorktreePreflight): void => {
+        if (token !== preflightSeq) return // a newer folder owns the toggle
+        isolatePreflight = pf
+        syncIsolate()
+      }
+      void wizardClient
+        .preflightWorktree(target)
+        .then(settle)
+        .catch(() => settle({ ok: false, reason: 'unsupported' }))
+    }
+
+    /** What each refusal MEANS, in the user's terms — and, where one exists, the button that
+     *  fixes it. Every line here names the real obstacle rather than restating the feature. */
+    function isolationHint(pf: WorktreePreflight | null): { text: string; fix?: 'path' } {
+      if (!cwd.trim()) return { text: 'Pick a git repository above to give each agent its own branch.' }
+      if (!pf) return { text: 'Checking whether this folder can be isolated…' }
+      switch (pf.reason) {
+        case 'ok':
+          return { text: 'Each agent works on its own branch in its own folder — no trampling. Review & merge later.' }
+        case 'no-git':
+          // THE case this preflight was written for. Not "install git" — git is usually
+          // already installed and simply arrived after this app started, so the honest fix
+          // is one button, not a download.
+          return { text: 'This app can’t reach Git. If you installed it recently, it just needs picking up.', fix: 'path' }
+        case 'no-commits':
+          return { text: 'This repository has no commits yet — make one first, then each agent can branch from it.' }
+        case 'not-writable':
+          return { text: 'This folder is read-only, so the isolated copies can’t be created here.' }
+        case 'unsupported':
+          return { text: pf.detail ? `Git refused: ${pf.detail}` : 'Git couldn’t prepare this repository for isolation.' }
+        default:
+          return { text: 'This folder isn’t a git repository — run `git init` there (or pick a repo) to isolate agents.' }
+      }
+    }
+
+    /** Worktree isolation is only offered when it can actually WORK — and only truly OFF
      *  when the input is really disabled (never `pointer-events: none`). */
     function syncIsolate(): void {
       if (!isolateBox) return
-      if (!isRepo) isolate = false
-      isolateBox.setDisabled(!isRepo)
-      isolateBox.setChecked(isolate && isRepo)
-      isolateHint.textContent = isRepo
-        ? 'Each agent works on its own branch in its own folder — no trampling. Review & merge later.'
-        : cwd.trim()
-          ? 'This folder isn’t a usable git repository — run `git init` there (or pick a repo) to enable worktree isolation.'
-          : 'Pick a git repository above to enable worktree isolation.'
+      const usable = isolatePreflight?.ok === true
+      if (!usable) isolate = false
+      isolateBox.setDisabled(!usable)
+      isolateBox.setChecked(isolate && usable)
+      const { text, fix } = isolationHint(isolatePreflight)
+      isolateHint.textContent = text
+      isolateFix.hidden = fix !== 'path'
+    }
+
+    /** The one-click answer to "this app can't reach Git": re-read the live PATH, then ask
+     *  the preflight again. No restart, no instructions, no dotfiles. */
+    function repairToolPath(): void {
+      isolateFix.disabled = true
+      isolateFix.textContent = 'Looking again…'
+      void wizardClient
+        .repairPath()
+        .catch(() => undefined)
+        .finally(() => {
+          isolateFix.disabled = false
+          isolateFix.textContent = 'Find Git'
+          // Force a re-ask for the SAME folder: the answer may have changed even though
+          // the path did not — that is the entire point of the button.
+          preflightCwd = null
+          probeIsolation('native')
+        })
     }
 
     /** Everything that moves when the mix or the grid changes. */
@@ -1421,9 +1757,7 @@ export const wizardFeature: UiFeature = {
       agentsCaption.textContent = agentsText()
       layoutReadout.textContent = layoutReadoutText()
 
-      const remaining = paneCount - total
-      for (const [id, s] of steppers) s.setMax((counts.get(id) ?? 0) + remaining)
-      customStepper?.setMax(customCount + remaining)
+      customStepper?.setMax(countOf('custom') + (paneCount - total))
 
       painter.refreshChips()
       summaryCount.textContent = String(paneCount)
@@ -1442,7 +1776,46 @@ export const wizardFeature: UiFeature = {
     }
 
     // ── Footer: a sticky action bar at the foot of the page ──────────────────
+    /**
+     * THE FAILURE SURFACE. A launch can fail for reasons that take a sentence to state —
+     * "git worktree add failed: fatal: …" — and the only place that ever said so was the
+     * path bar's status chip, a one-line pill sized for "no repo — fine". Git's actual
+     * message, the one word that would have explained everything, was truncated into
+     * nothing. So a real alert says it in full, keeps it on screen, and offers it as
+     * copyable text; the chip keeps its short version for the field it belongs to.
+     */
+    function showLaunchAlert(text: string): void {
+      if (!launchAlert) return
+      clear(launchAlert)
+      launchAlert.hidden = false
+      const copy = el('button', { class: 'wizard-alert-copy', type: 'button', text: 'Copy' })
+      copy.onclick = (): void => {
+        void copyText(text).then((ok) => {
+          copy.textContent = ok ? 'Copied' : 'Copy failed'
+          setTimeout(() => (copy.textContent = 'Copy'), 1400)
+        })
+      }
+      launchAlert.append(
+        icon('alert', 14),
+        el('span', { class: 'wizard-alert-text', text }),
+        copy,
+        el('button', {
+          class: 'wizard-alert-close',
+          type: 'button',
+          ariaLabel: 'Dismiss',
+          onClick: () => (launchAlert.hidden = true)
+        }, [icon('x', 12)])
+      )
+      launchAlert.scrollIntoView({ block: 'nearest' })
+    }
+
+    function clearLaunchAlert(): void {
+      if (launchAlert) launchAlert.hidden = true
+    }
+
     function buildFooter(): void {
+      launchAlert = el('div', { class: 'wizard-alert', hidden: true })
+      launchAlert.setAttribute('role', 'alert')
       launchLabel = el('span', { text: `Launch ${paneCount} ${plural(paneCount)}` })
       launchBtn = el(
         'button',
@@ -1451,6 +1824,7 @@ export const wizardFeature: UiFeature = {
       )
       skipBtn = Button({ label: 'Skip — no agents', variant: 'outline', onClick: () => void tryLaunch(true) })
       footer.append(
+        launchAlert,
         el('span', { class: 'wizard-byo' }, [
           icon('check-circle', 12),
           el('span', { text: 'Your own CLIs, your own login — this app never touches it.' })
@@ -1464,6 +1838,7 @@ export const wizardFeature: UiFeature = {
       if (launching) return
       const generation = openGeneration
       const ownedSelection = selection
+      clearLaunchAlert() // a new attempt clears the last one's verdict
       launching = true
       launchBtn.disabled = true
       skipBtn.disabled = true
@@ -1472,6 +1847,8 @@ export const wizardFeature: UiFeature = {
         await ownedSelection.settle() // Enter can beat the 350ms debounce; don't race it
         if (!currentOpen(generation) || selection !== ownedSelection) return
         const s = ownedSelection.state()
+        // A folder problem belongs AT the folder field — this one keeps the old behaviour on
+        // purpose: the fix is three inches above the message.
         const refuse = (text: string): void => {
           path.setStatus({ kind: 'warn', text })
           whereSection.scrollIntoView({ block: 'nearest' })
@@ -1590,6 +1967,23 @@ export const wizardFeature: UiFeature = {
       }
       // The painter, drivable: gates set sizes and merges deterministically here,
       // and separately prove the pointer gestures against the real canvas.
+      // The placement model, drivable end-to-end: gates arm a real brush, paint real
+      // slots, and read the same array the launch snapshot will serialize.
+      w.__mogging.wizardAgents = {
+        slots: () => [...slots],
+        assignments: () => expandAssignments(),
+        brush: () => brush,
+        arm: (id: string | null) => {
+          brush = id
+          renderAgentControls()
+        },
+        paint: (slot: number, id: string | null) => {
+          if (slot >= 0 && slot < slots.length) slots[slot] = id
+          renderAgentControls()
+        },
+        fillAll: (id: string) => fillAllWith(id),
+        clear: () => clearAssignments()
+      }
       w.__mogging.wizardLayout = {
         capacity: () => ({ ...capacity }),
         spec: () => ({ rows: gridSpec.rows, cols: gridSpec.cols, regions: gridSpec.regions.map((r) => ({ ...r })) }),

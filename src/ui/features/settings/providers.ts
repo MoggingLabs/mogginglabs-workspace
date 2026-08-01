@@ -3,16 +3,15 @@ import {
   AgentConfigChannels,
   type AgentConfigProviderSummary,
   type AgentInfo,
-  type AgentInstallStart,
   type AgentInstallState
 } from '@contracts'
 import { Button, Card, EmptyState, Pill, SectionHeader, Spinner, el, loadingRow, providerLogo, showToast } from '../../components'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
-import { getTelemetry } from '../../core/telemetry'
 import { onAgentRegistryChange, refreshAgentRegistry } from '../../core/agents/registry'
 import { gotoSettingsTab } from '../../core/shell/settings-tab-port'
 import { createAgentConfigWorkspace } from './agent-config'
+import { createAgentSetupPanel, type AgentSetupPanelHandle } from '../agents/setup-panel'
 
 /** CLI availability plus the entry point to the provider configuration control plane. */
 export function createProvidersSection(): HTMLElement & { refresh: () => Promise<void> } {
@@ -21,6 +20,7 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
   let summaries: AgentConfigProviderSummary[] = []
   const installs = new Map<string, AgentInstallState>()
   const logs = new Map<string, HTMLElement>()
+  const setupPanels: AgentSetupPanelHandle[] = []
   const list = el('div', { class: 'prov-list' })
 
   // (The global session-alerts card moved to Settings › Notifications — F-08: its
@@ -32,7 +32,7 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
           // F-09: was "CLI control plane" — k8s idiom on a consumer surface.
           title: 'Your agent CLIs',
           caption:
-            'Open a CLI to browse every setting it supports and keep the values you choose in sync. Install runs the exact provider command shown, under your login.',
+            'Open a CLI to browse every setting it supports and keep the values you choose in sync. Install is one click — dependencies included, your login stays your own.',
           // F-10: this list and Usage › sources show the same logos with different
           // meanings — the cross-reference is a CLICK, not a prose aside.
           action: Button({
@@ -68,8 +68,18 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
     void config.open(agent.id, agent)
   }
 
-  function statusPill(agent: AgentInfo, install: AgentInstallState | undefined): HTMLElement {
-    if (agent.installed) return Pill({ text: 'Available', tone: 'success', icon: 'check-circle' })
+  /**
+   * NO RESTING STATUS PILL (redundancy pass, 2026-08-01, explicit direction). A row that
+   * offers an Install button has already said "not installed" — a pill restating it was
+   * the UI narrating itself. The flip side was just as guilty: the green "Available" sat
+   * directly above "Detected on PATH · v1.2.3", which says the same thing with MORE
+   * information. State now lives where it carries something unique: the button (and its
+   * installing/ready lifecycle) for missing CLIs, the version sub-line for present ones.
+   * Only the LEGACY install channel's transient verdicts still earn a pill — that path
+   * (gates, `agents:install` driven directly) has no setup panel in the row to speak for it.
+   */
+  function statusPill(agent: AgentInfo, install: AgentInstallState | undefined): HTMLElement | null {
+    if (agent.installed) return null
     if (install?.phase === 'running') {
       return el('span', { class: 'prov-installing' }, [Spinner(), Pill({ text: 'Installing…', tone: 'accent' })])
     }
@@ -81,34 +91,36 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
         title: install.exitCode != null ? `shell exited ${install.exitCode}` : undefined
       })
     }
-    return Pill({ text: 'Not installed', tone: 'neutral' })
+    return null
   }
 
-  function startInstall(agent: AgentInfo): void {
-    getTelemetry().captureEvent({ name: 'provider.install.clicked', props: { provider: agent.id } })
-    void (invoke(AgentChannels.install, agent.id) as Promise<AgentInstallStart>).then((result) => {
-      if (result?.ok) return
-      showToast({ title: 'Install didn’t start', body: result?.reason, tone: 'danger' })
-      void refresh()
-    })
-  }
+// (The old `startInstall` lived here: one click that typed the provider's one-liner into a
+// shell and reported the exit code. Every caller now goes through createAgentSetupPanel,
+// which reaches the same place on a machine that isn't ready. The `agents:install` channel
+// and its service stay — they are still the honest primitive underneath, and the gates
+// drive them directly.)
 
   function row(agent: AgentInfo): HTMLElement {
     const install = installs.get(agent.id)
     const running = install?.phase === 'running'
     const summary = summaries.find((candidate) => candidate.provider === agent.id)
-    const actions: HTMLElement[] = []
+
+    // One-click setup, IN the row — the Install button joins the same right-hand action
+    // cluster every row already has, and the step-by-step progress unfolds INSIDE this
+    // card, under the row it belongs to. The earlier cut rendered both below the card,
+    // where they read as debris floating between providers (screenshot-verified); the
+    // fusion is the point: a provider row is one object, whatever state it is in.
+    let setup: ReturnType<typeof createAgentSetupPanel> | null = null
     if (!agent.installed && agent.installHint && !running) {
-      actions.push(Button({
-        label: install?.phase === 'failed' ? 'Retry install' : 'Install',
-        icon: 'terminal',
-        size: 'sm',
-        onClick: (event) => {
-          event.stopPropagation()
-          startInstall(agent)
-        }
-      }))
+      setup = createAgentSetupPanel({ agentId: agent.id, name: agent.name })
+      setupPanels.push(setup)
+      // The whole row is a click target for openConfig; the Install button lives inside
+      // it and must not ALSO open the config drill-in.
+      setup.action.addEventListener('click', (event) => event.stopPropagation())
     }
+
+    const actions: HTMLElement[] = []
+    if (setup) actions.push(setup.action as HTMLElement)
     actions.push(Button({
       label: 'Settings',
       iconRight: 'chevron-right',
@@ -127,6 +139,7 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
       logs.set(agent.id, log)
       queueMicrotask(() => { log!.scrollTop = log!.scrollHeight })
     }
+
     return el('div', { class: 'prov-item', dataset: { provider: agent.id } }, [
       el('div', {
         class: 'prov-row',
@@ -153,18 +166,21 @@ export function createProvidersSection(): HTMLElement & { refresh: () => Promise
                 })
               : null
           ]),
-          !agent.installed && agent.installHint
-            ? el('code', { class: 'prov-cmd', text: agent.installHint })
+          !agent.installed
+            ? el('span', { class: 'prov-sub', text: 'One click sets up everything it needs.' })
             : el('span', { class: 'prov-sub', text: summary?.version ? `Detected on PATH · v${summary.version}` : 'Detected on PATH' })
         ]),
         el('div', { class: 'prov-actions' }, actions)
       ]),
+      setup?.el ?? null,
       log
     ])
   }
 
   function render(): void {
     logs.clear()
+    // Each panel holds a live IPC subscription; the rows they live on are replaced wholesale.
+    for (const panel of setupPanels.splice(0)) panel.dispose()
     list.replaceChildren(...agents.map(row))
   }
 

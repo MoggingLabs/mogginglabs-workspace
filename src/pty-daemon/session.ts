@@ -7,6 +7,7 @@
 // daemon self-recovers on a cold start / crash and repaints prior scrollback (Phase-1/03).
 import * as crypto from 'node:crypto'
 import { spawnPty, type IPty } from '@backend/platform/pty-host'
+import { mergeEnv } from '@backend/platform/env-path'
 import { paneShellLaunch } from '@backend/platform/shell'
 import { RESTORE_MODE_RESET, SCROLLBACK_CHARS, pickCwd, trimTornStart } from '@backend/features/terminal/pane-shared'
 import { aiderLogPath } from '@backend/features/context'
@@ -352,8 +353,8 @@ const LAUNCH_DIMS_GRACE_MS = Math.min(
   Math.max(500, Number(process.env.MOGGING_LAUNCH_DIMS_GRACE_MS) || 15_000)
 )
 
-  send(data: string): void
 export interface PaneSubscriber {
+  send(data: string): void
   exit(code: number): void
   state(state: AgentState): void
   cwd(location: PaneCwdSnapshot): void
@@ -426,8 +427,8 @@ class PaneSession {
    *  LAUNCH_DIMS_GRACE_MS — the invariant lives on that constant's doc). */
   private pendingLaunch?: { cmd: string; cancelOnInput: boolean }
   private launchGraceTimer?: NodeJS.Timeout
-   *  persisted scrollback, with no live agent in it and nothing typed since. The app reads
   /** True while this session is an UNTOUCHED cold-start restore: a fresh shell repainting
+   *  persisted scrollback, with no live agent in it and nothing typed since. The app reads
    *  it (via `spawned.restored`) to decide that resume must TYPE — the opposite of a true
    *  reattach. Cleared by the first client input, and never set when the daemon itself
    *  typed a resume command (that pane is already handling its own continuity). */
@@ -544,12 +545,10 @@ class PaneSession {
     // target ITSELF via `mogging notify` (Phase-2/04). Only the pane id + the endpoint FILE path
     // go in the env — never the auth token (that stays in the 0600 endpoint file), so the token
     // can't leak through env dumps / agent context (ADR 0002).
-    const procEnv: Record<string, string | undefined> = {
-      ...inheritedEnv,
-      ...shellLaunch.env,
+    const procEnv: Record<string, string | undefined> = mergeEnv(inheritedEnv, shellLaunch.env, {
       MOGGING_PANE_ID: this.id,
       MOGGING_PANE_TOKEN: this.paneToken
-    }
+    }) as Record<string, string | undefined>
     if (spec.remote) {
       // SSH needs none of the local pane capabilities. A user's broad SendEnv/AcceptEnv
       // configuration must not be able to forward them to the remote host.
@@ -711,8 +710,8 @@ class PaneSession {
       hooks.onChange()
     })
     this.proc.onExit(({ exitCode }) => {
-      this.gitContext?.dispose()
       this.tracker.dispose()
+      this.gitContext?.dispose()
       this.pendingLaunch = undefined
       if (this.launchGraceTimer) {
         clearTimeout(this.launchGraceTimer)
@@ -739,8 +738,8 @@ class PaneSession {
       }
     }
     // A restore whose cwd fell back to home must NOT resume: `claude --resume` typed in
-    // its scrollback; the real cwd stays persisted (requestedCwd) for the next start.
     // the home directory resumes the wrong project's sessions. The shell restores with
+    // its scrollback; the real cwd stays persisted (requestedCwd) for the next start.
     //
     // ALWAYS deferred: the persisted grid this pane spawned at is a guess about a layout
     // the app has not shown yet — only an attach makes it a fact (LAUNCH_DIMS_GRACE_MS).
@@ -762,8 +761,8 @@ class PaneSession {
   private flushPendingLaunch(): void {
     if (this.launchGraceTimer) {
       clearTimeout(this.launchGraceTimer)
-    }
       this.launchGraceTimer = undefined
+    }
     const pending = this.pendingLaunch
     if (!pending) return
     this.pendingLaunch = undefined
@@ -962,8 +961,8 @@ class PaneSession {
     if (isTerminalReply(data)) {
       this.writePty(data)
       return
-    this.pristineRestore = false // touched: from here on it's a live shell, not a restore
     }
+    this.pristineRestore = false // touched: from here on it's a live shell, not a restore
     // A human typed into the restored shell first: they own the pane now. A deferred
     // resume spliced in AFTER their keystrokes would compose a different command line —
     // cancel it (restore resumes only; a fresh run's delivery was already reported).
@@ -1009,15 +1008,15 @@ class PaneSession {
     }
     // The grid is persisted state now (snapshot): a resize with no output in its wake
     // (a quiet pane dragged to a new layout) must still reach the store, or the next
-    this.hooks.onChange()
     // cold start restores at the size before the drag.
+    this.hooks.onChange()
     // AFTER the pty holds the measured size, never before: the launch this releases is
     // the agent reading its width once at boot.
     this.flushPendingLaunch()
   }
   kill(): void {
-    this.gitContext?.dispose()
     this.tracker.dispose()
+    this.gitContext?.dispose()
     this.pendingLaunch = undefined
     if (this.launchGraceTimer) {
       clearTimeout(this.launchGraceTimer)
@@ -1191,8 +1190,8 @@ export class SessionManager {
       // Size reconciliation, BEFORE the caller snapshots scrollback: ConPTY's answering
       // repaint then rides the same delivery burst as the replay, so the client's first
       // settled frame is already at the attach width (no visible narrow→wide snap).
-      if (dims) existing.resize(dims.cols, dims.rows)
       const dims = attachDims(normalizedSpec, existing)
+      if (dims) existing.resize(dims.cols, dims.rows)
       // An attach whose measured dims EQUAL the session's applies nothing — but it turns
       // the restore's persisted-size guess into a fact, which is what a deferred resume
       // waits on (resize() confirms the changed case itself). A dims-less attach (an

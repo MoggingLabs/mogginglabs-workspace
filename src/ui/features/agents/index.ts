@@ -1,5 +1,6 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import { AgentHookChannels, IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentCliId, type AgentCommandResult, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type GlobalHooksMutationResult, type GlobalHooksStatus, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
+import { dismissSignInBanner, offerSignIn } from './signin-banner'
 import { recordPaneLaunch } from '../../core/agents/toolplan-panes'
 import { recordPaneCli, setMcpSnapshot } from '../../core/agents/mcp-status-port'
 
@@ -146,6 +147,10 @@ export const agentsFeature: UiFeature = {
       // survive its predecessor's death rattle.
       if (!ev.agentId) {
         if ((detectedAt.get(paneId) ?? 0) >= (sessionSetAt.get(paneId) ?? 0)) clearPaneAgentSession(paneId as PaneId)
+        // The offer belonged to the agent that just died. Leaving it up would ask the user
+        // to sign a CLI in that is no longer running, into a shell that would reject the
+        // slash command it was built for.
+        dismissSignInBanner(paneId)
         return
       }
       // ONE stamp for this verdict and for any session it writes below — see writeSession.
@@ -543,6 +548,18 @@ export const agentsFeature: UiFeature = {
                 body: `When the browser opens, pick ${result.signIn.expected} — this profile should run under that account.`
               }
         )
+      }
+      // THE SIGN-IN OFFER. Setup installs; this is where being signed in gets handled —
+      // the first moment a terminal exists to do it in. Only ever raised on a CHECKED
+      // signed-out home (main returns nothing when the answer is unknowable), and it
+      // types the provider's own verb on click and nothing before that (ADR 0002).
+      //
+      // Deferred past the launch write: the CLI is starting up in this same instant, and
+      // a banner that appears before its first frame reads as a complaint about a pane
+      // that has not spoken yet.
+      if (result.needsSignIn) {
+        const target = result.needsSignIn
+        setTimeout(() => offerSignIn(paneId, target, true), 1200)
       }
       // Remember the tool-plan signature this pane launched with (8/09) — a
       // later plan edit flips it to restart-needed.

@@ -21,6 +21,68 @@ export interface AgentInfo {
 // is a RE-DETECT (is the bin on PATH now?), not the shell's exit code — PATH
 // presence is the same truth `installed` above is built from.
 
+// ── One-click setup (the guided path) ───────────────────────────────────────
+//
+// `agents:install` above types a one-liner into a shell and hopes. That is fine when the
+// machine is already set up and useless when it is not — which is exactly the machine a
+// first-time user is on. The real first run went: the CLI wasn't there, so npm was needed;
+// npm wasn't there, so Node was needed; Node's installer changed PATH, which the running
+// app could not see; and the global install wanted permissions the user didn't have. Four
+// walls, each of which reads as "this app is broken".
+//
+// Setup is the same destination with every wall handled: probe what's here, bootstrap the
+// runtime through the OS package manager, put the global bin somewhere that needs no admin,
+// repair PATH (this process AND the user's own), install, then VERIFY by re-detecting.
+//
+// It installs. It never signs in — you cannot log a CLI in before it has a terminal, so
+// sign-in is a separate, later moment (see AgentSignInTarget) and ADR 0002 still holds:
+// the app types the provider's own command and never handles a credential.
+
+export type AgentSetupStepId = 'probe' | 'runtime' | 'permissions' | 'path' | 'install' | 'verify'
+
+export type AgentSetupStepPhase = 'pending' | 'running' | 'done' | 'skipped' | 'failed'
+
+export interface AgentSetupStep {
+  id: AgentSetupStepId
+  /** Plain language, in the user's terms — "Install Node.js", not "bootstrap runtime". */
+  label: string
+  phase: AgentSetupStepPhase
+  /** What happened, one line. Present on done/skipped/failed. */
+  note?: string
+  /** What the user can DO about a failure. Only ever set with phase 'failed' — a failure
+   *  the app cannot explain how to fix is a failure it should not have reported this way. */
+  remedy?: string
+}
+
+export type AgentSetupPhase = 'running' | 'succeeded' | 'failed'
+
+export interface AgentSetupState {
+  agentId: AgentCliId
+  phase: AgentSetupPhase
+  steps: AgentSetupStep[]
+  /** Bounded plain-text transcript of every command setup ran — the thing to paste into a
+   *  bug report. Terminal output stays local (ADR 0005); it is never telemetry. */
+  tail: string
+  startedAt: number
+  endedAt?: number
+}
+
+export interface AgentSetupStart {
+  ok: boolean
+  reason?: string
+}
+
+/** What the sign-in banner types, and where. Derived from the provider's own documented
+ *  verb — `inSession` when its CLI is already running in the pane, `shell` when the pane
+ *  is a bare prompt. A provider that authenticates by API key has neither, and is never
+ *  offered a banner. */
+export interface AgentSignInTarget {
+  agentId: AgentCliId
+  name: string
+  inSession?: string
+  shell?: string
+}
+
 export type AgentInstallPhase = 'running' | 'succeeded' | 'failed'
 
 /** Live/last-known state of one provider's background install. */
@@ -76,6 +138,20 @@ export interface AgentCommandResult {
    *  (the CLI's own OAuth picks whatever the browser session offers), so the
    *  facts surface at the moment they bite. Never blocks the launch. */
   signIn?: { expected: string; actual?: string }
+  /**
+   * Nobody is signed in at the config home this launch will use — so the pane should
+   * OFFER a sign-in rather than let the user find out from the CLI.
+   *
+   * This is the half `signIn` above never covered: that field only speaks when a PROFILE
+   * declares an email to compare against, which is precisely not the situation a
+   * first-time user is in. They install a CLI, a workspace opens, and the terminal shows
+   * whatever that CLI does when it has no credentials — which for most is a prompt with no
+   * indication that the app knew, or that one click would fix it.
+   *
+   * Carries the provider's own login verb (ADR 0002): the app types it into a pane the
+   * user is watching, and that is the entire extent of its involvement in auth.
+   */
+  needsSignIn?: AgentSignInTarget
 }
 
 /** Global agent alert wiring (AgentHookChannels) — the hand-typed-launch gap, per CLI. */

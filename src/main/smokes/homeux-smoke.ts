@@ -13,7 +13,8 @@ import { probeContrastAcrossThemes } from './aa-probe'
 //   (b) checklist rows are detection-HONEST, in both directions: row ①'s done-state equals
 //       real PATH detection, the install rows are EXACTLY the CLIs that are really missing
 //       (here: none — asserted as absence), and an agent forced to read as missing renders
-//       the install row it promises, with its command and a copy chip that carries it;
+//       the aligned row it promises — name, one Install button — with NO install command
+//       anywhere in it (the copy-chips were removed by explicit direction, 2026-07-31);
 //   (c) the restore card is fed by the REAL pipeline, not a fixture: a non-empty
 //       workspace:saveState mirrors into the snapshot, the empty save that follows HOLDS it
 //       (shrink-hold — session-restore.ts), and Home renders the held session: both
@@ -156,39 +157,45 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
       // (b2) The OTHER branch — the one a new user actually meets, and the one no machine here
       // can reach by itself. Force an installed agent to read as missing through the DEV seam
       // (firstrun.forceMissing fakes the detection INPUT only) and hold the real render path to
-      // its promise: one new row, naming that agent, carrying its install command verbatim, with
-      // a copy chip that would copy exactly that command.
+      // its promise: one new aligned row — logo tile, the agent's name, an Install button in
+      // the shared right-hand column — and NO install command anywhere in it. The absence is a
+      // positive claim (explicit direction, 2026-07-31): the one-liner chips were removed
+      // because handing a GUI user a terminal command is the failure this feature exists to
+      // absorb, and asserting the absence is what keeps them from quietly returning.
+      //
+      // The row's inside is the shared setup control (ui/features/agents/setup-panel.ts) —
+      // one component across Home, the wizard and Settings, so the three surfaces cannot
+      // drift into three different answers to "this CLI is missing".
       const victim = agents.find((a) => a.installed && a.installHint) ?? agents.find((a) => a.installHint)
       if (!victim) throw new Error('no agent adapter carries an installHint — the row can never render')
       await ES(`window.__mogging.firstrun.forceMissing([${JSON.stringify(victim.id)}])`)
       await ES(`window.__mogging.firstrun.refresh()`)
-      const row = await (async (): Promise<{ found: boolean; rows: number; cmd: string; copy: boolean; copies: string }> => {
+      type MissingRow = { found: boolean; rows: number; installAria: string; rowText: string }
+      const row = await (async (): Promise<MissingRow> => {
         for (let i = 0; i < 25; i++) {
-          const r = await ES<{ found: boolean; rows: number; cmd: string; copy: boolean; copies: string }>(`(() => {
+          const r = await ES<MissingRow>(`(() => {
             const rows = [...document.querySelectorAll('.firstrun-cli-missing')]
             const r = rows.find((x) => (x.querySelector('.firstrun-cli-name')?.textContent || '') === ${JSON.stringify(victim.name)})
-            const copy = r ? r.querySelector('.firstrun-copy') : null
+            const install = r ? r.querySelector('.agent-setup-action .btn') : null
             return {
               found: !!r,
               rows: rows.length,
-              cmd: r ? (r.querySelector('.firstrun-cli-cmd')?.textContent || '') : '',
-              copy: !!copy,
-              copies: copy ? (copy.title || '') : ''
+              installAria: install ? (install.getAttribute('aria-label') || '') : '',
+              rowText: r ? (r.textContent || '') : ''
             }
           })()`)
           if (r.found) return r
           await sleep(200)
         }
-        return { found: false, rows: 0, cmd: '', copy: false, copies: '' }
+        return { found: false, rows: 0, installAria: '', rowText: '' }
       })()
-      // The chip is asserted by what it WOULD copy (its title is the command it writes to the
-      // clipboard). Clicking it would clobber the clipboard of whoever is running this.
+      // The button is asserted by presence and label, never by pressing it — clicking it
+      // would install real software on the machine running the sweep.
       const installChipOk =
         row.found &&
         row.rows === trulyMissing.length + (victim.installed ? 1 : 0) &&
-        row.cmd === victim.installHint &&
-        row.copy &&
-        row.copies === victim.installHint
+        row.installAria === `Install ${victim.name}` &&
+        !row.rowText.includes(victim.installHint!)
 
       // (c) Seed the snapshot through the REAL pipeline — no fixture, no store poke. A
       // non-empty save mirrors into the snapshot; the empty save that follows is the
@@ -247,8 +254,10 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
       const spacingOk = measured.gap >= measured.sp6 - 0.5 && measured.pad >= measured.sp4 - 0.5
 
       // (f) AA on the card text, four themes, via the shared probe (which owns the freeze).
-      // .firstrun-cli-cmd is measured on the row (b2) forced into existence — before this, the
-      // selector matched nothing here and the probe scored a contrast nobody was reading.
+      // .firstrun-cli-name is measured on the row (b2) forced into existence — before this,
+      // the selector matched nothing here and the probe scored a contrast nobody was reading.
+      // (It was the command chip until the commands were removed; the name is the row's one
+      // remaining text and inherits the same requirement.)
       const PROBES = [
         '.home-resume-title',
         '.home-resume-name',
@@ -256,7 +265,7 @@ export function runHomeUxSmoke(win: BrowserWindow): void {
         '.home-resume-when',
         '.home-resume-totals',
         '.firstrun-row-title',
-        '.firstrun-cli-cmd'
+        '.firstrun-cli-name'
       ]
       const aa = await probeContrastAcrossThemes({ es: ES, sleep, selectors: PROBES })
       const aaOk = aa.failures.length === 0 && aa.missing.length === 0
