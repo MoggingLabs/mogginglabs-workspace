@@ -14,7 +14,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { ensureDaemon, DaemonClient } from '../daemon-client'
 import { helperRuntime } from '../node-helper'
-import { processImagePath, samePath } from './kit'
+import { processImagePath, samePath, waitUntil } from './kit'
 
 // A cwd-independent path both Electron launches (and the test harness) can agree on.
 const RESULT = path.join(os.tmpdir(), 'mogging-daemon-survive-result.json')
@@ -49,12 +49,15 @@ function readResult(): Record<string, unknown> {
 }
 
 export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
-  // Hard safety net: never let the app hang if the daemon path stalls.
+  // Hard safety net: never let the app hang if the daemon path stalls. 40s, not 22:
+  // the first-mark poll below may legitimately spend 15s on a cold windows runner
+  // (ConPTY + cmd.exe + node.exe all booting under Defender, with the 2s CIM probe
+  // landing mid-window), on top of ensureDaemon's own endpoint wait.
   setTimeout(() => {
     writeResult({ phase, pass: false, error: 'smoke timeout' })
     writeOutResult({ phase, pass: false, error: 'smoke timeout' })
     app.exit(1)
-  }, 22000)
+  }, 40000)
   try {
     const helper = helperRuntime()
     const ep = await ensureDaemon(path.join(__dirname, 'daemon.js'), helper)
@@ -83,12 +86,31 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
         app.exit(0)
         return
       }
-      await delay(3200)
+      // POLL for the first tick, never a fixed sleep (the documented runner-flake disease):
+      // a cold windows runner spends seconds booting ConPTY + cmd.exe + node.exe before
+      // MARK_0 can exist, and the old fixed 3.2s window read `maxA: -1` over a counter
+      // that phase B then proved had ticked from 0 the whole time (minB: 0 — the ring
+      // lost nothing; only the observation window was wrong). RESTOREDIMS polls 8s for a
+      // mere echo of the same shape; the first mark here waits out a full node boot.
+      const spawnedAt = Date.now()
+      await waitUntil(() => marks(cap).length > 0, 15000, 100)
+      const firstByteMs = cap.length ? Date.now() - spawnedAt : -1
       const maxA = Math.max(-1, ...marks(cap))
       writeResult({ phase: 'A', maxA, daemonPidA: ep.pid, existedA, helperHostedA: helperHosted })
       // Phase A "passes" when the counter pane is demonstrably alive in the daemon —
       // AND the daemon is on the helper (a pane surviving on the wrong host proves nothing).
-      writeOutResult({ phase: 'A', pass: maxA >= 0 && helperHosted, maxA, daemonPidA: ep.pid, helperHosted, daemonImage })
+      writeOutResult({
+        phase: 'A',
+        pass: maxA >= 0 && helperHosted,
+        maxA,
+        daemonPidA: ep.pid,
+        helperHosted,
+        daemonImage,
+        // Triage separators: capLen distinguishes "pane said nothing at all" from "pane
+        // spoke but the counter had not ticked" — the ambiguity that cost a night once.
+        capLen: cap.length,
+        firstByteMs
+      })
       client.dispose()
       app.exit(0) // quit the app but leave the detached daemon running
       return
@@ -118,7 +140,12 @@ export async function runDaemonSurviveSmoke(phase: string): Promise<void> {
       process.platform === 'win32'
         ? spawnedB.pty?.backend === 'conpty' && spawnedB.pty.buildNumber >= 18309
         : spawnedB.pty?.backend === 'posix'
-    await delay(3200)
+    // Symmetry with phase A: the scrollback replay makes phase A's marks available
+    // instantly, but the CONTINUATION marks (fresh ticks past maxA) need the live pane —
+    // poll for one instead of hoping 3.2s is enough on a loaded runner.
+    const prevForPoll = readResult()
+    const maxAForPoll = typeof prevForPoll.maxA === 'number' ? (prevForPoll.maxA as number) : -1
+    await waitUntil(() => marks(cap).some((m) => m > maxAForPoll), 15000, 100)
     const mB = marks(cap)
     const prev = readResult()
     const maxA = typeof prev.maxA === 'number' ? (prev.maxA as number) : -1

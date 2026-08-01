@@ -186,13 +186,22 @@ export function runRemoteSmoke(win: BrowserWindow): void {
           () => true,
           () => false
         )
+      // 60 × 250ms ≈ 15s, the file's own argvOk precedent — the old 2s budget lost a
+      // coin-flip to powershell.exe's cold start on Windows runners (5.1, -NoProfile,
+      // Defender scanning the script), while POSIX `sh <shim>` lands in milliseconds.
+      // The read is guarded: [IO.File]::WriteAllText holds FileShare.Read, so a read
+      // landing inside the write window raises on Windows — retry, never abort run().
       let ipv6ArgvOk = false
-      for (let i = 0; i < 20 && !ipv6ArgvOk; i++) {
-        if (existsSync(ipv6ArgvPath)) {
-          const captured = readFileSync(ipv6ArgvPath, 'utf8')
-          ipv6ArgvOk = captured.includes('-tt') && captured.includes('2001:db8::10')
+      for (let i = 0; i < 60 && !ipv6ArgvOk; i++) {
+        try {
+          if (existsSync(ipv6ArgvPath)) {
+            const captured = readFileSync(ipv6ArgvPath, 'utf8')
+            ipv6ArgvOk = captured.includes('-tt') && captured.includes('2001:db8::10')
+          }
+        } catch {
+          /* mid-write share violation — the next pass reads a settled file */
         }
-        if (!ipv6ArgvOk) await sleep(100)
+        if (!ipv6ArgvOk) await sleep(250)
       }
       getDaemonClient()?.kill('99004')
       // `platform` is a COMMAND DIALECT, not a connection capability (src/main/remotes.ts: an
@@ -347,24 +356,44 @@ export function runRemoteSmoke(win: BrowserWindow): void {
       // reports the tty foreground process cwd. Prove the daemon accepts it only while a
       // submitted command owns the pane, and rejects a delayed frame after a real prompt.
       await ES(`window.__remoteContextEvents=[]; window.bridge.on('terminal:cwd', (e) => { if (e.id === ${base + 2}) window.__remoteContextEvents.push(e) }); true`)
+      // SEQUENTIAL BY CONSTRUCTION, polled per frame — the one arm here that used fixed
+      // sleeps. Each typed line costs cmd.exe parse + a COLD node.exe under Defender on a
+      // Windows runner (0.6-1.5s; POSIX ~40ms), so 500ms gaps read the events array while
+      // frames #2/#3 were still queued — and the arm went red over a gate that was open
+      // the whole time (frame #1's event proved transport AND arming worked). Confirm each
+      // frame's event before typing the next; the semantics (each frame observed inside
+      // its own armed window) are unchanged.
+      const waitCtx = (predicate: string, tries = 40): Promise<boolean> =>
+        ES<boolean>(`(async () => {
+          for (let i = 0; i < ${tries}; i++) {
+            if (window.__remoteContextEvents.some((e) => ${predicate})) return true
+            await new Promise((r) => setTimeout(r, 250))
+          }
+          return false
+        })()`)
       const initialPrompt = `\x1b]633;P;MoggingPromptCwdRaw=${remoteCwd}\x1b\\`
       await ES(`window.bridge.send('terminal:write', { id: ${base + 2}, data: ${JSON.stringify(nodeEvalCommand(`process.stdout.write(${JSON.stringify(initialPrompt)})`) + '\r')} })`)
-      await sleep(500)
+      const ctxShellSeen = await waitCtx(`e.cwd === ${JSON.stringify(remoteCwd)} && e.source === 'shell'`)
       const opaqueCwd = '/srv/opaque-worktree'
       const opaqueFrame = `\x1b]633;P;MoggingProcessCwdRaw=4242;${opaqueCwd}\x1b\\`
       await ES(`window.bridge.send('terminal:write', { id: ${base + 2}, data: ${JSON.stringify(nodeEvalCommand(`process.stdout.write(${JSON.stringify(opaqueFrame)})`) + '\r')} })`)
-      await sleep(500)
+      const ctxOpaqueSeen = await waitCtx(`e.cwd === ${JSON.stringify(opaqueCwd)}`)
       const gitObservedCwd = '/srv/git-selected-worktree'
       const gitFrame = `\x1b]633;P;MoggingGitCwdRaw=${gitObservedCwd}\x1b\\`
       await ES(`window.bridge.send('terminal:write', { id: ${base + 2}, data: ${JSON.stringify(nodeEvalCommand(`process.stdout.write(${JSON.stringify(gitFrame)})`) + '\r')} })`)
-      await sleep(500)
+      const ctxGitSeen = await waitCtx(`e.cwd === ${JSON.stringify(gitObservedCwd)}`)
       const staleFrame = '\x1b]633;P;MoggingProcessCwdRaw=4343;/srv/stale-background\x1b\\'
       const staleSource = [
         `process.stdout.write(${JSON.stringify(initialPrompt)})`,
         `setTimeout(()=>process.stdout.write(${JSON.stringify(staleFrame)}),200)`,
         'setTimeout(()=>{},400)'
       ].join(';')
+      const ctxEventsBeforeStale = await ES<number>('window.__remoteContextEvents.length')
       await ES(`window.bridge.send('terminal:write', { id: ${base + 2}, data: ${JSON.stringify(nodeEvalCommand(staleSource) + '\r')} })`)
+      // The re-typed prompt frame must land (a NEW shell event past the pre-stale mark)…
+      await waitCtx(`window.__remoteContextEvents.indexOf(e) >= ${ctxEventsBeforeStale} && e.cwd === ${JSON.stringify(remoteCwd)} && e.source === 'shell'`)
+      // …and only then is the stale frame's ABSENCE meaningful: its 200ms timer has fired
+      // and been rejected by the prompt-boundary disarm. One settle beat, then read.
       await sleep(800)
       const remoteContextEvents = await ES<Array<{ cwd: string; source: string; locality: string }>>(
         'window.__remoteContextEvents'
@@ -584,12 +613,17 @@ export function runRemoteSmoke(win: BrowserWindow): void {
         windowsCommand.includes("Set-Location 'D:\\Repo O''Hare' -ErrorAction Stop; codex") &&
         savedWindows && removedWindows.ok
 
-      // 5) exit of the shimmed ssh = pane exit
-      await ES(`window.bridge.send('terminal:write', { id: ${base + 2}, data: 'exit\\r' })`)
+      // 5) exit of the shimmed ssh = pane exit. RETYPED each pass, never once: the pane
+      // was cold-restored by the daemon restart above, and the restored shim cold-starts
+      // powershell + Start-Sleeps 2s before cmd.exe ever attaches to the pseudoconsole —
+      // on Windows a single early 'exit\r' lands before any reader exists and ConPTY
+      // never replays it. Retyping is idempotent at a prompt, and the first delivered
+      // one ends the pane (writes to an already-dead pane are guarded daemon-side).
       let exitOk = false
       for (let i = 0; i < 24 && !exitOk; i++) {
+        await ES(`window.bridge.send('terminal:write', { id: ${base + 2}, data: 'exit\\r' })`)
+        await sleep(500)
         exitOk = (await bufferText(base + 2)).includes('process exited')
-        if (!exitOk) await sleep(500)
       }
 
       // A referenced host cannot be deleted through the product. This keeps
@@ -694,6 +728,9 @@ export function runRemoteSmoke(win: BrowserWindow): void {
         renameReattached,
         authPromptGuardOk,
         arbitraryRemoteContextOk,
+        ctxShellSeen,
+        ctxOpaqueSeen,
+        ctxGitSeen,
         remoteContextEvents,
         argvOk,
         readinessGateOk,
