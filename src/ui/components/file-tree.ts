@@ -126,6 +126,11 @@ interface DirState {
   loading: Promise<void> | null
   sig: string
   gen: number
+  /** The listing may no longer match the disk: this dir left the WATCH set (ADR 0010.d),
+   *  so main forgot its signature and no batch will ever correct us. The next expansion
+   *  must re-list — but the old rows keep rendering while that flight is out, so the
+   *  tree never collapses to a loading row and the scroll position survives. */
+  stale: boolean
 }
 
 /** Change-only signature: what the tree renders from a listing, and nothing else. */
@@ -155,28 +160,40 @@ export function createFileTree(opts: FileTreeOpts): FileTreeHandle {
   function state(dir: string): DirState {
     let st = nodes.get(dir)
     if (!st) {
-      st = { children: null, refusal: null, truncated: false, loading: null, sig: '', gen: 0 }
+      st = { children: null, refusal: null, truncated: false, loading: null, sig: '', gen: 0, stale: false }
       nodes.set(dir, st)
     }
     return st
   }
 
-  /** Load a dir's children once; concurrent callers share the same flight. */
+  /** Load a dir's children once; concurrent callers share the same flight. A STALE dir
+   *  loads again — its old rows stay up while the flight is out (walk only shows the
+   *  loading row when there is nothing to show), so re-expanding never jolts the scroll. */
   function ensureLoaded(dir: string): Promise<void> {
     const st = state(dir)
-    if (st.children || st.refusal) return Promise.resolve()
+    if ((st.children || st.refusal) && !st.stale) return Promise.resolve()
     if (st.loading) return st.loading
     const token = ++st.gen
     const gen = generation
-    st.loading = (async () => {
+    // `let` + self-reference: the abort check runs after the first await, by which time
+    // the assignment below has completed — TS just cannot see that through the closure.
+    let flight: Promise<void> | null = null
+    flight = (async () => {
       let res: ExplorerResult
       try {
         res = await opts.list(dir, showHidden)
       } catch {
         res = { ok: false, reason: 'missing', path: dir } // the loader itself failed
       }
-      if (token !== st.gen || gen !== generation) return // superseded or re-rooted
+      if (token !== st.gen || gen !== generation) {
+        // Superseded or re-rooted. Release the slot IF it is still ours — a dead flight
+        // left in `loading` would satisfy every later ensureLoaded with an already-
+        // resolved promise, and a stale dir could then never re-list.
+        if (st.loading === flight) st.loading = null
+        return
+      }
       st.loading = null
+      st.stale = false
       if (res.ok) {
         st.children = res.entries
         st.truncated = res.truncated
@@ -188,8 +205,9 @@ export function createFileTree(opts: FileTreeOpts): FileTreeHandle {
       st.sig = sigOf(res)
       refresh()
     })()
-    refresh() // the loading row appears immediately
-    return st.loading
+    st.loading = flight
+    refresh() // the loading row appears immediately (unless stale rows already stand in)
+    return flight
   }
 
   /** Flatten the expansion-map into the visible-rows array. */
@@ -415,9 +433,26 @@ export function createFileTree(opts: FileTreeOpts): FileTreeHandle {
   const isUnder = (child: string, dir: string): boolean =>
     child.length > dir.length && child.startsWith(dir) && (dir.endsWith('\\') || dir.endsWith('/') || child[dir.length] === '\\' || child[dir.length] === '/')
 
+  /**
+   * Cache lifetime = watch lifetime (ADR 0010.d). Main watches the root plus the
+   * EXPANDED dirs, and it forgets a dir's listing signature the moment it leaves that
+   * set — a change while nobody is watching lands on a re-seeded baseline and never
+   * produces a batch. So a listing we keep for an unwatched dir goes stale silently,
+   * and re-expanding it would resurrect ghost rows: "That file is gone" on rows that
+   * are right there on screen, files that DO exist missing from the tree. Mark our
+   * copy stale the moment the watcher forgets its own — the next expansion re-lists
+   * (ensureLoaded), while the old rows keep rendering until the fresh listing lands.
+   */
+  function markUnwatched(): void {
+    for (const [p, st] of nodes) {
+      if (p !== rootPath && !expanded.has(p)) st.stale = true
+    }
+  }
+
   async function toggle(dir: string): Promise<void> {
     if (expanded.has(dir)) {
       expanded.delete(dir)
+      markUnwatched()
       if (isUnder(activePath, dir)) activePath = dir
       opts.onExpandedChange?.(expandedDirs())
       refresh()
@@ -615,6 +650,7 @@ export function createFileTree(opts: FileTreeOpts): FileTreeHandle {
           return // a failed re-list keeps the last good listing
         }
         if (token !== st.gen || gen !== generation) return
+        st.stale = false // just re-listed: whatever this held, it is fresh again
         const sig = sigOf(res)
         if (sig === st.sig) return // identical listing → zero DOM work
         st.sig = sig
@@ -641,6 +677,7 @@ export function createFileTree(opts: FileTreeOpts): FileTreeHandle {
   async function setExpanded(dirs: string[]): Promise<void> {
     expanded.clear()
     for (const d of dirs) expanded.add(d)
+    markUnwatched() // dirs that just left the set go stale with their watcher
     // Load whatever the set makes visible — deeper layers surface as parents land.
     for (;;) {
       flatten()
@@ -649,7 +686,7 @@ export function createFileTree(opts: FileTreeOpts): FileTreeHandle {
         .map((r) => r.entry.path)
         .filter((p) => {
           const st = nodes.get(p)
-          return !st || (!st.children && !st.refusal)
+          return !st || st.stale || (!st.children && !st.refusal)
         })
       if (!pending.length) break
       await Promise.all(pending.map(ensureLoaded))

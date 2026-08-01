@@ -248,8 +248,48 @@ export function runExplorerSmoke(win: BrowserWindow): void {
       })()`)
       const noCwdOk = noCwd.empty && noCwd.rows === 0 && noCwd.calls === 0 && noCwd.root === '' && /no folder/i.test(noCwd.title)
 
+      // ── (h) "Show hidden files" survives a fresh mount ───────────────────────
+      // The desync this gates: the pref lives in the KV and the button paints active,
+      // but the TREE holds its own copy — the one every `explorer:list` actually
+      // carries. A mount that forgets to propagate it shows a lit button over bare
+      // listings, and the first corrective click is a silent no-op (the tree's setter
+      // guards on equality). A renderer reload IS the boot path: every feature
+      // remounts and `explorer:init` hands the restored pref to a brand-new tree.
+      await ES(`window.__mogging.workspace.switchByIndex(0)`) // Alpha again — it owns the dotfile
+      await sleep(900)
+      await ES(`document.querySelector('.explorer-dock-actions .icon-btn[aria-label="Show hidden files"]').click()`)
+      await sleep(700)
+      const hushOn = await ES<boolean>(`(() => {${H} return names().includes('.hushfile') })()`)
+      await new Promise<void>((resolve) => {
+        wc.once('did-finish-load', () => resolve())
+        wc.reload()
+      })
+      await sleep(2500)
+      const afterBoot = await ES<{ shown: boolean; active: boolean; names: string[]; root: string }>(`(async () => {${H}
+        // Restore first: the dock reopens itself (explorer.open is persisted) once the
+        // workspaces land; Alpha may not be the one restored active, so steer to it.
+        for (let i = 0; i < 120; i++) {
+          const there = shown() && X.rootPath() === ${JSON.stringify(fx.alpha)} && names().length > 0
+          if (there) break
+          if (shown() && X.rootPath() !== ${JSON.stringify(fx.alpha)}) window.__mogging.workspace.switchByIndex(0)
+          await new Promise((r) => setTimeout(r, 100))
+        }
+        const hb = document.querySelector('.explorer-dock-actions .icon-btn[aria-label="Show hidden files"]')
+        return { shown: shown(), active: !!hb && hb.classList.contains('is-active'), names: names(), root: X.rootPath() }
+      })()`)
+      // …and ONE click turns it off — the first click after a mount is never a no-op.
+      await ES(`document.querySelector('.explorer-dock-actions .icon-btn[aria-label="Show hidden files"]').click()`)
+      await sleep(700)
+      const hushOff = await ES<boolean>(`(() => {${H} return !names().includes('.hushfile') })()`)
+      const hiddenBootOk =
+        hushOn && // the button worked live…
+        afterBoot.shown && afterBoot.root === fx.alpha &&
+        afterBoot.active && afterBoot.names.includes('.hushfile') && // …the FRESH mount lists hidden from its first paint…
+        hushOff // …and one click is one toggle, never a warm-up press
+
       const pass =
-        placeOk && rootedOk && keyboardOk && paletteOk && focusOk && dragOk && persistOk && expandOk && reRootOk && memoryOk && noCwdOk && closedIsFree
+        placeOk && rootedOk && keyboardOk && paletteOk && focusOk && dragOk && persistOk && expandOk && reRootOk && memoryOk && noCwdOk &&
+        closedIsFree && hiddenBootOk
       result = {
         pass,
         placeOk, place,

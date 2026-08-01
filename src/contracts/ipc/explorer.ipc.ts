@@ -114,8 +114,11 @@ export interface ExplorerActionResult {
 /**
  * The dataTransfer type that marks a drag as OURS (11/06). A pane accepts a text drop only
  * when it sees this: dragging arbitrary selected text out of another app must never type
- * itself into a terminal. The payload rides `text/plain` (the quoted insert), so an editor
- * or an OS target gets something sensible too.
+ * itself into a terminal. Its VALUE is the RAW absolute path (recut 2026-07-31): the drop
+ * side computes the insert against the pane that actually receives it — relativized to
+ * that pane's cwd and quoted for that pane's shell (pane-drop.ts). `text/plain` carries
+ * the quoted ABSOLUTE path for outside targets, `text/uri-list` the OS form — a dragstart
+ * cannot know where the drop will land, so nothing pane-specific is baked at dragstart.
  */
 export const EXPLORER_DRAG_TYPE = 'application/x-mogging-path'
 

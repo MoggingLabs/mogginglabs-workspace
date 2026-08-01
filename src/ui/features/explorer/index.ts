@@ -2,6 +2,7 @@ import {
   EXPLORER_DRAG_TYPE,
   EXPLORER_MIN_WIDTH,
   quotePathForShell,
+  relativeToDir,
   type ExplorerEntry,
   type ExplorerResult,
   type GitFileState,
@@ -492,17 +493,17 @@ export const explorerFeature: UiFeature = {
     }
 
     /**
-     * The text we hand a pane. RELATIVE to that pane's own cwd when the file sits under it
-     * (that is what a person types), ABSOLUTE otherwise — a relative path that escapes the
-     * cwd would be a lie. Quoted per-OS by the shared quoter, which also strips control
-     * characters: a filename cannot smuggle a newline, and therefore cannot press Enter.
+     * The text SEND-TO-PANE types. RELATIVE to the focused pane's own cwd when the file
+     * sits under it (that is what a person types), ABSOLUTE otherwise — a relative path
+     * that escapes the cwd would be a lie. Legitimate here and ONLY here: send-to-pane's
+     * target IS the focused pane. A drag must never use this — its target is whichever
+     * pane receives the drop, and pane-drop.ts computes the insert there (the recut).
+     * Quoted per-OS by the shared quoter, which also strips control characters: a
+     * filename cannot smuggle a newline, and therefore cannot press Enter.
      */
     function insertTextFor(entry: ExplorerEntry): string {
       const focused = getFocusedPane()
-      const cwd = focused?.cwd ?? ''
-      const under = !!cwd && isWithin(cwd, entry.path)
-      const rel = under ? entry.path.slice(cwd.length).replace(/^[\\/]+/, '') : ''
-      const raw = rel || entry.path
+      const raw = (focused?.cwd && relativeToDir(entry.path, focused.cwd)) || entry.path
       // A REMOTE pane's shell lives on the ssh host: quote POSIX (the terminal's own rule).
       const f = focused && getPaneRemote(focused.paneId) ? 'posix' : flavor
       return quotePathForShell(raw, f as ShellFlavor)
@@ -528,12 +529,21 @@ export const explorerFeature: UiFeature = {
       const dt = e.dataTransfer
       if (!dt) return
       dt.effectAllowed = 'copy'
-      const quoted = insertTextFor(entry)
-      // OUR marker. A pane accepts a text drop ONLY when it sees this — dragging arbitrary
-      // selected text out of another app must never type itself into a terminal.
-      dt.setData(EXPLORER_DRAG_TYPE, '1')
-      dt.setData('text/plain', quoted) // the pane reads this; an editor gets the same, quoted
-      dt.setData('text/uri-list', fileUrlOf(entry.path)) // an OS target gets the plain path
+      // THE DROP SIDE DECIDES. A dragstart cannot know its target: the drop may land on
+      // ANY pane — not the focused one, and under worktree-per-agent isolation a sibling
+      // pane's cwd names a DIFFERENT copy of the same repo path — or outside the app
+      // entirely, where a cwd-relative fragment means nothing. So nothing here may bake
+      // in the focused pane's cwd or shell (this function used to, and both bugs shipped).
+      //  - OUR marker carries the RAW absolute path: pane-drop.ts relativizes and quotes
+      //    it against the pane that actually receives it. A pane accepts a text drop ONLY
+      //    when this type is present — dragging arbitrary selected text out of another
+      //    app must never type itself into a terminal.
+      //  - text/plain is the ABSOLUTE path, quoted for this machine's shell: an outside
+      //    editor or input gets something meaningful anywhere it lands.
+      //  - text/uri-list is the OS form, for a drop onto the desktop or a file manager.
+      dt.setData(EXPLORER_DRAG_TYPE, entry.path)
+      dt.setData('text/plain', quotePathForShell(entry.path, flavor))
+      dt.setData('text/uri-list', fileUrlOf(entry.path))
     }
 
     function showRowMenu(entry: ExplorerEntry, at: { x: number; y: number; row: HTMLElement }): void {
@@ -578,13 +588,30 @@ export const explorerFeature: UiFeature = {
     }
 
     /** Re-root to the active workspace. Called ONLY while open — a closed dock lists
-     *  nothing, ever (the smoke counts the calls). */
-    async function root(): Promise<void> {
+     *  nothing, ever (the smoke counts the calls). `rearm` is the REOPEN door's flag:
+     *  toggle(false) tore down every main-side arm, so "already there" is not enough. */
+    async function root(opts: { rearm?: boolean } = {}): Promise<void> {
       const generation = ++rootGeneration
       const ws = activeWs()
       const nextId = ws?.id ?? ''
       const nextRoot = ws?.cwd ?? ''
-      if (nextId === wsId && nextRoot === rootPath && nextRoot) return // already there
+      if (nextId === wsId && nextRoot === rootPath && nextRoot) {
+        // Same workspace, same folder — but if this is a REOPEN, the close before it
+        // called unwatchAll(), setActionRoot('') and dropGit() while the tree kept its
+        // state, so returning here left the pool empty (no auto-refresh ever again),
+        // the action guard shut ("outside this folder" on every open/reveal), and the
+        // decorations dead. Re-arm all three, then re-list what is on screen: the pool
+        // was blind while the dock was shut and re-seeds its signatures on setDirs, so
+        // a change from the closed interval would otherwise never land.
+        if (opts.rearm) {
+          pushWatch()
+          setActionRoot(nextRoot)
+          gitFilesWatch(nextRoot)
+          applyHere()
+          void tree.applyChanged([nextRoot, ...tree.expandedDirs()]).then(() => refreshIgnored())
+        }
+        return
+      }
 
       saveMemory() // remember where we were before we leave
       dropGit()
@@ -668,6 +695,7 @@ export const explorerFeature: UiFeature = {
       // unchanged listing is zero DOM work — the tree's own change-only rule.
       await tree.applyChanged([rootPath, ...tree.expandedDirs()])
       applyHere()
+      pushWatch() // …and Refresh is a recovery verb: it re-declares the watch set too
     }
     async function collapseAll(): Promise<void> {
       await tree.setExpanded([])
@@ -720,7 +748,7 @@ export const explorerFeature: UiFeature = {
         persistOpen(open)
       }
       if (open) {
-        void root() // …which pushes the watch set once it knows what is visible
+        void root({ rearm: true }) // …which pushes the watch set once it knows what is visible
       } else {
         saveMemory()
         unwatchAll() // CLOSED COSTS ZERO: every handle closed, the poll parked, on the spot
@@ -767,12 +795,18 @@ export const explorerFeature: UiFeature = {
     })
 
     // ── Persisted boot state, applied BEFORE the dock first paints ────────────
-    void explorerInit().then((init) => {
+    void explorerInit().then(async (init) => {
       width = init.width
       applyWidth(false) // restoring is not a change — nothing to persist back
       showHidden = init.showHidden
       hiddenBtn.classList.toggle('is-active', showHidden)
       hiddenBtn.title = showHidden ? 'Hide hidden files' : 'Show hidden files'
+      // The tree keeps ITS OWN showHidden — the copy every `explorer:list` actually
+      // carries. Propagate the restored preference BEFORE the first open (zero listings:
+      // nothing is cached yet), or a persisted "on" paints the button active while every
+      // listing is still made bare — and the first corrective click becomes a silent
+      // no-op, because the tree's setter rightly ignores a value it believes it holds.
+      await tree.setShowHidden(init.showHidden)
       // Restore the INTENT; the open itself may be refused right now (the workspace
       // list often lands after this init) — the workspaces subscriber above reopens
       // the moment a workspace exists. persist:false either way: a restore is not a
