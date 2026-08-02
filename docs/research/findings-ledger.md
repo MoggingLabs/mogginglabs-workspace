@@ -18,8 +18,8 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | | count |
 | --- | --- |
 | rows | 497 |
-| open | 488 |
-| fixed | 2 |
+| open | 388 |
+| fixed | 102 |
 | invalid | 7 |
 | deferred | 0 |
 
@@ -49,7 +49,7 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | ci-workflows/F1 | high | `open` | `scripts/check-sweep-log.sh:10` | Unchanged. Violates gate honesty (a gate that never ran certifies green) and win/mac parity. The ci.yml delta was only 199->207 comment bumps plus two weight-ga |  |
 | command-blocks/F1 | high | `fixed` | `src/ui/features/terminal/pane-anchor.ts:226 (jump call now terminal-pane.ts:880-882)` | Lines drifted (216->226, 836->880) from the +10-line sync-output guards and unrelated pane edits; the defect is byte-identical. |  |
 | command-blocks/F2 | high | `open` | `src/ui/features/blocks/block-tracker.ts:149` | As originally recommended: wire a palette command or per-pane find bar calling find()+jumpTo(), and cover it in the smoke. |  |
-| connection-stdio-bridge-into-agent-clis-adr-0014/F3 | high | `open` | `src/main/connections.ts:1266` | Unchanged. The comment at connections.ts:1259-1260 ('The shim sets ELECTRON_RUN_AS_NODE itself') is now false - ADR 0017 removed it, cliShimSource sets nothing. |  |
+| connection-stdio-bridge-into-agent-clis-adr-0014/F3 | high | `fixed` | `src/main/connections.ts:1266` | FIXED registerConnectionServer builds its entry with the new shared serverEntryFor() naming runtime.connectionEntry (the PROTOCOL-NEUTRAL launcher under run/mcp) instead of hand-building one that named runtime.connectionShim, which lives in the version-pinned run/v<N>/bin. A CLI config entry outlives the release that wrote it - the line sits in the user own ~/.claude.json and nothing rewrites it on update - so after a protocol bump every configured connection stopped resolving, silently, in their CLI, with no app involved. The house row in mcp-manager.ts now uses the same builder, so the two shapes cannot diverge again; the builder cannot express env, which is the rule that keeps a credential literal out of a CLI config. tests/unit/server-entry-shape.test.ts; break proofs BW-BZ. |  |
 | connection-stdio-bridge-into-agent-clis-adr-0014/F5 | high | `open` | `scripts/connections-pure-smoke.ts:369` | Raised from MEDIUM on gate honesty: the delta shipped a protocol bump (making F2 live) plus 10 new gates through the same green board, while the composition age |  |
 | connections-oauth/F1 | high | `open` | `src/main/connections.ts:1402` | Unchanged severity. The delta shipped the device route, so more cards rest on app-held grants. RefreshCoordinator (credential-core.ts:123-185) has no offline br |  |
 | curated-rest-tool-bridge-adr-0020-0021/F1 | high | `open` | `src/backend/features/integrations/rest-bridge.ts:275` | posthog.json's pageParam is equally unread but PostHog does send a next URL, so those work by accident; Stripe's 4 tools are the real break. restexec-pure-smoke |  |

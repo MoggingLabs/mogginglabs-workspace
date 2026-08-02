@@ -12,7 +12,6 @@ import {
   type ConnectionAuthKind,
   type ConnectionsAttention,
   type McpPreset,
-  type McpServerEntry,
   type OAuthClientRecord,
   type VerifyCause
 } from '@contracts'
@@ -40,6 +39,7 @@ import {
   resolveClient,
   sanitizeUserClient,
   saveServer,
+  serverEntryFor,
   userClientRecord,
   oauthQuirksFor,
   runVerificationProbe,
@@ -1261,16 +1261,15 @@ export function registerConnectionServer(serviceId: string): { ok: boolean; reas
   if (!store || !preset) return { ok: false, reason: 'store not ready' }
   const runtime = getCliRuntime()
   const kv: GrantKv = { get: (k) => store.getSetting(k), set: (k, v) => store.setSetting(k, v) }
-  // NO `env`. The shim sets ELECTRON_RUN_AS_NODE itself, because the entry validator
-  // refuses any env value that is not a `${VAR}` reference — see CliRuntime.connectionShim.
-  // What lands in the CLI's config is a command and a service id, and nothing else.
-  const entry: McpServerEntry = {
-    id: serviceId,
-    label: preset.label,
-    transport: 'stdio',
-    command: runtime.connectionShim,
-    args: ['--connection', serviceId]
-  }
+  // The PROTOCOL-NEUTRAL launcher, not the version-pinned shim. connectionShim lives in
+  // run/v<N>/bin, so after a protocol bump every connection a user had configured stopped
+  // resolving — silently, in their CLI, with no app involved. Same builder as the house row,
+  // so the two shapes cannot diverge again; it cannot express `env`, which is the rule that
+  // keeps a credential literal out of a CLI config.
+  const entry = serverEntryFor(
+    { executable: runtime.executable, launcher: runtime.connectionEntry },
+    { id: serviceId, label: preset.label, args: ['--connection', serviceId] }
+  )
   const saved = saveServer(kv, entry)
   if (!saved.ok) {
     // NEVER silent. A refusal here means the connection is live but no CLI can reach

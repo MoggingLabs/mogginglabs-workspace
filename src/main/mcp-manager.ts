@@ -15,6 +15,7 @@ import {
   providerCatalog,
   removeStoredServer,
   saveServer,
+  serverEntryFor,
   sha256,
   CLI_CAPABILITIES,
   MCP_PRESETS,
@@ -86,14 +87,12 @@ export function resolveCliHomes(): CliHomes {
  *  carry the old canonical on the first boot after the split. */
 export function houseServerEntry(): McpServerEntry {
   const runtime = getCliRuntime()
-  return {
-    id: 'mogging',
-    label: 'MoggingLabs',
-    transport: 'stdio',
-    command: runtime.executable,
-    args: [runtime.mcpEntry],
-    builtIn: true
-  }
+  // Same builder as a connection row. Both name a PROTOCOL-NEUTRAL launcher; hand-building
+  // either one is how the connection row came to name the version-pinned shim instead.
+  return serverEntryFor(
+    { executable: runtime.executable, launcher: runtime.mcpEntry },
+    { id: 'mogging', label: 'MoggingLabs', builtIn: true }
+  )
 }
 
 export function listServers(): McpServerEntry[] {

@@ -104,6 +104,38 @@ if (rows.length !== PINNED_ROWS) {
   )
 }
 
+// 5. the Totals table at the top of the file agrees with the rows underneath it.
+//
+// The file states its own totals, and nothing compared them to the tally this gate computes.
+// They had drifted to `open 488 / fixed 2` while the real counts were 390 and 100 — a stale
+// summary inside the very file this gate exists to keep honest, walked past by a gate that
+// computed the right answer and never looked up.
+//
+// Derived, never typed: the expected value IS the tally.
+const TOTALS = {
+  rows: rows.length,
+  open: counts.open,
+  fixed: counts.fixed,
+  invalid: counts.invalid,
+  deferred: counts.deferred
+}
+const totalsSeen = new Map()
+for (const line of md.split('\n')) {
+  const m = /^\|\s*(rows|open|fixed|invalid|deferred)\s*\|\s*(\d+)\s*\|\s*$/.exec(line)
+  if (m) totalsSeen.set(m[1], Number(m[2]))
+}
+if (totalsSeen.size === 0) {
+  // Blindness guard: a reworded table must fail loudly, not silently stop being checked.
+  problems.push('the Totals table is gone or reshaped — the summary can no longer be checked against the rows')
+} else {
+  for (const [key, expected] of Object.entries(TOTALS)) {
+    if (!totalsSeen.has(key)) problems.push(`Totals table has no \`${key}\` row (the rows say ${expected})`)
+    else if (totalsSeen.get(key) !== expected) {
+      problems.push(`Totals says ${key} = ${totalsSeen.get(key)}, the rows say ${expected} — the summary is derived, never typed`)
+    }
+  }
+}
+
 if (problems.length) {
   console.error('LEDGER FAILED')
   for (const p of problems) console.error('  ' + p)
