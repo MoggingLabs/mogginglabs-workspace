@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { sourceOf } from './source-body'
 import { RESTORE_MODE_RESET, trimTornStart } from '@backend/features/terminal/pane-shared'
 
 // The tear trimmer guards BOTH blind suffix cuts (the live ring's slice(-SCROLLBACK_CHARS)
@@ -45,10 +46,44 @@ describe('trimTornStart', () => {
 
 describe('RESTORE_MODE_RESET', () => {
   it('grounds the modes a dead TUI can leak into a restored pane', () => {
-    for (const seq of ['?1049l', '?1000l', '?1006l', '?2004l', '?25h']) {
+    for (const seq of ['?1000l', '?1002l', '?1003l', '?1006l', '?2004l', '?25h']) {
       expect(RESTORE_MODE_RESET).toContain(seq)
     }
     // Never a full reset: \x1bc would ERASE the replayed history it follows.
     expect(RESTORE_MODE_RESET).not.toContain('\x1bc')
+  })
+
+  // THE defect this string had. It is appended directly after the replayed history, so any
+  // sequence in it that moves the cursor paints the fresh prompt over row 0 of the history it
+  // was meant to follow. Two of them did.
+  //
+  // The row above previously asserted `?1049l` — it pinned the bug. Replaced, not extended.
+  it('leaves the alt screen WITHOUT homing the cursor', () => {
+    // ?1049l calls restoreCursor; with no prior DECSC — and there is none, the history came
+    // from a process that is gone — that restores to (0,0). ?1047l is the same exit without
+    // the cursor move, which is why both codes exist.
+    expect(RESTORE_MODE_RESET).toContain('[?1047l')
+    expect(RESTORE_MODE_RESET, '?1049l homes the cursor over the replayed history').not.toContain('[?1049l')
+  })
+
+  it('brackets the scroll-region reset in DECSC/DECRC', () => {
+    // A default `ESC [ r` homes the cursor too, per DECSTBM. Saved and restored around it.
+    expect(RESTORE_MODE_RESET).toContain('\x1b7\x1b[r\x1b8')
+    expect(RESTORE_MODE_RESET, 'a bare region reset homes the cursor').not.toMatch(/[^7]\x1b\[r/)
+  })
+
+  it('restores the region BEFORE clearing SGR', () => {
+    // DECRC restores SGR as well as the position, so `ESC 8` after `ESC [ m` would undo it.
+    expect(RESTORE_MODE_RESET.indexOf('\x1b8')).toBeLessThan(RESTORE_MODE_RESET.indexOf('\x1b[m'))
+  })
+
+  it('every sequence is written from escapes, never a raw control byte', () => {
+    // The clipboard-port rule, applied here: a literal ESC in a source file is invisible in a
+    // diff and survives a copy-paste into somewhere it must not go.
+    const src = sourceOf('src/backend/features/terminal/pane-shared.ts')
+    // The pattern is BUILT FROM A STRING for the same reason: writing it as a regex literal
+    // would require putting the very byte being refused into this file.
+    const RAW_CONTROL = new RegExp('[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]')
+    expect(RAW_CONTROL.test(src), 'a raw control byte in the source').toBe(false)
   })
 })

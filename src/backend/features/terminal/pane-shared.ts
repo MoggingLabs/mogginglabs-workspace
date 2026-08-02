@@ -58,9 +58,23 @@ export function trimTornStart(s: string): string {
  * mode is exactly what survives while its enter was trimmed (or vice versa). The fresh
  * shell behind a restored pane enabled NONE of them, so ground state is the truth here;
  * this never touches a live reattach, whose process still owns its modes.
+ *
+ * TWO of these sequences MOVE THE CURSOR, and this string is appended directly after the
+ * replayed history — so the fresh prompt painted over row 0 of the history it was meant to
+ * follow.
+ *
+ *   `?1049l` calls restoreCursor. With no prior DECSC — and there is none, the history came
+ *   from a process that is gone — that restores to (0,0). `?1047l` leaves the alt screen
+ *   WITHOUT touching the cursor, which is the whole reason both codes exist.
+ *
+ *   A default `ESC [ r` sets the scroll region to the full screen AND homes the cursor, per
+ *   DECSTBM. Wrapped in DECSC/DECRC (`ESC 7` … `ESC 8`) the position is saved and restored.
+ *
+ * DECRC also restores SGR, so the region reset sits BEFORE the trailing `ESC [ m` — after it,
+ * it would undo it.
  */
 export const RESTORE_MODE_RESET =
-  '\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[r\x1b[m'
+  '\x1b[?1047l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b7\x1b[r\x1b8\x1b[m'
 
 /**
  * Compose a pane's environment. THE composer — both backends call this, or they drift.
