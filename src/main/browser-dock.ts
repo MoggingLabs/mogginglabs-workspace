@@ -670,13 +670,40 @@ const ACT_VERBS: readonly BrowserAgentVerbName[] = ['navigate', 'click', 'type',
  *  one `document.body.innerHTML` must not ship megabytes through the transport. */
 const EVAL_VALUE_CAP = 8000
 
-function gateAct(v: BrowserAgentVerb, wc: WebContents, wsId: string, prof: BrowserProfile): BrowserAgentResult | null {
-  if (prof !== 'agent-web' || !ACT_VERBS.includes(v.verb)) return null
+/**
+ * May this act proceed, and against WHICH origin?
+ *
+ * It used to write the trail's `outcome: 'ok'` row itself and return null — i.e. the audit
+ * record was written BEFORE the verb ran. The verb could then return `badtarget`, or throw,
+ * with 'ok' already on disk. The gate knows whether the act was PERMITTED; only the caller
+ * knows whether it WORKED, so the caller records.
+ *
+ * Returns the gated origin so the caller can re-check it at injection time and log against it.
+ */
+function gateAct(
+  v: BrowserAgentVerb,
+  wc: WebContents,
+  wsId: string,
+  prof: BrowserProfile,
+  pane?: string
+): { gated: false } | { gated: true; origin: string } | { gated: true; origin: string; refusal: BrowserAgentResult } {
+  if (prof !== 'agent-web' || !ACT_VERBS.includes(v.verb)) return { gated: false }
   const origin = v.verb === 'navigate' ? originOf(normalizeUrl(String(v.target ?? '')) ?? '') : originOf(wc.getURL())
   const s = wsa(wsId)
-  const refuse = (outcome: 'refused', reason: string): BrowserAgentResult => {
-    recordTrail({ ts: Date.now(), source: 'web', workspaceId: wsId, verb: v.verb, target: origin || '(no origin)', outcome, reason })
-    return { ok: false, reason }
+  const refuse = (outcome: 'refused', reason: string) => {
+    recordTrail({
+      ts: Date.now(),
+      source: 'web',
+      workspaceId: wsId,
+      verb: v.verb,
+      target: origin || '(no origin)',
+      outcome,
+      reason,
+      // WHICH pane asked. It was in scope at the call site and never threaded, so every act
+      // row read as if the workspace itself had done it.
+      ...(pane ? { pane } : {})
+    })
+    return { gated: true as const, origin, refusal: { ok: false, reason } }
   }
   if (!origin) return refuse('refused', v.verb === 'navigate' ? 'badtarget' : 'no page to act on')
   if (isBlockedActOrigin(origin)) return refuse('refused', `blocked origin ${origin} — sensitive origins never accept act grants`)
@@ -689,18 +716,52 @@ function gateAct(v: BrowserAgentVerb, wc: WebContents, wsId: string, prof: Brows
     if (wsId === activeWorkspaceId) pushActivity()
     return refuse('refused', `awaiting the human's allow for ${origin} this session (the dock banner) — retry after they confirm`)
   }
-  recordTrail({ ts: Date.now(), source: 'web', workspaceId: wsId, verb: v.verb, target: origin, outcome: 'ok' })
-  return null
+  // Permitted. NO row here — agentAct writes one when the outcome is known.
+  return { gated: true, origin }
 }
 
+/** Raised when the page navigated between the gate and the injection. Carried as an error so
+ *  it unwinds through the same path a failed injection does. */
+const ORIGIN_MOVED = 'origin changed under the act — refused rather than run against the new page'
+
 export async function agentAct(v: BrowserAgentVerb, ctx?: { pane?: string }): Promise<BrowserAgentResult> {
+  // Filled by the gate; the trail row is written from it once the outcome is known.
+  const gated: { wsId?: string; origin?: string } = {}
+  const result = await runAgentAct(v, ctx, gated)
+  if (gated.wsId !== undefined && gated.origin !== undefined) {
+    recordTrail({
+      ts: Date.now(),
+      source: 'web',
+      workspaceId: gated.wsId,
+      verb: v.verb,
+      target: gated.origin,
+      outcome: result.ok ? 'ok' : 'refused',
+      ...(result.ok ? {} : { reason: result.reason }),
+      ...(ctx?.pane ? { pane: ctx.pane } : {})
+    })
+  }
+  return result
+}
+
+async function runAgentAct(
+  v: BrowserAgentVerb,
+  ctx: { pane?: string } | undefined,
+  gated: { wsId?: string; origin?: string }
+): Promise<BrowserAgentResult> {
   const sess = sessionForCtx(ctx)
   if (!sess) return { ok: false, reason: ctx?.pane ? 'unknown-pane' : 'no-workspace' }
   if (!sess.allowed) return { ok: false, reason: 'disabled' }
   let wc = guestWc(sess.wsId, sess.profile)
   if (!wc) wc = await materializeGuest(sess.wsId, sess.profile) // an agent may drive a workspace the human never opened
   if (!wc) return { ok: false, reason: 'noview' }
-  const run = (js: string): Promise<unknown> => wc.executeJavaScript(js, true)
+  const run = async (js: string): Promise<unknown> => {
+    // THE re-check. The origin was resolved once, before the verb ran, and nothing re-read it
+    // between the gate and the injection — so a page-initiated navigation committing in that
+    // window ran the script in the NEW origin's document, with its cookies, under a grant that
+    // named the old one. Every injection goes through this one door; navigate does not.
+    if (gated.origin !== undefined && originOf(wc.getURL()) !== gated.origin) throw new Error(ORIGIN_MOVED)
+    return wc.executeJavaScript(js, true)
+  }
   const refVerbs: BrowserAgentVerbName[] = ['click', 'type', 'select', 'wait_for']
   let trailTarget: string | undefined
   if (refVerbs.includes(v.verb)) trailTarget = v.target
@@ -713,8 +774,17 @@ export async function agentAct(v: BrowserAgentVerb, ctx?: { pane?: string }): Pr
   }
   const operation = beginDriving(sess.wsId, v.verb, trailTarget, ctx?.pane)
   try {
-    const refusal = gateAct(v, wc, sess.wsId, sess.profile)
-    if (refusal) return refusal
+    const gate = gateAct(v, wc, sess.wsId, sess.profile, ctx?.pane)
+    if (gate.gated) {
+      gated.wsId = sess.wsId
+      gated.origin = gate.origin
+      if ('refusal' in gate) {
+        // The gate already wrote its own refused row; do not write a second one for it.
+        gated.wsId = undefined
+        gated.origin = undefined
+        return gate.refusal
+      }
+    }
     const ring = bufs.get(wc.id) ?? { console: [], net: [] }
     switch (v.verb) {
       case 'navigate': {
@@ -801,8 +871,10 @@ export async function agentAct(v: BrowserAgentVerb, ctx?: { pane?: string }): Pr
         // both ends) and then read it. Gate the url exactly like navigate. Preview is free;
         // a blank tab_new (no url) is always allowed.
         if (openUrl && sess.profile === 'agent-web') {
-          const refusal = gateAct({ verb: 'navigate', target: openUrl }, wc, sess.wsId, sess.profile)
-          if (refusal) return refusal
+          // tab_new is gated AS a navigate, but its outcome row belongs to tab_new — so the
+          // gated origin is deliberately not published to the caller-side recorder here.
+          const urlGate = gateAct({ verb: 'navigate', target: openUrl }, wc, sess.wsId, sess.profile, ctx?.pane)
+          if (urlGate.gated && 'refusal' in urlGate) return urlGate.refusal
         }
         const win = getWin?.()
         if (!win || win.isDestroyed()) return { ok: false, reason: 'noview' }
