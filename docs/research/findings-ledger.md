@@ -18,8 +18,8 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | | count |
 | --- | --- |
 | rows | 497 |
-| open | 371 |
-| fixed | 119 |
+| open | 370 |
+| fixed | 120 |
 | invalid | 7 |
 | deferred | 0 |
 
@@ -276,7 +276,7 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | ipc-preload-contracts/F1 | medium | `fixed` | `src/main/libfetch.ts:29` | Held at the prior verifier's corrected medium: needs local env control plus per-workspace distill consent, default OFF (libfetch.ts:6-8). Nothing in the 32-comm |  |
 | ipc-preload-contracts/F2 | medium | `open` | `src/main/electron-context.ts:14` | Unchanged. The delta added MORE direct registrations (agent-global-hooks.ts:217-227, one-click setup agents.ts:192-197), widening the unvalidated surface; compe |  |
 | ipc-preload-contracts/F3 | medium | `open` | `scripts/check-originpin.mjs:100` | Same defect, broader than scoped: usage/status adds more provider endpoints outside the table. Those ride the user's own credential, so a fix should separate ho |  |
-| ipc-preload-contracts/F4 | medium | `open` | `src/preload/index.ts:17` | Unchanged, and a gate-honesty exposure: the sweep gates the LIST, never the ENFORCEMENT, so deleting assertAllowed from `send` leaves every gate green. |  |
+| ipc-preload-contracts/F4 | medium | `fixed` | `src/preload/index.ts:17` | FIXED tests/unit/preload-allowlist.test.ts (9). The preload exposes ONE generic bridge so adding a feature channel to AllChannels auto-permits it with no preload edit; the only thing stopping that being arbitrary IPC is a single assertAllowed(channel) at the top of invoke/send/on. Deleting one of those three left all 212 gates green - that is the gap. Now asserted per method, including that the check PRECEDES the ipcRenderer call it guards, that the refusal is a throw with a nameable message rather than a silent return, that the allowlist is built from AllChannels and nothing else, and that the exposed surface is exactly four members (a second non-channel member beside getPathForFile must answer for itself). Break proofs CT-CY. |  |
 | ipc-preload-contracts/F5 | medium | `open` | `src/contracts/ipc/channels.ts:494` | The delta widened scope, not kind: six new brain channels (drafts/draftGet/draftPromote/draftDiscard/distillGet/distillSet) landed with payload shapes documente |  |
 | ipc-preload-contracts/F6 | medium | `open` | `src/preload/index.ts:14` | terminal-pane.ts gained more per-pane global subscriptions filtered identically (:1030,:1130,:1156,:1472,:1707,:1751,:1754), so the same O(panes) crossing now s |  |
 | local-endpoint-token-custody-and-lifecycle/F3 | medium | `fixed` | `src/main/mcp-endpoint.ts:596` | FIXED the endpoint file now records `pid` and is published by rename rather than written in place. A crash-stale file was byte-identical to a live one, so a reader could only find out by connecting and timing out; and a direct write is not atomic, so a reader arriving mid-write got truncated JSON - indistinguishable from 'no app running'. bin/mogging.mjs's validEndpoint is the reader half: it rejects ONLY on ESRCH, because EPERM means the process exists and belongs to another user and an older build wrote no pid at all. Break proofs AW, AX, AZ. |  |

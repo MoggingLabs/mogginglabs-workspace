@@ -92,7 +92,10 @@ describe('the two halves stay wired together', () => {
   const bodyOf = (signature: string): string => {
     const start = src.indexOf(signature)
     expect(start, `${signature} not found — the method was renamed, not deleted, surely?`).toBeGreaterThan(-1)
-    let i = src.indexOf('{', start)
+  // The BODY brace, which is the first one followed by a newline. A plain indexOf('{')
+    // latches onto a brace in the SIGNATURE and matches an entirely wrong span (see
+    // tests/unit/source-body.ts, where this is shared for new tests).
+    let i = src.indexOf('{\n', start)
     let depth = 0
     const from = i
     for (; i < src.length; i++) {
