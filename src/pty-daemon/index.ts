@@ -9,7 +9,7 @@ import * as path from 'node:path'
 import { DAEMON_PROTOCOL_VERSION } from '@contracts'
 import { enforceWindowlessChildren } from '@backend/platform/windowless-children'
 import { buildStampOf } from '@backend/platform/build-stamp'
-import { SessionStore } from '@backend/features/workspace'
+import { SessionStore , isSqliteCorruption, corruptAsidePath, corruptSidecars } from '@backend/features/workspace'
 import { SessionManager } from './session'
 import { createServer } from './transport'
 import {
@@ -28,21 +28,46 @@ import {
 const IDLE_SHUTDOWN_MS = Number(process.env.MOGGING_DAEMON_IDLE_MS ?? 30 * 60 * 1000)
 
 /**
- * Open the session store, surviving a corrupt file. A sqlite open/migration throw used
- * to abort main() — the daemon never came up, the app fell back to in-proc, and every
- * later boot repeated it (the file does not heal). Losing restorable sessions is bad;
- * losing the DAEMON — forever — over one bad file is strictly worse. The corrupt file
- * is set aside (evidence, and a manual recovery path), and a fresh store carries on.
+ * Open the session store, surviving a CORRUPT file — and only a corrupt one.
+ *
+ * A sqlite open/migration throw used to abort main(): the daemon never came up, the app
+ * fell back to in-proc, and every later boot repeated it, because a corrupt file does not
+ * heal. Losing restorable sessions is bad; losing the DAEMON, forever, over one bad file
+ * is strictly worse. So corruption sets the file aside (evidence, and a manual recovery
+ * path) and a fresh store carries on.
+ *
+ * The mistake was applying that to every failure. A lock or a transient I/O fault CAN
+ * heal, and moving the file on one is how a healthy store is thrown away. Those rethrow:
+ * this boot fails loudly, the file stays put, and the next boot succeeds.
  */
 function openSessionStore(dbPath: string): SessionStore {
   try {
     return new SessionStore(dbPath)
   } catch (e) {
     log('SESSION STORE OPEN FAILED ' + (e instanceof Error && e.stack ? e.stack : String(e)))
-    const aside = `${dbPath}.corrupt-${Date.now().toString(36)}`
+    // ONLY corruption may move the file. This used to set the store aside on ANY throw,
+    // which meant a lock, an EBUSY from a scanner mid-write, or a momentary permission
+    // denial renamed a perfectly good store out of the way — the retry then failed
+    // identically, the daemon died that boot, and the next healthy boot opened a fresh
+    // empty file with every restorable pane gone. A transient fault must leave the file
+    // exactly where it is and let the next boot try again.
+    if (!isSqliteCorruption(e)) {
+      log('not corruption — leaving the store in place; this boot fails, the next can succeed')
+      throw e
+    }
+    const aside = corruptAsidePath(dbPath, Date.now())
     try {
       fs.renameSync(dbPath, aside)
       log('set the corrupt store aside at ' + aside)
+      // The journal goes with it. Left behind, the -wal/-shm hand the FRESH database the
+      // old file's uncommitted tail — a clean start that inherits what it just escaped.
+      for (const side of corruptSidecars(dbPath)) {
+        try {
+          fs.renameSync(side, corruptAsidePath(side, Date.now()))
+        } catch {
+          /* no journal beside it, or already gone */
+        }
+      }
     } catch {
       /* locked or already gone — the fresh open below decides */
     }
