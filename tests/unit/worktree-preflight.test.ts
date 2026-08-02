@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { preflightWorktrees } from '@backend/features/worktrees'
+import { nearestExistingAncestor, preflightWorktrees } from '@backend/features/worktrees'
 import { resolveOnPath } from '@backend/platform/env-path'
 
 /**
@@ -93,5 +93,46 @@ describe.runIf(hasGit)('preflightWorktrees', () => {
     git(dir, 'add', 'a.txt')
     git(dir, 'commit', '-qm', 'first')
     expect(await preflightWorktrees(dir)).toEqual({ ok: true, reason: 'ok' })
+  })
+
+  // THE PROBE THAT WROTE. preflight is the wizard's "can this folder be isolated?" question,
+  // fired from the folder browser's selection subscriber — and `is-inside-work-tree` is true
+  // for every SUBDIRECTORY of a repo. It used to mkdir <repo>/.mogging/worktrees to test
+  // writability, so merely BROWSING through repo/src/ui created a `.mogging/` at each level
+  // on the way, and typing a path created one per debounce. Nothing removed them, and none
+  // got the self-ignoring .gitignore createWorktree writes beside the real root.
+  it('leaves NOTHING behind — a read-only question writes nothing', async () => {
+    const dir = tempDir()
+    git(dir, 'init', '-q')
+    git(dir, 'config', 'user.email', 'test@example.com')
+    git(dir, 'config', 'user.name', 'Test')
+    writeFileSync(join(dir, 'a.txt'), 'hello\n')
+    git(dir, 'add', 'a.txt')
+    git(dir, 'commit', '-qm', 'first')
+
+    expect(await preflightWorktrees(dir)).toEqual({ ok: true, reason: 'ok' })
+    expect(existsSync(join(dir, '.mogging'))).toBe(false)
+
+    // And browsing DEEPER — the case that littered a directory per level.
+    const nested = join(dir, 'src', 'ui')
+    mkdirSync(nested, { recursive: true })
+    expect(await preflightWorktrees(nested)).toEqual({ ok: true, reason: 'ok' })
+    expect(existsSync(join(nested, '.mogging'))).toBe(false)
+  })
+})
+
+describe('nearestExistingAncestor', () => {
+  it('walks up to the closest directory that exists', () => {
+    const dir = tempDir()
+    expect(nearestExistingAncestor(join(dir, 'a', 'b', 'c'))).toBe(dir)
+  })
+
+  it('returns the path itself when it already exists', () => {
+    const dir = tempDir()
+    expect(nearestExistingAncestor(dir)).toBe(dir)
+  })
+
+  it('terminates at the filesystem root rather than looping', () => {
+    expect(() => nearestExistingAncestor('/definitely/not/here/at/all')).not.toThrow()
   })
 })
