@@ -18,8 +18,8 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | | count |
 | --- | --- |
 | rows | 497 |
-| open | 360 |
-| fixed | 130 |
+| open | 359 |
+| fixed | 131 |
 | invalid | 7 |
 | deferred | 0 |
 
@@ -117,7 +117,9 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | terminal-rendering/F1 | high | `fixed` | `src/ui/features/terminal/pane-anchor.ts:227` | The delta's mid-frame defer makes the yank land one frame later during TUI repaints but does not prevent it. Keyboard scrollback paging and shift-click history |  |
 | updater-distribution/F2 | high | `fixed` | `.github/workflows/release.yml:332` | Unchanged. Still the highest-impact item here: one dispatch re-run against an old tag repoints /releases/latest for every install; prerelease users downgrade. |  |
 | usage-metering/F1 | high | `open` | `src/backend/features/usage/claude-adapter.ts:250` | Zero changes to claude-adapter.ts or the boot schedule in the delta; ADR 0007:52-54 still says 'never speculatively at boot'. Severity held per prior verifier: |  |
-| window-chrome-clipboard/F1 | high | `open` | `src/main/clipboard.ts:371` | Unchanged. Rests on Windows reading LF-written text back as CRLF — asserted in the repo's own write-path comment (:289-294), never proven, which is exactly why |  |
+| window-chrome-clipboard/F1 | high | `fixed` | `src/main/clipboard.ts:371` | FIXED sameClipboardText hoisted into src/contracts/ipc/clipboard.ipc.ts and used by BOTH the write verification and the delete handler. A copy can read back with 
+ rewritten to 
+ - real fidelity on Windows, not a failure - so a strict === answers no to two spellings of the same content. The write handler knew this and carried a function-local sameText, because getting it wrong there is LOUD (every pasted code block would throw clipboard write did not take). The delete handler asked the same question with === and got the opposite answer QUIETLY: deleting the history row that IS the current clipboard skipped clipboard.clear(), so the content the user had just deleted stayed on their clipboard. Deliberately NOT applied to the poll watcher or the history-ring dedupe - those compare two values from the same reader where no rewrite can occur, and folding there would merge entries a user may want distinct. tests/unit/clipboard-same-text.test.ts (10); break proofs DV-DY, including DX which over-folds a lone CR. |  |
 | winget-homebrew-install-manifests/F1 | high | `open` | `.github/workflows/release.yml:245` | Delta added check-package-weight.mjs (ci.yml:219, 536) — guards bundle contents, not hashes. Severity held: manifests still unsubmitted (docs/10:13), so impact |  |
 | worktrees/F3 | high | `fixed` | `src/backend/features/worktrees/index.ts:94` | Unchanged; a Windows-only failure after a green preflight — platform-divergence law keeps this high. |  |
 | a11y/F2 | medium | `open` | `src/ui/features/workspace/controller.ts:749` | Unchanged. Now provably compounds F1: the click path forces `activate.focus({ preventScroll: true })` (controller.ts:606), so the focused element has neither na |  |

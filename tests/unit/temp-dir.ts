@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -34,4 +34,24 @@ export function removeTempDir(dir: string): void {
 /** Drain a list of scratch dirs. Empties the array, so a second call is a no-op. */
 export function removeTempDirs(dirs: string[]): void {
   for (const dir of dirs.splice(0)) removeTempDir(dir)
+}
+
+/**
+ * Remove a directory and PROVE it is gone. For SETUP, never for teardown.
+ *
+ * `removeTempDir` swallows failure on purpose — a leftover scratch directory is not a test
+ * result, and a cleanup that throws turns a passing suite red. That is exactly wrong when the
+ * removal is the thing under test: worktree-dirty-guard removes a worktree out from under git
+ * to provoke an unreadable status, and when Windows kept a handle the directory survived, git
+ * read a clean worktree, and the test failed intermittently on an assertion about something
+ * else entirely.
+ *
+ * Throws with the reason, so a setup that did not happen says so instead of being reported as
+ * a defect in the code under test.
+ */
+export function removeTempDirOrThrow(dir: string): void {
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  if (existsSync(dir)) {
+    throw new Error(`setup could not remove ${dir} — something still holds a handle; the test's precondition is unmet`)
+  }
 }

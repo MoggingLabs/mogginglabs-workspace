@@ -101,3 +101,23 @@ export const CLIPBOARD_HISTORY_LIMIT = 100
 /** Anything larger is copied to the system clipboard but NOT recorded — a huge
  *  scrollback paste should not be held in memory a second time. */
 export const CLIPBOARD_MAX_ENTRY_BYTES = 256 * 1024
+
+/**
+ * "Is this the same clipboard text?" — the ONE predicate for that question.
+ *
+ * A copy can read back with `\n` rewritten to `\r\n`: that is real fidelity on Windows, not a
+ * failure, so a strict `===` answers no to two spellings of the same content.
+ *
+ * It was written once as a function-local inside the WRITE handler, where getting it right
+ * mattered visibly (every pasted code block would have thrown "clipboard write did not take").
+ * The delete handler asked the same question with `===` and got the opposite answer: deleting
+ * the history row that IS the current clipboard skipped `clipboard.clear()`, so the content the
+ * user had just deleted stayed on their clipboard.
+ *
+ * Deliberately NOT used for the poll-watcher dedupe or the history-ring dedupe: those compare
+ * two values from the SAME reader, where no rewrite can occur, and folding line endings there
+ * would merge two entries a user may legitimately want distinct.
+ */
+export function sameClipboardText(a: string, b: string): boolean {
+  return a.replace(/\r\n/g, '\n') === b.replace(/\r\n/g, '\n')
+}

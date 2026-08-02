@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { removeTempDir } from './temp-dir'
+import { removeTempDir, removeTempDirOrThrow } from './temp-dir'
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -104,7 +104,10 @@ describe.skipIf(!hasGit)('worktree dirty guard', () => {
     const wt = created.path
     expect(wt).toBeTruthy()
     if (!wt) return
-    removeTempDir(wt)
+    // SETUP, not cleanup: the whole point is that git cannot read this worktree. A removal
+    // that silently did not happen leaves git reading a CLEAN worktree, and the assertion
+    // below then fails for a reason that has nothing to do with the guard.
+    removeTempDirOrThrow(wt)
     const res = await removeWorktree(repo, wt)
     expect(res.ok).toBe(false)
     expect(res).toMatchObject({ reason: 'dirty' }) // unknown refuses, exactly as dirty does
