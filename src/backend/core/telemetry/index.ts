@@ -15,4 +15,5 @@ export function getTelemetry(): Telemetry {
 }
 
 export { NoopTelemetry } from './noop'
+export { compositeTelemetry } from './composite'
 export type { Telemetry } from '@contracts'
