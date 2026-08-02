@@ -9,7 +9,7 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 211 gates: 36 static (AUDIT · LEDGER · VERDICT · SATELLITE · CLIGRAM · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 175 app-boot
+# 212 gates: 37 static (AUDIT · LEDGER · VERDICT · SATELLITE · CLIGRAM · DOCSCITE · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 175 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -210,6 +210,11 @@ run_static SATELLITE node scripts/check-cli-satellites.mjs
 # which output, and that a half-written endpoint.json never becomes a node:net stack trace on
 # an agent's stderr. bin/ had no coverage of any kind.
 run_static CLIGRAM  node scripts/check-cli-grammar.mjs
+# DOCSREFS asserts a cited path EXISTS. This asserts the doc says the RIGHT thing about it:
+# an ADR link labelled 0015 pointing at 0016, a "scripting reference" listing 8 of 21 verbs, a
+# column header the CLI stopped printing, a write-tool count the catalog contradicts. Every
+# expected value is derived from a repo artifact; prose is only ever what is checked.
+run_static DOCSCITE node scripts/check-docs-citations.mjs
 run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs

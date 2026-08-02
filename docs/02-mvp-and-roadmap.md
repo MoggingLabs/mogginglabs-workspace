@@ -314,7 +314,7 @@ keeps the five existing `title`-reading gates safe. Surface: `docs/11` §Tooltip
 
 ### The Accounts pack — the paid tier, made hard to crack ✅ (`prompts/phase-accounts/`, shipped 2026-07-16)
 The productization arc: a MoggingLabs account, signed entitlements, and the anti-crack
-pass — built stance-first (ADR [0015](adr/0016-accounts-and-entitlements.md) wrote the
+pass — built stance-first (ADR [0016](adr/0016-accounts-and-entitlements.md) wrote the
 law before the login button existed). **The free local core stays account-free and fully
 offline, forever**; the pack adds a lane and removes nothing.
 
@@ -330,7 +330,7 @@ offline, forever**; the pack adds a lane and removes nothing.
 - **The hardening wall**: origin pinning (no env-repointable origin), the Electron fuse
   wall + ASAR integrity, renderer CSP + navigation deny, main-only V8 bytecode, a forensic
   activation watermark + runtime tamper self-check, and the **runtime split** (ADR
-  [0016](adr/0017-split-node-runtime.md)) that moved the daemon/MCP/CLI onto a bundled
+  [0017](adr/0017-split-node-runtime.md)) that moved the daemon/MCP/CLI onto a bundled
   Node helper and finally burned `runAsNode: false`. Enforcement honesty throughout:
   local checks are UX; the teeth are hardware binding + server-side value.
 - **FAKE-first, forever**: a FAKE IdP and a FAKE MoR/entitlement issuer are first-class
