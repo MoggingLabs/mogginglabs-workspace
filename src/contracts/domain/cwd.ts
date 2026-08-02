@@ -13,7 +13,13 @@ export const PANE_CWD_MAX = 32_768
  *  slashes, no trailing separator, case-folded ONLY for drive-lettered (Windows) paths —
  *  the explorer dock's containment rule (11/03), shared so every "is this under that"
  *  answer agrees. */
-const pathKeyOf = (value: string): string => {
+/** Two spellings of one folder, compared. Separators normalised, trailing slash dropped, and
+ *  a Windows DRIVE path lowercased — but only that: POSIX paths are case-SENSITIVE and folding
+ *  them would merge two real directories.
+ *
+ *  Exported because openForCwd compared `v.meta.cwd === cwd` raw, so `c:\proj` and `C:\Proj\`
+ *  opened two workspaces for one project. The rule was already here, backing relativeToDir. */
+export const pathKeyOf = (value: string): string => {
   const slash = value.replace(/\\/g, '/').replace(/\/+$/, '')
   return /^[a-z]:\//i.test(slash) ? slash.toLowerCase() : slash
 }

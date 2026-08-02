@@ -1,4 +1,4 @@
-import { formulaPaneId, GitChannels, TerminalChannels, WorktreeChannels } from '@contracts'
+import { formulaPaneId, GitChannels, pathKeyOf, TerminalChannels, WorktreeChannels } from '@contracts'
 import type { AgentState, CreateWorktreeResult, PaneId, RemoveWorktreeResult } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { GridLayout, parseTree, leafIds, specForCount, TEMPLATES, type GridSpecModel, type LayoutTreeNode } from '../layout'
@@ -365,7 +365,7 @@ export class WorkspaceController {
     // null) falls back to the template grid for the count.
     if (restoredTree) layout.applyTree(restoredTree)
     else layout.apply(meta.paneCount)
-    this.publishRoles(meta) // swarm manifest -> role chips + daemon PaneInfo (4/01)
+    this.publishRoles(meta, slots) // swarm manifest -> role chips + daemon PaneInfo (4/01)
 
     if (opts.activate !== false) {
       this.switch(meta.id)
@@ -444,13 +444,19 @@ export class WorkspaceController {
    *  slot order bind, the rest are refused ONCE, visibly — never silently dropped.
    *  (main's setRole handler backstops the same limit through the port.) Free covers
    *  every slot a workspace can hold, so today nothing changes. */
-  private publishRoles(meta: WorkspaceMeta): void {
+  /** `slots` is the set of slot numbers the grid actually has. Without it this walked every
+   *  manifest row, and a role left behind on a slot the tree no longer holds published against
+   *  `paneIdForSlot`'s formula id — which, for a pane that moved workspaces, is another
+   *  workspace's live pane. launchLineup already gates on `layout.paneIds()`; this did not. */
+  private publishRoles(meta: WorkspaceMeta, slots?: number[]): void {
     if (!meta.roles?.some((r) => r)) return
     const cap = Math.max(0, Math.floor(entitlementLimit('maxSwarmRoles')))
     const granted = new Set<number>() // slot indexes whose role fits the plan
     let blocked = 0
+    const liveSlots = slots ? new Set(slots) : null
     meta.roles.forEach((role, i) => {
       if (!role) return
+      if (liveSlots && !liveSlots.has(i + 1)) return // the slot is gone; its role is not live
       if (granted.size < cap) granted.add(i)
       else blocked += 1
     })
@@ -1148,18 +1154,30 @@ export class WorkspaceController {
    * `count` and `apply` MUST resolve the same slot set — both go through templateLocals,
    * so peekTemplate(count) names exactly what `apply` lands on.
    */
-  private applyResolvedLayout(a: WorkspaceView, count: number, apply: () => void): void {
+  private applyResolvedLayout(a: WorkspaceView, count: number, apply: () => boolean): void {
     const live = new Set(a.layout.paneIds())
-    for (const { local, paneId } of a.layout.peekTemplate(count)) {
+    const template = a.layout.peekTemplate(count)
+    for (const { local, paneId } of template) {
       if (live.has(paneId)) continue
       clearPaneRemote(paneId)
       setPaneRole(paneId, '')
       setPaneLabel(paneId, '')
       this.scrubManifestSlot(a.meta, local - 1, '')
     }
+    // The layout FIRST, and only then the manifest. applyRegions returns false without
+    // touching the tree, and this wrote paneCount + persisted regardless — leaving a saved
+    // manifest whose pane count did not match its own tree.
+    if (!apply()) return
     a.meta.paneCount = count
-    this.publishPaneCwds(a.meta) // seed the new panes' pty cwd + per-pane git (2/03)
-    apply()
+    // The SPARSE slots this template actually lands on, not a dense 1..paneCount walk.
+    // paneIdForSlot returns the formula id when the manifest has no override, and a pane that
+    // MOVED to another workspace keeps its id — so a dense walk called setPaneCwd on ids
+    // belonging to another workspace's live panes. `template` is the right set and was
+    // computed three lines above, then discarded.
+    this.publishPaneCwds(
+      a.meta,
+      template.map((slot) => slot.local)
+    ) // seed the new panes' pty cwd + per-pane git (2/03)
     this.refreshAttention()
     this.onChange()
   }
@@ -1168,7 +1186,10 @@ export class WorkspaceController {
   applyTemplate(n: number): void {
     const a = this.active()
     if (!a) return
-    this.applyResolvedLayout(a, n, () => a.layout.apply(n))
+    this.applyResolvedLayout(a, n, () => {
+      a.layout.apply(n)
+      return true // apply() always lands; applyRegions is the one that can refuse
+    })
     getTelemetry().captureEvent({ name: 'layout.applied', props: { panes: n } })
   }
 
@@ -1267,7 +1288,9 @@ export class WorkspaceController {
       })
       if (!ok) return false
     }
-    this.applyResolvedLayout(view, count, () => void view.layout.applyRegions(spec))
+    // NOT `void`. applyRegions returns false without touching the tree, and discarding that
+    // is what let the manifest record a pane count its own layout had refused.
+    this.applyResolvedLayout(view, count, () => view.layout.applyRegions(spec))
     getTelemetry().captureEvent({ name: 'layout.reorganized', props: { panes: count, rows: spec.rows, cols: spec.cols } })
     return true
   }
@@ -1825,7 +1848,7 @@ export class WorkspaceController {
   /** Focus an existing workspace for `cwd`, or create one (the `mogging .` entry point). */
   openForCwd(cwd: string): WorkspaceMeta {
     for (const v of this.views.values()) {
-      if (v.meta.cwd && v.meta.cwd === cwd) {
+      if (v.meta.cwd && pathKeyOf(v.meta.cwd) === pathKeyOf(cwd)) {
         this.switch(v.meta.id)
         this.onOpened?.(v.meta) // working on this project again → refresh recents
         return v.meta
