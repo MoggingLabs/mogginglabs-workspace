@@ -31,7 +31,7 @@ import { openLibrary } from './library'
 const DEFAULT_LAYOUT_KEY = 'mogging.defaultPaneCount'
 
 /**
- * The nav is a MAP, not a list (8.5/04). Nine flat rows say only "there are nine";
+ * The nav is a MAP, not a list (8.5/04). A flat row list says only how many there are;
  * four named groups say where a knob lives before you read the labels. Grouping is
  * visual — every knob keeps its tab, and every tab keeps its `data-target` id.
  */
@@ -75,8 +75,10 @@ function setPref(key: string, value: string): void {
 }
 
 /**
- * Settings — a FULL-APP page (Phase-5/05, was a modal): a left TAB rail of NINE
- * tabs, grouped (Workspace · Agents & tools · Trust · System), where each tab is
+ * Settings — a FULL-APP page (Phase-5/05, was a modal): a left TAB rail whose sections
+ * are NAV_GROUPS below (the source of truth — this sentence used to say "nine" and the
+ * count had reached fourteen), grouped (Workspace · Agents & tools · Trust · System),
+ * where each tab is
  * its OWN page — selecting one shows only that section and hides the rest (not
  * stacked sections on one scroll). Every tab is a `SectionHeader` over `Card`s of
  * `FieldGroup`s / `ToggleRow`s (8.5/04); a card holding ONE knob uses its own head
@@ -883,7 +885,7 @@ export const settingsFeature: UiFeature = {
 
     // ── S5 · Settings search — the baseline VS Code/Chrome/macOS all lead with ──
     // Past ~30 knobs nobody navigates by taxonomy reliably; this app has ~80 across
-    // 13 tabs. The index is a DOM walk over titles, captions, toggle labels and
+    // every section in NAV_GROUPS. The index is a DOM walk over titles, captions, toggle labels and
     // field labels — rebuilt on the first keystroke of each search, so late-loading
     // blocks (usage grid, connections) are indexed by the time anyone can type.
     interface SearchHit {
