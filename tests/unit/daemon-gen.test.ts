@@ -44,6 +44,20 @@ describe('stampGen', () => {
     expect(stampGen(new Map(), '3')).toBeUndefined()
   })
 
+  // The resize handler banks dims into the stored spec so a reconnect REPLAY restores the
+  // pane at its current size. It must only do that for a pane whose generation main knows:
+  // an `undefined` gen is a pane we have never seen `spawned` for, which is also the shape
+  // a late resize from a disposed pane arrives in. Banking its dims hands the replay a size
+  // no live session ever had — and the replay decides how a restored pane comes back.
+  it('says whether dims may be banked for the replay', () => {
+    const mayBank = (gens: Map<string, number | 'killed'>, id: string): boolean =>
+      typeof stampGen(gens, id) === 'number'
+
+    expect(mayBank(new Map([['3', 7]]), '3')).toBe(true)
+    expect(mayBank(new Map([['3', 'killed']]), '3')).toBe(false) // tombstoned
+    expect(mayBank(new Map(), '3')).toBe(false) // never learned
+  })
+
   it('never confuses one pane id for another', () => {
     const gens = new Map<string, number | 'killed'>([
       ['1', 4],

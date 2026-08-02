@@ -464,7 +464,12 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     const id = String(cmd.id)
     const gen = stampGen(gens, id)
     if (gen === 'drop') return
-    const spec = specs.get(id)
+    // Bank the dims for the reconnect replay ONLY for a pane whose generation we know.
+    // `undefined` means we have not learned one — a pane main has never seen `spawned` for,
+    // which is also the shape a late resize from a disposed pane arrives in. Writing its
+    // dims into the stored spec would hand the REPLAY a size that no live session ever had,
+    // and the replay is the one thing that decides how a restored pane comes back.
+    const spec = typeof gen === 'number' ? specs.get(id) : undefined
     if (spec) Object.assign(spec, { cols: cmd.cols, rows: cmd.rows }) // the replay must use CURRENT dims
     client.resize(id, cmd.cols, cmd.rows, gen)
   })

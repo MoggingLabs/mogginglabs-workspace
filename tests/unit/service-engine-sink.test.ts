@@ -33,7 +33,7 @@ const adapterReturning = (statuses: LinkStatus[]): ServiceAdapter => {
 
 const status = (over: Partial<LinkStatus>): LinkStatus => ({
   linkId: 'l1',
-  health: 'ok',
+  health: 'fresh',
   fetchedAt: Date.now(),
   ...over
 })
@@ -54,7 +54,7 @@ describe('ServiceEngine transition sink', () => {
     await new Promise((r) => setTimeout(r, 0))
 
     const s = engine.statusFor('l1')
-    expect(s?.health).toBe('ok') // was 'stale'
+    expect(s?.health).toBe('fresh') // was 'stale'
     expect(s?.state).toBe('merged') // and the fetched value survived
   })
 
