@@ -105,10 +105,16 @@ const SCRIPT = `(async () => {
     const samples = []
     for (let i = 0; i < 7; i++) {
       const t0 = performance.now()
+      // bridge.on returns its own unsubscribe — discarding it left one live listener per
+      // sample (up to 42 across the six windows), and every one of them stayed subscribed
+      // to pane 1's data. Beyond the leak that corrupts the measurement itself: a later
+      // window's t0 is raced by earlier windows' handlers still resolving on unrelated
+      // output, which reads as an implausibly FAST sample, and best-of-six then keeps it.
       const done = new Promise((res) => {
-        const handler = (e) => { if (e && e.id === 1) { res(performance.now() - t0) } }
-        window.bridge.on('terminal:data', handler)
-        setTimeout(() => res(-1), 1500) // lost sample
+        let off = () => {}
+        const finish = (v) => { off(); res(v) }
+        off = window.bridge.on('terminal:data', (e) => { if (e && e.id === 1) finish(performance.now() - t0) })
+        setTimeout(() => finish(-1), 1500) // lost sample
       })
       window.bridge.send('terminal:write', { id: 1, data: 'x' })
       const dt = await done
@@ -125,7 +131,10 @@ const SCRIPT = `(async () => {
   if (pane1) {
     for (let attempt = 0; attempt < 6; attempt++) {
       const s = await measureEcho()
-      const med = s.length ? s[Math.floor(s.length / 2)] : -1
+      // A median needs a population. Only a window where a majority of the 7 round trips
+      // actually returned is allowed to WIN — otherwise one lucky sample out of seven
+      // becomes "the best window", and best-of-six turns lost samples into a fast result.
+      const med = s.length >= 4 ? s[Math.floor(s.length / 2)] : -1
       if (med >= 0 && (echoMedian < 0 || med < echoMedian)) { echoMedian = med; echoSamples = s }
       if (echoMedian >= 0 && echoMedian <= B.echoMs) break // a clean window; done
       await sleep(300) // let the runner settle before re-measuring
@@ -160,17 +169,30 @@ const SCRIPT = `(async () => {
   const torrent = s2.stop()
   clearInterval(writer)
 
+  // A budget line with no measurement behind it is not a budget line that passed.
+  // The homeMax === -1 clause and its echo twin read as budget checks and
+  // were the opposite: -1 is the sentinel for "we measured NOTHING", and it satisfied the
+  // clause. The Board button's selector drifting, or pane 1 never existing, or all seven
+  // round trips timing out in all six windows, each produced a green MOGGING_PERCEPTION —
+  // and echo is the one budget docs/07 says is never relaxed. Presence is now its own
+  // named invariant, so "not measured" is a red with its own name rather than a silent
+  // pass hidden inside someone else's clause.
+  const homeMeasured = homeTimes.length > 0
+  const echoMeasured = echoSamples.length >= 4 && echoMedian >= 0
+
   const pass =
     switchMax <= B.actionMs &&
-    (homeMax === -1 || homeMax <= B.actionMs) &&
+    homeMeasured &&
+    homeMax <= B.actionMs &&
     zoomMax <= B.actionMs &&
-    (echoMedian === -1 || echoMedian <= B.echoMs) &&
+    echoMeasured &&
+    echoMedian <= B.echoMs &&
     churn.over100 === 0 &&
     sizeChurn.over100 === 0 &&
     torrent.over100 === 0
 
   return {
-    pass, budget: B,
+    pass, budget: B, homeMeasured, echoMeasured,
     switchTimes, switchMax, homeTimes, homeMax, zoomTimes, zoomMax,
     echoSamples, echoMedian, churn, sizeChurn, torrent
   }
