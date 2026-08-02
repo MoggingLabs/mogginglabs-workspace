@@ -1,7 +1,7 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { chmodSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { makeTempDir, removeTempDir, removeTempDirs } from './temp-dir'
+import { makeTempDir, removeTempDir, removeTempDirOrThrow, removeTempDirs } from './temp-dir'
 
 // CLEANUP MUST NOT BE ABLE TO FAIL A SUITE.
 //
@@ -63,5 +63,34 @@ describe('no suite cleans up unguarded', () => {
       }
     }
     expect(offenders, `use removeTempDir() from ./temp-dir: ${offenders.join(', ')}`).toEqual([])
+  })
+})
+
+describe('removeTempDirOrThrow reports an unmet precondition honestly', () => {
+  // The SETUP helper's contract is "nothing resolves here", and when it cannot deliver that it
+  // must say so in those terms. `rmSync` THROWS on EPERM rather than returning, so the first
+  // version of the helper never reached its own existsSync check — the raw
+  // `EPERM, Permission denied: \\?\C:\...` escaped instead, naming a temp path and nothing else.
+  // That is what a full-suite run produced, and it reads as a defect in the guard under test.
+  it('throws rather than reporting a precondition it did not establish', () => {
+    // Reproduced differently per OS because what pins a directory differs: Windows refuses to
+    // remove the current process's cwd; POSIX allows that, but not through a parent with no
+    // write bit.
+    const parent = makeTempDir('tdor-pinned-')
+    const dir = join(parent, 'pinned')
+    mkdirSync(dir)
+    const cwdBefore = process.cwd()
+    if (process.platform === 'win32') process.chdir(dir)
+    else chmodSync(parent, 0o555)
+    try {
+      expect(() => removeTempDirOrThrow(dir)).toThrow(/precondition is unmet/)
+      // ...and it names the path, so the failure points at the setup rather than the code
+      // under test. The worktree flake cost an investigation precisely because it did not.
+      expect(() => removeTempDirOrThrow(dir)).toThrow(dir)
+    } finally {
+      if (process.platform === 'win32') process.chdir(cwdBefore)
+      else chmodSync(parent, 0o755)
+      removeTempDir(parent)
+    }
   })
 })

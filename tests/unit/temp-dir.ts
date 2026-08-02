@@ -37,7 +37,7 @@ export function removeTempDirs(dirs: string[]): void {
 }
 
 /**
- * Remove a directory and PROVE it is gone. For SETUP, never for teardown.
+ * Make a path stop resolving, and PROVE it. For SETUP, never for teardown.
  *
  * `removeTempDir` swallows failure on purpose — a leftover scratch directory is not a test
  * result, and a cleanup that throws turns a passing suite red. That is exactly wrong when the
@@ -46,12 +46,25 @@ export function removeTempDirs(dirs: string[]): void {
  * read a clean worktree, and the test failed intermittently on an assertion about something
  * else entirely.
  *
- * Throws with the reason, so a setup that did not happen says so instead of being reported as
- * a defect in the code under test.
+ * `rmSync` THROWS on EPERM rather than returning quietly, so the first version of this helper
+ * never reached its own check: the raw `EPERM, Permission denied: \\?\C:\...` escaped and the
+ * message below was unreachable code. That is the failure a full-suite run produced — a bare
+ * EPERM pointing at a temp path, with nothing to say it was a setup step rather than the guard
+ * under test. Catch the throw, give the handle longer to clear than a single retry budget
+ * allows, and only then report — naming the path, and saying whose problem it is.
  */
 export function removeTempDirOrThrow(dir: string): void {
-  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-  if (existsSync(dir)) {
-    throw new Error(`setup could not remove ${dir} — something still holds a handle; the test's precondition is unmet`)
+  // Two rounds: Windows releases a directory handle asynchronously after the holding process
+  // exits, and a loaded machine (three Electron gates alongside the unit suite) outlasts one.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    } catch {
+      /* still held — fall through and check, then retry once */
+    }
+    if (!existsSync(dir)) return
   }
+  throw new Error(
+    `setup could not remove ${dir} — something still holds a handle; the test's precondition is unmet`
+  )
 }

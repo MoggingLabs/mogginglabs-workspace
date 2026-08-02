@@ -47,8 +47,9 @@ import {
 // file never sees half a config; a file that changed under us refuses rather
 // than clobbers. Drift is detected read-only and never auto-healed. The smoke
 // passes fixture homes; real homes resolve from the pointer envs the CLIs
-// themselves honor. The one boot migration below only refreshes an unchanged,
-// hash-verified house entry whose old protocol-versioned runtime path would stop working.
+// themselves honor. The one boot migration below only refreshes unchanged,
+// hash-verified entries — house AND connection — whose old protocol-versioned
+// runtime path would stop working.
 
 const kv = (): GrantKv | null => {
   const store = getSettingsStore()
@@ -57,6 +58,9 @@ const kv = (): GrantKv | null => {
 }
 
 const hashKey = (cli: string, id: string): string => `integrations.mgr.hash.${cli}.${id}`
+
+/** One managed row repaired at boot: which CLI config, and which server row inside it. */
+export type RefreshedRow = { cli: HostedCliId; serverId: string }
 
 /** Per-OS/pointer-env config homes — the CLIs' own resolution, mirrored.
  *
@@ -83,7 +87,7 @@ export function resolveCliHomes(): CliHomes {
 /** The built-in house row — one entry, whole app; never stored, never edited.
  *  `command` is the standalone Node helper (ADR 0017): a bare command, no env at all —
  *  the ELECTRON_RUN_AS_NODE the old Electron-as-Node entry carried is gone with the
- *  RunAsNode fuse. refreshManagedHouseRuntime below migrates managed configs that still
+ *  RunAsNode fuse. refreshManagedRuntimePaths below migrates managed configs that still
  *  carry the old canonical on the first boot after the split. */
 export function houseServerEntry(): McpServerEntry {
   const runtime = getCliRuntime()
@@ -306,27 +310,46 @@ export function mgrApply(
 }
 
 /**
- * Upgrade only the exact managed house blocks this app last wrote. User-edited/drifted entries
- * are left alone. Refreshing every hash-matching canonical difference also repairs a moved or
+ * Upgrade only the exact managed blocks this app last wrote. User-edited/drifted entries are
+ * left alone. Refreshing every hash-matching canonical difference also repairs a moved or
  * reinstalled Electron executable, not only the one-time versioned-MCP-path transition.
+ *
+ * EVERY managed row, not just the house one. This used to hard-code `'mogging'`, which meant a
+ * CONNECTION row was written once and then never touched again — and connection rows written
+ * before the neutral-launcher fix name `run/v<N>/bin/mogging-connection`, under the
+ * protocol-versioned directory that `sweepRunRoot` deletes wholesale on the first boot of a new
+ * protocol. A user who configured a connection under protocol 10 had that entry silently
+ * stranded by the 10->11 bump; 11->12 would do it again to anyone who has not reconfigured. The
+ * app wrote the line into the user's own CLI config, so the app is what has to repair it — the
+ * CLI reports only "server failed to start", with no path and no mention of us.
+ *
+ * The house entry is refreshed first so a CLI that reads the file mid-sweep sees the row users
+ * are most likely to be actively using already correct.
  */
-export function refreshManagedHouseRuntime(homes: CliHomes = resolveCliHomes()): HostedCliId[] {
+export function refreshManagedRuntimePaths(homes: CliHomes = resolveCliHomes()): RefreshedRow[] {
   const store = kv()
   if (!store) return []
-  const refreshed: HostedCliId[] = []
-  const desired = houseServerEntry()
+  const refreshed: RefreshedRow[] = []
   for (const writer of MCP_WRITERS) {
-    try {
-      const file = writer.targetFile(homes)
-      const current = readIfExists(file)
-      const stored = store.get(hashKey(writer.cli, 'mogging'))
-      if (current === null || !stored) continue
-      const block = writer.readCanonical(current, 'mogging')
-      if (!block || sha256(block) !== stored) continue
-      if (sha256(writer.canonical(desired)) === stored) continue
-      if (mgrApply('mogging', writer.cli, homes, { current }).ok) refreshed.push(writer.cli)
-    } catch {
-      /* malformed or concurrently edited config: preserve it and retry on a later launch */
+    for (const desired of listServers()) {
+      try {
+        const file = writer.targetFile(homes)
+        // Re-read per row, never once per file. Two stale rows in one config is the ordinary
+        // case (house + a connection), and mgrApply refuses when the bytes moved under it — so
+        // hoisting this read out of the loop would let the first repair make the second look
+        // like a concurrent edit, leaving it stranded with a success report next to it.
+        const current = readIfExists(file)
+        const stored = store.get(hashKey(writer.cli, desired.id))
+        if (current === null || !stored) continue
+        const block = writer.readCanonical(current, desired.id)
+        if (!block || sha256(block) !== stored) continue
+        if (sha256(writer.canonical(desired)) === stored) continue
+        if (mgrApply(desired.id, writer.cli, homes, { current }).ok) {
+          refreshed.push({ cli: writer.cli, serverId: desired.id })
+        }
+      } catch {
+        /* malformed or concurrently edited config: preserve it and retry on a later launch */
+      }
     }
   }
   return refreshed
@@ -517,7 +540,7 @@ export function catAuthStatus(serverId: string, cli: HostedCliId): Promise<strin
 }
 
 export function registerMcpManager(): void {
-  refreshManagedHouseRuntime()
+  refreshManagedRuntimePaths()
   ipcMain.handle(IntegrationsChannels.serversList, () => listServers())
   ipcMain.handle(IntegrationsChannels.serversSave, (_e, raw: unknown) => {
     // The audit seam (finding 35). saveServer never touches the vault — which is exactly why

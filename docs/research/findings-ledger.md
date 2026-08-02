@@ -18,8 +18,8 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | | count |
 | --- | --- |
 | rows | 497 |
-| open | 353 |
-| fixed | 137 |
+| open | 352 |
+| fixed | 138 |
 | invalid | 7 |
 | deferred | 0 |
 
@@ -34,7 +34,7 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | id | sev | status | location | note / next action | reason (deferred only) |
 | --- | --- | --- | --- | --- | --- |
 | connection-stdio-bridge-into-agent-clis-adr-0014/F1 | critical | `fixed` | `src/main/cli-runtime.ts:153` | Unchanged. The v11 bump does not alter the redirect (any vN matches). bin/mogging-mcp.mjs still has no --connection handling, so the flag is silently ignored. |  |
-| connection-stdio-bridge-into-agent-clis-adr-0014/F2 | critical | `open` | `src/main/cli-runtime.ts:203` | Raised from HIGH: fb72bef bumped DAEMON_PROTOCOL_VERSION 10->11 (contracts/daemon/protocol.ts:38), so this release actually strands existing entries on the swep |  |
+| connection-stdio-bridge-into-agent-clis-adr-0014/F2 | critical | `fixed` | `src/main/mcp-manager.ts:322` | FIXED at the seam. The FORWARD half was closed by c17137b (F3): a new connection row now names the protocol-neutral connectionEntry under run/mcp. This row is the RESIDUAL - rows already written into a users own CLI config by an earlier build still name connectionShim under run/v<N>/bin, and daemon-sweep.ts:76 rmSyncs that whole directory on the first boot of a new protocol. The 10->11 bump already stranded anyone who had configured a connection; 11->12 would do it again. The app wrote the line, so the app repairs it: refreshManagedHouseRuntime hard-coded mogging in three places, so a connection row was written once and never touched again. It is now refreshManagedRuntimePaths and walks every managed row. The file is re-read PER ROW, not once per writer - house plus one connection in a single config is the ordinary case, and mgrApply refuses when the bytes moved under it, so a hoisted read would let the first repair strand the second while still reporting success. Ownership is still proven by stored hash before any write, so a user-edited row is left alone. Gate: MCPMGR connectionRowRefreshed (both rows planted in one claude config). Break proofs EQ (house-only loop) and ER (read cached per writer); each flips connectionRowRefreshed alone. |  |
 | delta/conpty-v2-and-pin/2 | critical | `invalid` | `src/pty-daemon/session.ts:1026` | refuted by verification: Bare kill at session.ts:1026 is real, but the DLL branch isn't sweep-less: conpty.cc:534-566 PtyKill = ConptyClosePseudo |  |
 | delta/daemon-protocol-v11/10 | critical | `fixed` | `src/ui/features/terminal/terminal-pane.ts:529` | After the reconnect replay resolves, push the new gen to the renderer (a gen-refresh IPC the pane applies to sessionGen), or re-stamp in the relay's write/resiz |  |
 | delta/install-engine-has-zero-executed-coverag/110 | critical | `fixed` | `src/backend/platform/env-path.ts:383` | Return the reg exit code from run() and require a successful HKCU query before writing; when the read failed, return {ok:false,error} instead of calling `reg ad |  |
