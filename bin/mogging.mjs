@@ -860,7 +860,20 @@ function endpointFilePath() {
  * shape. The check was right — it was just in a leaf instead of at the read.
  */
 function validEndpoint(ep) {
-  return !!ep && typeof ep.address === 'string' && ep.address !== '' && typeof ep.token === 'string'
+  if (!ep || typeof ep.address !== 'string' || ep.address === '' || typeof ep.token !== 'string') return false
+  // A CRASH-STALE endpoint file is otherwise byte-identical to a live one, and the only way to
+  // find out is to connect and wait for a timeout. Reject only a pid we can PROVE is gone:
+  // ESRCH means no such process, EPERM means it exists and belongs to someone else, and a file
+  // written by an older build carries no pid at all. Absence of proof is not proof of absence —
+  // an unknown pid must not make us refuse a daemon that is actually there.
+  if (typeof ep.pid === 'number' && ep.pid > 0) {
+    try {
+      process.kill(ep.pid, 0)
+    } catch (e) {
+      if (e && e.code === 'ESRCH') return false
+    }
+  }
+  return true
 }
 
 function readEndpointFile(path) {

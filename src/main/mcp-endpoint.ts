@@ -626,8 +626,29 @@ export function startMcpEndpoint(): void {
     /* endpoint best-effort; the dock chrome still works without agent control */
   })
   server.listen(address, () => {
+    // The unix socket, 0600 — the same hardening the PTY daemon does at pty-daemon/index.ts.
+    // docs/06 promises "a 0600 unix socket"; this one was created at the default umask, so on
+    // a multi-user macOS box any local account could connect and spend the auth budget. Named
+    // pipes reject remote clients by default and the runtime dir is per-user ACL-protected, so
+    // win32 needs nothing here.
+    if (process.platform !== 'win32') {
+      try {
+        fs.chmodSync(address, 0o600)
+      } catch {
+        /* best effort */
+      }
+    }
     try {
-      fs.writeFileSync(endpointFile(), JSON.stringify({ version: PROTOCOL, address, token }), { mode: 0o600 })
+      // `pid` is what makes a CRASH-STALE endpoint file distinguishable from a live one. Without
+      // it the two are byte-identical and a reader can only find out by connecting and timing
+      // out. daemon-client.ts's endpointLive() has always checked a pid; this file had none.
+      // Written to a sibling and RENAMED. A direct write is not atomic: a reader arriving
+      // mid-write gets a truncated file, and `JSON.parse` failing is indistinguishable from
+      // "no app running". rename() within one directory is atomic on every platform we ship.
+      const target = endpointFile()
+      const tmp = `${target}.${process.pid}.tmp`
+      fs.writeFileSync(tmp, JSON.stringify({ version: PROTOCOL, pid: process.pid, address, token }), { mode: 0o600 })
+      fs.renameSync(tmp, target)
     } catch {
       /* ignore */
     }
@@ -641,10 +662,33 @@ export function stopMcpEndpoint(): void {
     /* ignore */
   }
   server = null
+  // close() stops ACCEPT, nothing else: a socket that authenticated before the stop keeps
+  // every capability it had — and what it holds here is a proxy that attaches decrypted OAuth
+  // tokens to outbound calls. Stopping the endpoint has to mean stopping the endpoint.
+  for (const sock of authedSocks) {
+    try {
+      sock.destroy()
+    } catch {
+      /* peer already gone */
+    }
+  }
+  authedSocks.clear()
+  // A restart mints a fresh token; leaving the old one in the module let a client that had
+  // read the previous endpoint file authenticate against the next server.
+  token = ''
   try {
     fs.unlinkSync(endpointFile())
   } catch {
     /* already gone */
+  }
+  // The socket itself. The address embeds our pid, so a crashed run leaves browser-<oldpid>.sock
+  // behind forever — nothing ever swept them.
+  if (process.platform !== 'win32') {
+    try {
+      fs.unlinkSync(socketAddress())
+    } catch {
+      /* already gone */
+    }
   }
 }
 

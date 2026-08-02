@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { VERBS, looksLikePath, parseInvocation, splitTrailingFlags, takeLeadingOption, usageStream } from '../../bin/lib/cli-core.mjs'
 
@@ -125,5 +127,44 @@ describe('usage goes to the right stream', () => {
   it('stdout on success, stderr on error', () => {
     expect(usageStream(0)).toBe('stdout')
     expect(usageStream(2)).toBe('stderr')
+  })
+})
+
+describe('a crash-stale endpoint file is not a live one', () => {
+  // `browser-control.json` / `endpoint.json` carried no pid, so a file left by a crashed run
+  // was byte-identical to one written by a running app — and the only way to find out was to
+  // connect and wait for a timeout. The writer now records `pid`; this is the reader half.
+  //
+  // The rule is fail-OPEN on doubt, deliberately: reject only a pid we can PROVE is gone.
+  // ESRCH means no such process; EPERM means it exists and belongs to another user; a file
+  // written by an older build carries no pid at all. Treating "cannot tell" as "dead" would
+  // make the CLI refuse a daemon that is actually there — the same permissive-branch mistake
+  // in the other direction.
+  const src = readFileSync(resolve(import.meta.dirname, '../../bin/mogging.mjs'), 'utf8')
+  const body = (() => {
+    const at = src.indexOf('function validEndpoint(ep) {')
+    expect(at, 'validEndpoint not found').toBeGreaterThan(-1)
+    return src.slice(at, src.indexOf('\n}', at)).replace(/^\s*\/\/.*$/gm, '')
+  })()
+
+  it('still requires the fields every caller dereferences', () => {
+    expect(body).toContain("typeof ep.address !== 'string'")
+    expect(body).toContain("typeof ep.token !== 'string'")
+  })
+
+  it('probes the pid without killing it', () => {
+    expect(body).toMatch(/process\.kill\(ep\.pid, 0\)/)
+  })
+
+  it('rejects ONLY on ESRCH', () => {
+    expect(body).toMatch(/ESRCH/)
+    // EPERM (someone else's live process) and a missing pid must both stay trusted.
+    expect(body, 'a bare catch would treat EPERM as dead').not.toMatch(/catch\s*\([^)]*\)\s*\{\s*return false/)
+  })
+
+  it('tolerates an endpoint file with no pid at all', () => {
+    expect(body, 'an older build wrote no pid; that file is still usable').toMatch(
+      /typeof ep\.pid === 'number'/
+    )
   })
 })
