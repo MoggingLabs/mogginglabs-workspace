@@ -77,4 +77,30 @@ if (failed) {
   )
   process.exit(1)
 }
-console.log(`  conpty pin OK — ${checked} staged file(s) byte-match vendored ${PIN}`)
+
+// "Nothing mismatched" is not "the pin holds" — the loops above `continue` past a missing
+// dir and a missing file alike, so checked can be 0 and every comparison can be skipped.
+// This gate was written for the DOWNGRADE risk (npm restaging the tarball's older pair).
+// useConptyDll changed the stakes: under it a MISSING dll is not a downgrade, it is a hard
+// throw at spawn ("Cannot find conpty.dll") — and absence is exactly the state these
+// `continue`s skip. So the gate stayed green over the failure it now guards.
+//
+// On win32 a staged pair MUST exist. Off win32 nothing here is executable and the trees are
+// legitimately absent, so say SKIPPED — a word that cannot be misread as a byte-match.
+if (process.platform === 'win32') {
+  if (checked === 0) {
+    console.error(
+      '\nCONPTY PIN: inspected ZERO files on a windows host.' +
+        '\nThe staged conpty pair is missing, not merely unpinned — under useConptyDll that is a' +
+        '\nhard spawn failure for every pane, so this is a red, never a pass over nothing.' +
+        '\nRun `node scripts/build-node-helper.mjs` (postinstall does) to stage it.\n'
+    )
+    process.exit(1)
+  }
+  console.log(`  conpty pin OK — ${checked} staged file(s) byte-match vendored ${PIN}`)
+} else {
+  console.log(
+    `  conpty pin SKIPPED — not a windows host; ${checked} file(s) inspected ` +
+      '(the overlay is a no-op off win32 and no pane can load these bytes)'
+  )
+}
