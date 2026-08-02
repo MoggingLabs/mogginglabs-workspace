@@ -14,8 +14,7 @@ import {
   assertSafeKey,
   detectEol,
   readJsonPath,
-  splitBom
-} from './common'
+  splitBom, readManyFrom } from './common'
 import type { ConfigCodec, JsonValue } from './types'
 
 interface ParsedYaml {
@@ -116,6 +115,10 @@ export const yamlCodec: ConfigCodec = {
     assertPath(path)
     if (text === null) return { present: false }
     return readJsonPath(parseYaml(text).root, path)
+  },
+
+  readMany(text, paths) {
+    return readManyFrom((t) => parseYaml(t).root, text, paths)
   },
 
   set(text, path, value) {

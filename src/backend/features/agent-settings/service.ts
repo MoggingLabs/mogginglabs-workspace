@@ -655,9 +655,17 @@ export class AgentSettingsService {
     const texts: Array<Partial<Record<AgentConfigOverrideRecord['surface'], { text: string | null; format: string }>>> = []
     for (const home of homes) {
       const bySurface: (typeof texts)[number] = {}
+      // Resolved ONCE per home. It does not depend on the surface, and it was being re-resolved
+      // for each of them.
+      let context
+      try {
+        context = await this.options.resolveContext(provider, home.target)
+      } catch {
+        texts.push(bySurface) // an unreadable home simply cannot vote
+        continue
+      }
       for (const surface of ['runtime', 'tui'] as const) {
         try {
-          const context = await this.options.resolveContext(provider, home.target)
           const source = selectAgentConfigSource(provider, home.target, surface, context.paths)
           if (!source?.file) continue
           bySurface[surface] = { text: (await this.coordinator.read(source.file)).text, format: source.format }
@@ -668,22 +676,52 @@ export class AgentSettingsService {
       texts.push(bySurface)
     }
     const out: Array<{ settingId: string; surface: AgentConfigOverrideRecord['surface']; value: AgentConfigValue; homes: number }> = []
-    for (const setting of catalog.settings) {
-      if (out.length >= 40) break // suggestion list, not an inventory
-      if (!setting.writable || setting.sensitive || setting.editor === 'read-only' || setting.editor === 'dedicated') continue
-      if (!setting.scopes.includes('user') && !setting.scopes.includes('profile')) continue
-      if (hasDefault.has(`${setting.surface} ${setting.id}`)) continue
-      const values: AgentConfigValue[] = []
-      for (const bySurface of texts) {
-        const loaded = bySurface[setting.surface]
+    // ONE parse per DOCUMENT, not one per setting.
+    //
+    // This used to call codec.read(text, path) inside two nested loops, and every codec's read
+    // is `readJsonPath(parse(text), path)` — so each home's file was fully re-parsed once per
+    // catalog setting. For claude that is 422 surviving settings per home per surface, on every
+    // `changed` event. The cost was charged per SETTING when the unit of work is a DOCUMENT.
+    //
+    // The 40-suggestion cap still bounds the OUTPUT; it no longer bounds the parsing, because
+    // there is now one parse either way.
+    const eligible = catalog.settings.filter(
+      (setting) =>
+        setting.writable &&
+        !setting.sensitive &&
+        setting.editor !== 'read-only' &&
+        setting.editor !== 'dedicated' &&
+        (setting.scopes.includes('user') || setting.scopes.includes('profile')) &&
+        !hasDefault.has(`${setting.surface} ${setting.id}`)
+    )
+    const votes = new Map<string, AgentConfigValue[]>()
+    for (const bySurface of texts) {
+      for (const surface of ['runtime', 'tui'] as const) {
+        const loaded = bySurface[surface]
         if (!loaded || loaded.text === null) continue
+        const settings = eligible.filter((setting) => setting.surface === surface)
+        if (!settings.length) continue
+        let reads
         try {
-          const read = codecFor(loaded.format as Parameters<typeof codecFor>[0]).read(loaded.text, setting.path)
-          if (read.present) values.push(read.value as AgentConfigValue)
+          reads = codecFor(loaded.format as Parameters<typeof codecFor>[0]).readMany(
+            loaded.text,
+            settings.map((setting) => setting.path)
+          )
         } catch {
-          // A malformed home cannot vote either.
+          continue // A malformed home cannot vote.
         }
+        settings.forEach((setting, index) => {
+          if (!reads[index].present) return
+          const key = `${setting.surface} ${setting.id}`
+          const seen = votes.get(key)
+          if (seen) seen.push(reads[index].value as AgentConfigValue)
+          else votes.set(key, [reads[index].value as AgentConfigValue])
+        })
       }
+    }
+    for (const setting of eligible) {
+      if (out.length >= 40) break // suggestion list, not an inventory
+      const values = votes.get(`${setting.surface} ${setting.id}`) ?? []
       if (values.length < 2) continue
       const first = JSON.stringify(values[0])
       if (!values.every((value) => JSON.stringify(value) === first)) continue
@@ -706,6 +744,11 @@ export class AgentSettingsService {
     if (!rows.length) return { ok: true }
     const prepared: PreparedRecord[] = []
     const session: AgentConfigOverrideRecord[] = []
+    // Invalidations are per TRANSACTION, not per row. The renderer reloads on each one and
+    // blanks to a spinner while it does, so emitting inside the row loop turned a single
+    // account-defaults fan-out into 24 reloads (6 managed keys x 4 homes) and made the panel
+    // flicker for the whole run. One document write is one thing that changed.
+    const touched = new Map<string, { provider: AgentConfigProviderId; target: AgentConfigTarget }>()
     let failure: string | undefined
 
     for (const row of rows) {
@@ -795,7 +838,11 @@ export class AgentSettingsService {
             updatedAt: at,
             appliedAt: at
           })
-          this.options.changed?.(item.row.provider, item.target)
+          // Accumulated, not emitted. See the dedup + single emission after the loop.
+          touched.set(`${item.row.provider} ${item.target.scope} ${item.target.targetId}`, {
+            provider: item.row.provider,
+            target: item.target
+          })
         }
         if (group.some((item) => item.row.provider === 'codex')) this.options.codexResolver?.invalidate?.()
       } catch (error) {
@@ -804,6 +851,7 @@ export class AgentSettingsService {
         for (const item of group) this.saveStatus(item.row, 'error', reason)
       }
     }
+    for (const { provider, target } of touched.values()) this.options.changed?.(provider, target)
     return failure ? { ok: false, reason: failure } : { ok: true }
   }
 

@@ -8,8 +8,7 @@ import {
   isPathPrefix,
   pathKey,
   readJsonPath,
-  splitBom
-} from './common'
+  splitBom, readManyFrom } from './common'
 import type { ConfigCodec, JsonValue } from './types'
 
 type JsonObject = { [key: string]: JsonValue }
@@ -349,6 +348,10 @@ export const tomlCodec: ConfigCodec = {
     assertPath(path)
     if (text === null) return { present: false }
     return readJsonPath(parseToml(text).root, path)
+  },
+
+  readMany(text, paths) {
+    return readManyFrom((t) => parseToml(t).root, text, paths)
   },
 
   set(text, path, value) {

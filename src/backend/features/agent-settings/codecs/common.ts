@@ -133,3 +133,30 @@ export function isPathPrefix(prefix: readonly string[], path: readonly string[])
 export function pathKey(path: readonly string[]): string {
   return JSON.stringify(path)
 }
+
+/**
+ * Read N paths out of ONE document parse.
+ *
+ * `read` is per-path, and every codec's implementation is
+ * `readJsonPath(parse(text), path)` — so asking for N settings re-parsed the whole file N
+ * times. `promotableDefaults` does exactly that, nested two loops deep: for the claude catalog
+ * that is 422 surviving settings per home per surface, each a full parseTree + parse of the
+ * document, on every `changed` event. The cost is charged per SETTING when the unit of work is
+ * a DOCUMENT.
+ *
+ * Derived once here rather than implemented four times, so a codec cannot answer `readMany`
+ * differently from its own `read` — the two are the same function with the parse hoisted.
+ */
+export function readManyFrom(
+  parse: (text: string) => JsonValue,
+  text: string | null,
+  paths: readonly (readonly string[])[]
+): ConfigRead[] {
+  for (const path of paths) assertPath(path)
+  // Nothing asked for, nothing parsed — a document with no eligible settings must not pay for
+  // one. Checked before the null branch so both cheap cases are equally cheap.
+  if (!paths.length) return []
+  if (text === null) return paths.map(() => ({ present: false }))
+  const root = parse(text)
+  return paths.map((path) => readJsonPath(root, path))
+}
