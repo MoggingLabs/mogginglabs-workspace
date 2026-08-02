@@ -78,3 +78,44 @@ describe('a failed preset write says so', () => {
     expect(body, 'a stale error must not outlive the next render').toMatch(/presetError = ''/)
   })
 })
+
+describe('a successful launch releases what the wizard held', () => {
+  // `leave()` did teardown AND navigation. After a successful launch the opener has already
+  // switched the app to the live grid, so `if (activeView() === 'wizard') leave()` was false on
+  // every success and NONE of the teardown ran: one generation of selection subscribers,
+  // cd-line timers and setup-panel AgentChannels subscriptions leaked per launch, on detached
+  // DOM, with `launching` stuck true.
+  //
+  // The chain that makes the guard false is synchronous inside the awaited call — open-service
+  // -> controller.openFromTemplate -> create -> switch -> setActiveView('grid') — so this is
+  // not a race, it never ran.
+  const launchTail = (() => {
+    const at = src.indexOf('// The workspace opener switches the app to the live grid')
+    expect(at, 'the launch tail moved — re-anchor rather than delete').toBeGreaterThan(-1)
+    return src.slice(at, at + 400).replace(/^\s*\/\/.*$/gm, '')
+  })()
+
+  it('tears down unconditionally', () => {
+    expect(launchTail).toMatch(/^\s*disposeWizard\(\)/m)
+  })
+
+  it('leaves only the NAVIGATION conditional', () => {
+    expect(launchTail).toMatch(/if \(activeView\(\) === 'wizard'\) goBack\(\)/)
+    expect(launchTail, 'the guard must not gate the teardown again').not.toMatch(
+      /if \(activeView\(\) === 'wizard'\) leave\(\)/
+    )
+  })
+
+  it('disposeWizard releases every handle, and leave() still navigates', () => {
+    const at = src.indexOf('function disposeWizard(): void {')
+    expect(at, 'disposeWizard not found').toBeGreaterThan(-1)
+    const body = src.slice(at, src.indexOf('function leave(): void {', at))
+    for (const held of ['openGeneration++', 'selection?.dispose()', 'cdLine?.dispose()', 'setupPanels.splice(0)', 'launching = false']) {
+      expect(body, `${held} must move with the teardown`).toContain(held)
+    }
+    expect(body, 'navigation is leave()’s job, not the teardown’s').not.toContain('goBack()')
+    expect(src.slice(src.indexOf('function leave(): void {'), src.indexOf('function leave(): void {') + 120)).toContain(
+      'goBack()'
+    )
+  })
+})

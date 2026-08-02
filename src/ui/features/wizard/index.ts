@@ -255,12 +255,28 @@ export const wizardFeature: UiFeature = {
       if (activeView() === 'wizard') applyRoster(next)
     })
 
-    function leave(): void {
+    /**
+     * Release everything this open() generation holds.
+     *
+     * Split out of leave(), which did this AND navigated. The two are different concerns and
+     * only one of them is ever conditional: after a successful launch the opener has ALREADY
+     * switched the app to the live grid, so `if (activeView() === 'wizard') leave()` was false
+     * on every success and none of this ran — one generation of selection subscribers, cd-line
+     * timers and setup-panel AgentChannels subscriptions leaked per launch, on detached DOM,
+     * with `launching` stuck true.
+     *
+     * Safe to call twice: open() already re-disposes on its way in.
+     */
+    function disposeWizard(): void {
       openGeneration++
       selection?.dispose()
       cdLine?.dispose()
       for (const panel of setupPanels.splice(0)) panel.dispose()
       launching = false
+    }
+
+    function leave(): void {
+      disposeWizard()
       goBack()
     }
 
@@ -657,9 +673,11 @@ export const wizardFeature: UiFeature = {
           isolated: paneCwds !== undefined // a boolean — never the paths (ADR 0005)
         }
       })
-      // The workspace opener switches the app to the live grid; if no workspace
-      // feature is mounted (tests), fall back to wherever we came from.
-      if (activeView() === 'wizard') leave()
+      // The workspace opener switches the app to the live grid; if no workspace feature is
+      // mounted (tests), fall back to wherever we came from. TEARDOWN is unconditional — it is
+      // the NAVIGATION that depends on where we ended up.
+      disposeWizard()
+      if (activeView() === 'wizard') goBack()
       return true
     }
 
