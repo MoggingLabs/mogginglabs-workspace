@@ -1318,6 +1318,16 @@ async function runNotify(args) {
   }
   if (!event) event = 'needs-input'
 
+  // BEFORE the stdin read, not after. This runs as an agent CLI's notification hook, and a
+  // hook fires wherever the user runs that CLI — including outside any pane of ours, where
+  // there is nothing to notify and we bail. Reading stdin first meant blocking on a pipe
+  // nobody was going to write to in order to compute a value we then threw away: the hook
+  // hung until its parent gave up, and the agent wore the pause. The generated twin has
+  // always guarded in this order (backend/features/agents/notify-hook.ts).
+  if (!paneId || !endpointFile) {
+    bail('not inside a MoggingLabs pane (MOGGING_PANE_ID / MOGGING_DAEMON_ENDPOINT unset); skipping')
+  }
+
   // Only the Notification hook is ambiguous — don't stall any other event on stdin.
   if (event === 'needs-input') {
     const type = await readStdinType()
@@ -1326,10 +1336,6 @@ async function runNotify(args) {
       if (mapped === null) process.exit(0) // a completion / info notice: never an alert
       event = mapped
     }
-  }
-
-  if (!paneId || !endpointFile) {
-    bail('not inside a MoggingLabs pane (MOGGING_PANE_ID / MOGGING_DAEMON_ENDPOINT unset); skipping')
   }
 
   let ep
