@@ -688,6 +688,8 @@ export const wizardFeature: UiFeature = {
     let brushHint!: HTMLElement
     let profilesHost!: HTMLElement
     let presetsHost!: HTMLElement
+    /** Why the last preset save/delete failed, or empty. Cleared by the next render. */
+    let presetError = ''
     let toolsSection!: HTMLElement
     let toolsHost!: HTMLElement
     let meterFill!: HTMLElement
@@ -1015,7 +1017,10 @@ export const wizardFeature: UiFeature = {
         onClick: () => {
           setGridSpec(uniformSpec(gridSpec.rows, gridSpec.cols))
           painter.set(gridSpec)
-          refreshAgents()
+          // renderAgentControls, not refreshAgents: painter.set() does not fire onChange, and
+          // refreshAgents only moves the meter. The Shell chip's x N and the palette's
+          // "Fill N empty" label are rendered by renderPalette, which only this path reaches.
+          renderAgentControls()
         }
       })
       // The capacity story compresses to one short line; the full reasoning (machine vs
@@ -1608,16 +1613,29 @@ export const wizardFeature: UiFeature = {
       const customTotal = countOf('custom')
       if (customTotal > 0 && customCmd.trim()) mix.push({ provider: `custom:${customCmd.trim()}`, count: customTotal })
       const preset = { id: crypto.randomUUID(), name: presetName, mix }
-      void wizardClient.savePreset(preset).then(() => {
-        presets = [...presets, preset]
-        renderPresets()
-        getTelemetry().captureEvent({ name: 'preset.saved', props: { agents: mix.reduce((s, m) => s + m.count, 0) } })
-      })
+      void wizardClient
+        .savePreset(preset)
+        .then(() => {
+          presets = [...presets, preset]
+          renderPresets()
+          getTelemetry().captureEvent({ name: 'preset.saved', props: { agents: mix.reduce((s, m) => s + m.count, 0) } })
+        })
+        // A rejected save left NO card, NO error and an unhandled rejection: the user pressed
+        // Save and the app did nothing it could explain. Every neighbouring wizard IPC call
+        // catches; these two did not.
+        .catch((error: unknown) => {
+          presetError = error instanceof Error && error.message ? error.message : 'The preset could not be saved.'
+          renderPresets()
+        })
     }
 
     function renderPresets(): void {
       if (!presetsHost) return
       clear(presetsHost)
+      if (presetError) {
+        presetsHost.append(el('span', { class: 'wizard-hint wizard-hint-error', role: 'alert', text: presetError }))
+        presetError = ''
+      }
       if (!presets.length) {
         presetsHost.append(el('span', { class: 'wizard-hint', text: 'Nothing saved yet.' }))
         return
@@ -1647,6 +1665,10 @@ export const wizardFeature: UiFeature = {
                 onClick: () => {
                   applyMix(p.mix)
                   painter.set(gridSpec)
+                  // Third site, same rule: applyMix rewrites the slots and may set customCmd,
+                  // and painter.set fires no onChange — so the palette, the custom input and
+                  // the meter all need the full repaint, not just the roster.
+                  renderAgentControls()
                   renderRoster()
                   getTelemetry().captureEvent({ name: 'preset.applied' })
                 }
@@ -1666,10 +1688,17 @@ export const wizardFeature: UiFeature = {
                 type: 'button',
                 ariaLabel: `Delete preset ${p.name}`,
                 onClick: () => {
-                  void wizardClient.removePreset(p.id).then(() => {
-                    presets = presets.filter((x) => x.id !== p.id)
-                    renderPresets()
-                  })
+                  void wizardClient
+                    .removePreset(p.id)
+                    .then(() => {
+                      presets = presets.filter((x) => x.id !== p.id)
+                      renderPresets()
+                    })
+                    .catch((error: unknown) => {
+                      presetError =
+                        error instanceof Error && error.message ? error.message : 'The preset could not be deleted.'
+                      renderPresets()
+                    })
                 }
               },
               [icon('x', 12)]
@@ -2014,7 +2043,8 @@ export const wizardFeature: UiFeature = {
         setGrid: (rows: number, cols: number) => {
           setGridSpec(uniformSpec(Math.max(1, Math.floor(rows)), Math.max(1, Math.floor(cols))))
           painter.set(gridSpec)
-          refreshAgents()
+          renderAgentControls() // same as the Reset-grid handler — this is the path WIZLAYOUT drives
+
           return paneCount
         },
         merge: (r0: number, c0: number, r1: number, c1: number) => painter.mergeRect(r0, c0, r1, c1),

@@ -4530,6 +4530,13 @@ body.pane-dragging * {
   font-size: var(--fs-11);
 }
 
+/* A preset save or delete that FAILED. The wizard has no toast, and a rejected IPC used to
+   leave no card and no explanation — the user pressed Save and the app did nothing it could
+   account for. Same line, stated in the failure colour so it reads as a refusal, not a hint. */
+.wizard-hint-error {
+  color: var(--danger);
+}
+
 /* Where: folder and name share one row — the two facts of the section. WRAPPING
    (resize review, 2026-08-01): at narrow windows the fixed-width name input used to win
    the row and crush the path FIELD to zero — the folder you were choosing became
