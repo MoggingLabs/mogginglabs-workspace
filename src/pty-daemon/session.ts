@@ -8,6 +8,7 @@
 import * as crypto from 'node:crypto'
 import { spawnPty, type IPty } from '@backend/platform/pty-host'
 import { mergeEnv } from '@backend/platform/env-path'
+import { killPtyTree } from '@backend/platform/process-tree'
 import { paneShellLaunch } from '@backend/platform/shell'
 import { RESTORE_MODE_RESET, SCROLLBACK_CHARS, pickCwd, trimTornStart } from '@backend/features/terminal/pane-shared'
 import { aiderLogPath } from '@backend/features/context'
@@ -1022,11 +1023,16 @@ class PaneSession {
       clearTimeout(this.launchGraceTimer)
       this.launchGraceTimer = undefined
     }
-    try {
-      this.proc.kill()
-    } catch {
-      /* already gone */
-    }
+    // The TREE, not the shell. A bare proc.kill() ends the pane's shell and leaves every
+    // descendant running — on Windows the agent keeps going headless with no terminal
+    // attached to it, and there is no surface left in the app that can find it again.
+    // The in-proc backend has always done this (pty.service.ts:353, :368); the DAEMON,
+    // which owns every pane in a normal install and outlives the app itself, never did.
+    // That also breaks daemon-migrate's retire hand-off, which assumes a retired daemon's
+    // agents end with it: they did not, and an update left two live copies of the same
+    // agent behind. killPtyTree keeps proc.kill() as its own last step, so this is strictly
+    // more teardown than before, never less.
+    killPtyTree(this.proc)
   }
 }
 

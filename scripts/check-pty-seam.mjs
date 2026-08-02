@@ -56,4 +56,45 @@ if (offenders.length) {
   )
   process.exit(1)
 }
-console.log(`  pty seam OK — node-pty spawned only from ${OWNER.split(sep).join('/')}`)
+
+// ── RULE 2: a pty is torn down as a TREE, through the one function that knows how ──────
+//
+// The spawn seam had a gate; the KILL seam had only a habit, and the habit was not kept.
+// The in-proc backend called killPtyTree; the daemon — which owns every pane in a normal
+// install, and outlives the app — called a bare proc.kill() for eleven phases. That ends
+// the pane's shell and leaves the agent running headless with no terminal attached and no
+// surface in the app that can reach it, and it silently broke daemon-migrate's retire
+// hand-off, which assumes a retired daemon's agents die with it.
+//
+// Same shape as rule 1: one owner, everyone else goes through it. Narrow on purpose —
+// `.kill()` on a child_process (git, npm, an MCP bridge) is a different thing and stays
+// legal; this only catches a kill on a handle NAMED like the pty it is.
+const KILL_OWNER = join('src', 'backend', 'platform', 'process-tree.ts')
+const PTY_KILL = /\b(?:this\.)?(?:proc|pty)\.kill\(\)/
+const killOffenders = []
+for (const file of walk(SRC)) {
+  const rel = relative(ROOT, file)
+  if (rel === KILL_OWNER) continue
+  const src = readFileSync(file, 'utf8')
+  // Strip comments first: this file's own prose quotes the banned call, and so does the
+  // comment explaining the fix. A gate must not be tripped by a description of itself.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/.*$/gm, '$1')
+  if (PTY_KILL.test(code)) killOffenders.push(`${rel}: ${code.match(PTY_KILL)[0]}`)
+}
+
+if (killOffenders.length) {
+  console.error('\nPTY TEARDOWN VIOLATION — a pty is killed as a TREE, never as one process.\n')
+  for (const o of killOffenders) console.error(`  ${o}`)
+  console.error(
+    `\nCall killPtyTree(proc) from '${KILL_OWNER.split(sep).join('/')}' instead. It signals the\n` +
+      'process group on POSIX and taskkill /T /F on Windows, then runs proc.kill() itself as the\n' +
+      'last step — strictly more teardown than a bare kill, never less. A bare kill leaves the\n' +
+      'agent running headless with nothing left in the app that can find it.\n'
+  )
+  process.exit(1)
+}
+
+console.log(
+  `  pty seam OK — node-pty spawned only from ${OWNER.split(sep).join('/')}, ` +
+    `torn down only through ${KILL_OWNER.split(sep).join('/')}`
+)
