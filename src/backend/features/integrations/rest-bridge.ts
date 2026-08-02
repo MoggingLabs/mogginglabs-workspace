@@ -199,10 +199,26 @@ async function fetchWithRetry(
   const timeout = (): AbortSignal => AbortSignal.timeout(svc.timeoutMs ?? 15_000)
   let res = await doFetch(url, { ...init, signal: timeout() })
   if (!res.ok && retryableStatus(res.status, svc.entry.retry)) {
+    // The first response's body is never read on this path. An unread body holds its
+    // connection open until GC gets to it — with a per-tool retry on a hot loop that is a
+    // socket leak against someone else's API, and the first thing they see is us
+    // exhausting their connection limit. Cancelling releases it now.
+    discardBody(res)
     await new Promise((r) => setTimeout(r, retryDelayMs(res.headers, svc.entry.retry, 0, now())))
     res = await doFetch(url, { ...init, signal: timeout() })
   }
   return res
+}
+
+/** Release a response we will never read. Never throws: an already-consumed or already-
+ *  errored body is exactly the state we wanted, and a failure to tidy up must not become
+ *  the caller's error. */
+export function discardBody(res: { body?: { cancel?: () => Promise<unknown> } | null }): void {
+  try {
+    void res.body?.cancel?.()?.catch?.(() => undefined)
+  } catch {
+    /* already consumed, or a fetch impl without a cancellable body */
+  }
 }
 
 /** Execute one curated tool call. Every path out of here is either the shaped
@@ -286,7 +302,10 @@ export async function executeRestTool(
       if (auth?.in === 'query' && auth.queryParam) nextUrl.searchParams.set(auth.queryParam, svc.token)
       try {
         const res = await fetchWithRetry(nextUrl, { method: 'GET', headers }, svc)
-        if (!res.ok) break
+        if (!res.ok) {
+          discardBody(res) // leaving the loop without reading it holds the connection open
+          break
+        }
         page = await res.json().catch(() => null)
       } catch {
         break
