@@ -9,7 +9,7 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 207 gates: 32 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 175 app-boot
+# 208 gates: 33 static (AUDIT · LEDGER · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 175 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -177,12 +177,26 @@ run_static() {
   if "$@" >"$TMPBASE/$name.log" 2>&1; then
     RESULTS+=("$name PASS"); echo "  PASS"
   else
-    RESULTS+=("$name FAIL"); echo "  FAIL"
+    # A gate whose SCRIPT died is not a gate that found a violation — same
+    # distinction run_smoke draws with BOOTFAIL, one level down. Node exits 1 for
+    # both, so the log is the only witness. Saying FAIL here sends you hunting a
+    # product regression that never existed; worse, a gate renamed out from under
+    # its own require() would read as a real finding forever.
+    local v="FAIL"
+    if grep -qE 'MODULE_NOT_FOUND|Cannot find module|^SyntaxError|^ReferenceError|node:internal/modules' \
+         "$TMPBASE/$name.log" 2>/dev/null; then
+      v="SCRIPTFAIL"
+    fi
+    RESULTS+=("$name $v"); echo "  $v"
     echo "  ── $name diagnostics ──"
     sed 's/^/  /' "$TMPBASE/$name.log" | tail -25
   fi
 }
 run_static AUDIT   node scripts/check-audit.mjs
+# The 2026-08 sweep's ~490 findings. AUDIT above grades the 8.5 pack only (it is
+# called with no argument, so it reads prompts/phase-8.5/AUDIT.md); nothing routed
+# the newer ones, and a finding nobody can watch age is a finding that ages.
+run_static LEDGER  node scripts/check-findings-ledger.mjs
 run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs
@@ -651,6 +665,31 @@ echo ""
 echo "══ SWEEP RESULTS ══"
 printf '%s\n' "${RESULTS[@]}"
 BAD=$(printf '%s\n' "${RESULTS[@]}" | grep -cv ' PASS$' || true)
+
+# THE verdict, derived exactly once, written where the CI gate step reads it.
+# check-sweep-log.sh asserts over this file — it does not re-derive from the log.
+# A second derivation carrying its own token list is precisely how a BOOTFAIL
+# certified as "ALL GATES PASS" on every linux and macos sweep: the list had
+# FAIL and MISSING in it, and BOOTFAIL matched neither. One derivation means the
+# next verdict token invented needs no patch anywhere else.
+mkdir -p out
+printf '%s\n' "${RESULTS[@]}" | node -e '
+  const fs = require("fs")
+  const rows = fs.readFileSync(0, "utf8").trim().split("\n").filter(Boolean).map((l) => {
+    const i = l.lastIndexOf(" ")
+    return { gate: l.slice(0, i), verdict: l.slice(i + 1) }
+  })
+  const bad = rows.filter((r) => r.verdict !== "PASS")
+  const filter = process.env.MOGGING_GATES || ""
+  fs.writeFileSync("out/sweep-summary.json", JSON.stringify({
+    total: rows.length,
+    bad: bad.length,
+    failed: bad.map((r) => r.gate + " " + r.verdict),
+    coverage: filter ? "PARTIAL" : "COMPLETE",
+    gatesFilter: filter,
+    rows
+  }, null, 1))
+'
 echo ""
 if [ "$BAD" -eq 0 ]; then
   echo "ALL ${#RESULTS[@]} GATES PASS"
