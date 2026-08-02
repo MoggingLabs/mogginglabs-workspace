@@ -77,14 +77,33 @@ function isDir(candidate: string): boolean {
   }
 }
 
-function run(file: string, args: string[], timeout = 6000): Promise<string | null> {
+/** What a command actually did. `ok` means it RAN and exited 0 — never "the answer is
+ *  empty". `code` is the exit status, or null when the process never started (spawn
+ *  failure) or was killed (our own timeout). */
+export interface RunOutcome {
+  ok: boolean
+  code: number | null
+  stdout: string
+}
+
+// Distinguishing "failed" from "empty" is the whole job of this type. Collapsing both to
+// null is what let persistWindows read a timed-out `reg query` as "the user has no PATH"
+// and then overwrite the real one — see the refusal in persistWindows below. The same
+// rule is stated in setup.ts's capture(): an empty string from a command that failed
+// means "we do not know", not "the answer is empty".
+function run(file: string, args: string[], timeout = 6000): Promise<RunOutcome> {
   return new Promise((resolve) => {
     try {
-      execFile(file, args, { encoding: 'utf8', windowsHide: true, timeout, maxBuffer: 1024 * 1024 }, (err, stdout) =>
-        resolve(err ? null : String(stdout))
-      )
+      execFile(file, args, { encoding: 'utf8', windowsHide: true, timeout, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+        const out = String(stdout ?? '')
+        if (!err) return resolve({ ok: true, code: 0, stdout: out })
+        // execFile reports a non-zero EXIT as a numeric `code`, but a spawn failure as a
+        // string errno ('ENOENT') and a timeout as a signal with no usable code at all.
+        const code = typeof (err as { code?: unknown }).code === 'number' ? ((err as { code: number }).code) : null
+        resolve({ ok: false, code, stdout: out })
+      })
     } catch {
-      resolve(null)
+      resolve({ ok: false, code: null, stdout: '' })
     }
   })
 }
@@ -98,13 +117,29 @@ function run(file: string, args: string[], timeout = 6000): Promise<string | nul
 const REG_USER = ['HKCU\\Environment', '/v', 'Path']
 const REG_MACHINE = ['HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment', '/v', 'Path']
 
-/** Pull `Path`'s raw value + its type out of one `reg query` dump. */
-export function parseRegPath(stdout: string | null): { value: string; kind: string } | null {
-  if (!stdout) return null
-  const match = /^[ \t]*Path[ \t]+(REG_(?:EXPAND_)?SZ)[ \t]+(.*)$/im.exec(stdout)
-  if (!match) return null
-  return { kind: match[1], value: match[2].replace(/\r$/, '').trim() }
+/** A `reg query` for one value has THREE answers, and conflating the last two is how a
+ *  PATH gets destroyed:
+ *    - the value, when the read succeeded and the dump held a `Path` row;
+ *    - 'absent',  when the read succeeded and it did not (a fresh profile has no HKCU
+ *      Path — writing a fresh one there is correct);
+ *    - 'unknown', when the read itself failed (timeout, policy, EDR, spawn failure).
+ *      Nothing may be written on this answer: we do not know what we would destroy. */
+export type RegRead = { value: string; kind: string } | 'absent' | 'unknown'
+
+/** Pull `Path`'s raw value + its type out of one `reg query` outcome. */
+export function parseRegPath(res: RunOutcome | null): RegRead {
+  if (!res) return 'unknown'
+  const match = /^[ \t]*Path[ \t]+(REG_(?:EXPAND_)?SZ)[ \t]+(.*)$/im.exec(res.stdout)
+  if (match) return { kind: match[1], value: match[2].replace(/\r$/, '').trim() }
+  // A clean exit with no Path row means the value genuinely is not there. `reg query`
+  // also exits 1 for "unable to find" — but it exits 1 for other refusals too, so that
+  // code alone is not proof; the caller disambiguates by reading the KEY (see regReadUserPath).
+  return res.ok ? 'absent' : 'unknown'
 }
+
+/** The value a RegRead carries, or '' for both no-value answers — for the read-only
+ *  paths where an unknown and an absent PATH lead to the same fallback anyway. */
+const regValue = (r: RegRead): string => (typeof r === 'string' ? '' : r.value)
 
 /** Expand `%NAME%` against the live environment (case-insensitive, like Windows). */
 export function expandWindowsVars(value: string, env: NodeJS.ProcessEnv = process.env): string {
@@ -121,12 +156,14 @@ async function windowsRegistryPath(): Promise<string[] | null> {
   const [machine, user] = await Promise.all([run('reg', ['query', ...REG_MACHINE]), run('reg', ['query', ...REG_USER])])
   const parsedMachine = parseRegPath(machine)
   const parsedUser = parseRegPath(user)
-  if (!parsedMachine && !parsedUser) return null
+  // This path is READ-only, so an unknown and an absent value both degrade the same way
+  // (to process PATH plus the well-known dirs) — the distinction only binds on the write.
+  if (typeof parsedMachine === 'string' && typeof parsedUser === 'string') return null
   // Windows composes the effective PATH as system-then-user; keep that order so a user
   // override of a system tool keeps losing here exactly as it does in a real console.
   return dedupe([
-    ...pathEntries(expandWindowsVars(parsedMachine?.value ?? '')),
-    ...pathEntries(expandWindowsVars(parsedUser?.value ?? ''))
+    ...pathEntries(expandWindowsVars(regValue(parsedMachine))),
+    ...pathEntries(expandWindowsVars(regValue(parsedUser)))
   ])
 }
 
@@ -145,7 +182,9 @@ async function loginShellPath(): Promise<string[] | null> {
   // `-l` loads the profile (the whole point); `-i` is deliberately NOT passed — an
   // interactive shell can block on a prompt and some rc files refuse to run headless.
   const out = await run(shell, ['-lc', `printf '%s' "${FENCE}$PATH${FENCE}"`], 8000)
-  const match = out ? new RegExp(`${FENCE}([^]*?)${FENCE}`).exec(out) : null
+  // The fence is the real check — a shell that printed the pair told us the truth even
+  // if some rc file on the way exited non-zero. Read-only, so a miss just degrades.
+  const match = out.stdout ? new RegExp(`${FENCE}([^]*?)${FENCE}`).exec(out.stdout) : null
   if (!match) return null
   const entries = dedupe(pathEntries(match[1]))
   return entries.length ? entries : null
@@ -369,29 +408,69 @@ export async function persistUserPathEntries(dirs: readonly string[]): Promise<P
   return process.platform === 'win32' ? persistWindows(wanted) : persistPosix(wanted)
 }
 
-async function persistWindows(wanted: readonly string[]): Promise<PersistPathResult> {
-  const existing = parseRegPath(await run('reg', ['query', ...REG_USER]))
+/** Read HKCU's `Path`, and when it reads as absent PROVE the absence before anyone acts
+ *  on it. `reg query` exits 1 both for "that value is not there" and for refusals we must
+ *  never mistake for it, so an absent answer is confirmed by reading the KEY: if the key
+ *  itself is readable, the value really is missing; if it is not, we know nothing. */
+async function regReadUserPath(): Promise<RegRead> {
+  const first = parseRegPath(await run('reg', ['query', ...REG_USER]))
+  if (first !== 'absent') return first
+  const key = await run('reg', ['query', 'HKCU\\Environment'])
+  return key.ok ? 'absent' : 'unknown'
+}
+
+/** What persistWindows should do, decided from the two reads alone. Pure, so the one
+ *  property that matters — a read we could not perform NEVER becomes a write — is
+ *  provable without spawning reg.exe. */
+export type WindowsPathPlan =
+  | { action: 'refuse'; error: string }
+  | { action: 'noop'; added: readonly string[] }
+  | { action: 'write'; value: string; kind: string; added: readonly string[] }
+
+export function planWindowsPathWrite(existing: RegRead, machine: RegRead, wanted: readonly string[]): WindowsPathPlan {
+  // THE refusal. `reg add ... /f` overwrites, so acting on a read we could not perform
+  // would replace the user's whole persisted PATH with just our new dirs — and then
+  // broadcast it to every process that starts afterwards. There is no undo. A failed
+  // read is not an empty PATH; when we do not know, we do not write.
+  if (existing === 'unknown') {
+    return {
+      action: 'refuse',
+      error: 'Windows would not report your current PATH, so it was left untouched. The folder still works inside this app.'
+    }
+  }
   // A machine entry already covers it — appending a duplicate to the user value would
-  // only make every future PATH longer for no gain.
-  const machine = parseRegPath(await run('reg', ['query', ...REG_MACHINE]))
+  // only make every future PATH longer for no gain. (An unreadable MACHINE value is safe
+  // to treat as empty: it only ever adds a dir we did not strictly need.)
   const covered = new Set(
-    [...pathEntries(expandWindowsVars(existing?.value ?? '')), ...pathEntries(expandWindowsVars(machine?.value ?? ''))].map(fold)
+    [...pathEntries(expandWindowsVars(regValue(existing))), ...pathEntries(expandWindowsVars(regValue(machine)))].map(fold)
   )
   const added = wanted.filter((dir) => !covered.has(fold(dir)))
-  if (!added.length) return { ok: true, added: [], target: 'HKCU\\Environment\\Path' }
+  if (!added.length) return { action: 'noop', added: [] }
 
-  const raw = existing?.value ?? ''
-  const next = safeForRegAdd([...(raw ? [raw.replace(/;+$/, '')] : []), ...added].join(';'))
-  if (next === null) {
-    return { ok: false, added: [], error: 'Your PATH contains a quote character, so it cannot be updated safely. Add the folder by hand in System › Environment Variables.' }
+  const raw = regValue(existing) // '' only when the value is PROVEN absent — a real fresh write
+  const value = safeForRegAdd([...(raw ? [raw.replace(/;+$/, '')] : []), ...added].join(';'))
+  if (value === null) {
+    return {
+      action: 'refuse',
+      error: 'Your PATH contains a quote character, so it cannot be updated safely. Add the folder by hand in System › Environment Variables.'
+    }
   }
-  const kind = existing?.kind ?? 'REG_EXPAND_SZ'
-  const wrote = await run('reg', ['add', 'HKCU\\Environment', '/v', 'Path', '/t', kind, '/d', next, '/f'], 10_000)
-  if (wrote === null) {
+  return { action: 'write', value, kind: existing === 'absent' ? 'REG_EXPAND_SZ' : existing.kind, added }
+}
+
+async function persistWindows(wanted: readonly string[]): Promise<PersistPathResult> {
+  const existing = await regReadUserPath()
+  const machine = parseRegPath(await run('reg', ['query', ...REG_MACHINE]))
+  const plan = planWindowsPathWrite(existing, machine, wanted)
+  if (plan.action === 'refuse') return { ok: false, added: [], error: plan.error }
+  if (plan.action === 'noop') return { ok: true, added: [], target: 'HKCU\\Environment\\Path' }
+
+  const wrote = await run('reg', ['add', 'HKCU\\Environment', '/v', 'Path', '/t', plan.kind, '/d', plan.value, '/f'], 10_000)
+  if (!wrote.ok) {
     return { ok: false, added: [], error: 'Windows refused the environment update. The folder still works inside this app.' }
   }
   await broadcastEnvironmentChange()
-  return { ok: true, added, target: 'HKCU\\Environment\\Path' }
+  return { ok: true, added: [...plan.added], target: 'HKCU\\Environment\\Path' }
 }
 
 /** The rc file a login shell of this flavour actually reads. */

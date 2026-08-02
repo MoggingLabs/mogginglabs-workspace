@@ -1,6 +1,15 @@
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { expandWindowsVars, loginRcFile, mergeEnv, parseRegPath, pathEntries, rcBlock } from '@backend/platform/env-path'
+import {
+  expandWindowsVars,
+  loginRcFile,
+  mergeEnv,
+  parseRegPath,
+  pathEntries,
+  planWindowsPathWrite,
+  rcBlock,
+  type RunOutcome
+} from '@backend/platform/env-path'
 
 // THE STALE-PATH BUG, pinned.
 //
@@ -11,6 +20,11 @@ import { expandWindowsVars, loginRcFile, mergeEnv, parseRegPath, pathEntries, rc
 // issued failed with "Could not isolate every agent". These tests fix the parsing and
 // merging that stand between that registry value and this process actually seeing it.
 
+/** A `reg query` that ran and exited 0. */
+const ran = (stdout: string): RunOutcome => ({ ok: true, code: 0, stdout })
+/** A `reg query` that did NOT run, or died: EDR, policy, a 6s timeout, spawn failure. */
+const died = (code: number | null = null): RunOutcome => ({ ok: false, code, stdout: '' })
+
 describe('parseRegPath', () => {
   const dump = [
     '',
@@ -20,24 +34,84 @@ describe('parseRegPath', () => {
   ].join('\r\n')
 
   it('reads the raw value and its type off a reg query dump', () => {
-    expect(parseRegPath(dump)).toEqual({
+    expect(parseRegPath(ran(dump))).toEqual({
       kind: 'REG_EXPAND_SZ',
       value: '%USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\me\\AppData\\Roaming\\npm'
     })
   })
 
   it('keeps the value UNEXPANDED — writing an expanded PATH back would bake in today’s home', () => {
-    expect(parseRegPath(dump)?.value.startsWith('%USERPROFILE%')).toBe(true)
+    const read = parseRegPath(ran(dump))
+    expect(typeof read === 'string' ? '' : read.value.startsWith('%USERPROFILE%')).toBe(true)
   })
 
   it('does not mistake PATHEXT (or any Path-prefixed name) for Path', () => {
     const other = 'HKEY_CURRENT_USER\\Environment\r\n    PATHEXT    REG_SZ    .COM;.EXE\r\n'
-    expect(parseRegPath(other)).toBeNull()
+    expect(parseRegPath(ran(other))).toBe('absent')
   })
 
-  it('is null on an empty or failed query rather than inventing an empty PATH', () => {
-    expect(parseRegPath(null)).toBeNull()
-    expect(parseRegPath('')).toBeNull()
+  // The three-state answer. A query that SUCCEEDED and showed no Path row means the value
+  // is genuinely missing (a fresh profile) — writing a fresh one there is correct. A query
+  // that FAILED means we know nothing, and the two must never collapse together.
+  it('separates a proven-absent value from a read that failed', () => {
+    expect(parseRegPath(ran(''))).toBe('absent')
+    expect(parseRegPath(died())).toBe('unknown')
+    expect(parseRegPath(died(1))).toBe('unknown')
+    expect(parseRegPath(null)).toBe('unknown')
+  })
+})
+
+// THE PATH-WIPE, pinned.
+//
+// `run()` used to resolve null for BOTH "the value is not there" and "reg.exe timed out /
+// was blocked / never spawned". persistWindows read that null as `raw = ''`, built `next`
+// from the new dirs ALONE, and ran `reg add HKCU\Environment /v Path /d <next> /f` — which
+// overwrites — then broadcast the result to every process started afterwards. One 6s
+// timeout under AV, and the user's persisted PATH was gone with no undo and no backup.
+describe('planWindowsPathWrite', () => {
+  const wanted = ['C:\\Users\\me\\.npm-global']
+  const user = ran('HKCU\\Environment\r\n    Path    REG_SZ    C:\\real;C:\\entries\r\n')
+
+  it('REFUSES to write when the current PATH could not be read', () => {
+    const plan = planWindowsPathWrite('unknown', 'absent', wanted)
+    expect(plan.action).toBe('refuse')
+  })
+
+  it('refuses on an unreadable user PATH no matter what the machine read said', () => {
+    // The guard must not be reachable-around via the second read.
+    for (const machine of ['unknown', 'absent', parseRegPath(ran('  Path  REG_SZ  C:\\m\r\n'))] as const) {
+      expect(planWindowsPathWrite('unknown', machine, wanted).action).toBe('refuse')
+    }
+  })
+
+  it('a plan that writes always carries the existing value forward', () => {
+    // The wipe, stated as an invariant: every entry we could see must survive the write.
+    const plan = planWindowsPathWrite(parseRegPath(user), 'unknown', wanted)
+    expect(plan.action).toBe('write')
+    if (plan.action !== 'write') return
+    for (const entry of ['C:\\real', 'C:\\entries']) expect(plan.value).toContain(entry)
+  })
+
+  it('appends to a real PATH, preserving the existing value and its registry type', () => {
+    const plan = planWindowsPathWrite(parseRegPath(user), 'absent', wanted)
+    expect(plan.action).toBe('write')
+    if (plan.action !== 'write') return
+    expect(plan.value).toBe('C:\\real;C:\\entries;C:\\Users\\me\\.npm-global')
+    expect(plan.kind).toBe('REG_SZ')
+    expect(plan.added).toEqual(wanted)
+  })
+
+  it('writes a fresh value only when absence was PROVEN, and types it REG_EXPAND_SZ', () => {
+    const plan = planWindowsPathWrite('absent', 'absent', wanted)
+    expect(plan.action).toBe('write')
+    if (plan.action !== 'write') return
+    expect(plan.value).toBe('C:\\Users\\me\\.npm-global')
+    expect(plan.kind).toBe('REG_EXPAND_SZ')
+  })
+
+  it('does nothing when a machine entry already covers the dir', () => {
+    const machine = ran('    Path    REG_SZ    C:\\Users\\me\\.npm-global\r\n')
+    expect(planWindowsPathWrite(parseRegPath(user), parseRegPath(machine), wanted).action).toBe('noop')
   })
 })
 
