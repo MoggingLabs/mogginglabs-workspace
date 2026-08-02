@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { removeTempDirs } from './temp-dir'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -70,7 +71,7 @@ afterEach(() => {
   } catch {
     /* never wrote one */
   }
-  for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true })
+  removeTempDirs(roots)
 })
 
 describe('context monitor lock arbitration', () => {

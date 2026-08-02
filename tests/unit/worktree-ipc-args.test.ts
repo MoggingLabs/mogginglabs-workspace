@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
+import { removeTempDir } from './temp-dir'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -23,7 +24,7 @@ import { normalizePaneCwd } from '@backend/features/agent-state'
 
 const dirs: string[] = []
 afterAll(() => {
-  for (const d of dirs) rmSync(d, { recursive: true, force: true })
+  for (const d of dirs) removeTempDir(d)
 })
 const realDir = (): string => {
   const d = mkdtempSync(join(tmpdir(), 'wtipc-'))

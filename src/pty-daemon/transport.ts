@@ -172,7 +172,20 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           }
           const spawn = (): void => {
             if (sock.destroyed) return
-            const { pane, existed } = sessions.ensure(m.id, spec)
+            // `ensure` THROWS on a spec it cannot honour (an invalid remote, session.ts).
+            // Unguarded, that unwound through sock.on('data') into the process-level
+            // uncaughtException handler, which only logs — so the rest of THAT chunk's frames
+            // were dropped with no reply, and the client's spawn waiter hung until its own
+            // timeout. The 'badremote' send a few lines above proves the channel for saying so
+            // was already here; this path just never used it.
+            let pane, existed
+            try {
+              ;({ pane, existed } = sessions.ensure(m.id, spec))
+            } catch (err) {
+              log(`spawn FAILED for pane ${m.id}: ${err instanceof Error ? err.message : String(err)}`)
+              send({ t: 'error', reason: 'spawnfailed', id: m.id })
+              return
+            }
             // Reply FIRST, then bind: subscribe() synchronously replays state/cwd, and the
             // client gates every pane event on the generation it learns from `spawned` — a
             // replay arriving ahead of the gen would be dropped as stale. Same tick either
@@ -212,6 +225,12 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           // generation's late input must not type into the id's successor session.
           const pane = sessions.get(m.id)
           if (pane && (typeof m.gen !== 'number' || m.gen === pane.gen)) pane.write(m.data)
+          // A refusal used to leave NOTHING — no log, no frame, no counter — so "my keystrokes
+          // vanished" was undiagnosable after the fact. Logged, not answered with an error
+          // frame: the live client rejects any PENDING SPAWN carrying the same pane id
+          // (daemon-client.ts), so a frame here would kill a spawn in flight for that pane —
+          // trading a silent drop for a louder bug.
+          else if (pane) log(`input REFUSED for pane ${m.id}: gen ${String(m.gen)} != ${pane.gen}`)
           break
         }
         case 'resize': {
@@ -219,6 +238,7 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           // with a full repaint, so a stale resize smears the successor's live frame.
           const pane = sessions.get(m.id)
           if (pane && (typeof m.gen !== 'number' || m.gen === pane.gen)) pane.resize(m.cols, m.rows)
+          else if (pane) log(`resize REFUSED for pane ${m.id}: gen ${String(m.gen)} != ${pane.gen}`)
           break
         }
         case 'kill':

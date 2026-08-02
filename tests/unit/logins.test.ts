@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { removeTempDir } from './temp-dir'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -38,7 +39,7 @@ describe('probeLogin', () => {
 
   afterAll(() => {
     for (const [k, v] of Object.entries(saved)) if (v !== undefined) process.env[k] = v
-    rmSync(root, { recursive: true, force: true })
+    removeTempDir(root)
   })
 
   const home = (name: string): string => {

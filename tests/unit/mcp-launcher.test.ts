@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { removeTempDir } from './temp-dir'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -22,7 +23,7 @@ import { stableMcpLauncherSource } from '@backend/platform/mcp-launcher'
 
 const roots: string[] = []
 afterAll(() => {
-  for (const r of roots) rmSync(r, { recursive: true, force: true })
+  for (const r of roots) removeTempDir(r)
 })
 
 /** A runtime tree with two protocol versions, each holding both entry scripts. */

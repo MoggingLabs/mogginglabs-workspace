@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { removeTempDir } from './temp-dir'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -25,7 +26,7 @@ import { isRunnableEntry, resolveOnPath } from '@backend/platform/env-path'
 
 const made: string[] = []
 afterAll(() => {
-  for (const d of made) rmSync(d, { recursive: true, force: true })
+  for (const d of made) removeTempDir(d)
 })
 const tempDir = (): string => {
   const d = mkdtempSync(join(tmpdir(), 'resolve-'))

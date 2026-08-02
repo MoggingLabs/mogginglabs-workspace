@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { removeTempDir } from './temp-dir'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -20,7 +21,7 @@ const made: string[] = []
 afterAll(() => {
   for (const dir of made) {
     try {
-      rmSync(dir, { recursive: true, force: true })
+      removeTempDir(dir)
     } catch {
       /* temp sweep gets it */
     }

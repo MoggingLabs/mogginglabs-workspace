@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { removeTempDir } from './temp-dir'
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -33,7 +34,7 @@ function git(cwd: string, ...args: string[]): void {
 afterAll(() => {
   for (const dir of made) {
     try {
-      rmSync(dir, { recursive: true, force: true })
+      removeTempDir(dir)
     } catch {
       /* a worktree Windows still holds open — the OS temp sweep gets it */
     }

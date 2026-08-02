@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { removeTempDir } from './temp-dir'
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -26,7 +27,7 @@ import { resolveOnPath } from '@backend/platform/env-path'
 const hasGit = !!resolveOnPath('git')
 const made: string[] = []
 afterAll(() => {
-  for (const d of made) rmSync(d, { recursive: true, force: true })
+  for (const d of made) removeTempDir(d)
 })
 
 function repoWithCommit(): string {
@@ -103,7 +104,7 @@ describe.skipIf(!hasGit)('worktree dirty guard', () => {
     const wt = created.path
     expect(wt).toBeTruthy()
     if (!wt) return
-    rmSync(wt, { recursive: true, force: true })
+    removeTempDir(wt)
     const res = await removeWorktree(repo, wt)
     expect(res.ok).toBe(false)
     expect(res).toMatchObject({ reason: 'dirty' }) // unknown refuses, exactly as dirty does
