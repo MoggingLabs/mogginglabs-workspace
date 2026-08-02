@@ -218,7 +218,10 @@ export async function listWorktrees(repo: string): Promise<WorktreeInfo[]> {
   }
   for (const wt of out) {
     const st = await git(wt.path, ['status', '--porcelain'])
-    wt.dirty = st.ok && st.stdout.trim().length > 0
+    // Unknown reads as DIRTY, the same direction removeWorktree refuses in. A status we
+    // could not read rendered as a clean worktree — the reassuring answer — and clean is
+    // the one the user acts on by deleting it.
+    wt.dirty = !st.ok || st.stdout.trim().length > 0
   }
   return out
 }
@@ -235,10 +238,22 @@ export async function removeWorktree(
     if (!isManaged(repo, path)) return { ok: false, reason: 'not-managed' }
     if (!force) {
       const st = await git(path, ['status', '--porcelain'])
-      if (st.ok && st.stdout.trim().length > 0) return { ok: false, reason: 'dirty' }
+      // A status we could not read is NOT a clean worktree. `st.ok && …` treated a timeout,
+      // a maxBuffer overrun on a huge status, or a git that could not run as "nothing to
+      // lose" — and then deleted the checkout. The whole point of this refusal is that an
+      // agent's uncommitted work is what Phase-3/04 reviews, so the one outcome that must
+      // never happen on an unknown is the destructive one. Unknown refuses, exactly as
+      // dirty does; --force is still the way through, and it is now a decision the user
+      // makes rather than one a slow disk makes for them.
+      if (!st.ok || st.stdout.trim().length > 0) return { ok: false, reason: 'dirty' }
     }
     const args = force ? ['worktree', 'remove', '--force', path] : ['worktree', 'remove', path]
-    const res = await git(repo, args)
+    // Deleting a checkout costs what writing it cost. `worktree add` was given CHECKOUT_MS
+    // for exactly this reason and `remove` was left on the 15s metadata budget — so on the
+    // repos that motivated the add change, a rollback was killed mid-delete and left a
+    // half-removed tree, a live registration and the branch behind (the wizard then says
+    // "needs manual cleanup", which was true and unhelpful).
+    const res = await git(repo, args, CHECKOUT_MS)
     if (!res.ok) return { ok: false, reason: 'error', error: res.error }
     return { ok: true }
   } catch (e) {
