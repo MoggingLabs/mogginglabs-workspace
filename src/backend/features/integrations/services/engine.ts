@@ -114,6 +114,8 @@ export class ServiceEngine {
   private async fetchOnce(rt: LinkRuntime): Promise<void> {
     const adapter = this.deps.adapters[rt.link.service]
     const prev = rt.status
+    /** A transition to announce once the fetch verdict is settled — see below. */
+    let pending: string | null = null
     if (!adapter) {
       rt.status = { linkId: rt.link.id, health: 'unconfigured', fetchedAt: Date.now(), reason: `no adapter for ${rt.link.service}` }
       this.deps.onPush()
@@ -138,8 +140,12 @@ export class ServiceEngine {
         rt.link = { ...rt.link, kind: status.repairedKind }
         this.deps.onLinkRepaired?.(rt.link)
       }
-      const label = transitionLabel(rt.link, prev, status)
-      if (label) this.deps.onTransition(rt.link, label)
+      // Computed here (it needs `prev` and `status`), but FIRED below — outside the try.
+      // The sink is the notify/board-rules path, i.e. other people's code: a throw from it
+      // used to be caught as though the FETCH had failed, which rewrote a perfectly good
+      // fresh status to 'stale' and doubled the backoff. The link then reported itself
+      // unhealthy and polled ever more slowly because a downstream listener misbehaved.
+      pending = transitionLabel(rt.link, prev, status)
     } catch (e) {
       rt.backoff = Math.min(rt.backoff ? rt.backoff * 2 : SERVICE_LINK_CADENCE_MS['5m'], MAX_BACKOFF_MS)
       const reason = (e instanceof Error ? e.message : 'fetch failed').slice(0, 120)
@@ -149,6 +155,15 @@ export class ServiceEngine {
         : { linkId: rt.link.id, health: 'error', fetchedAt: Date.now(), reason }
     } finally {
       clearTimeout(timer)
+    }
+    // The sink runs on its own, after the fetch's verdict is already settled, so its
+    // failure can only ever be its own — never a downgrade of a status we did fetch.
+    if (pending) {
+      try {
+        this.deps.onTransition(rt.link, pending)
+      } catch {
+        /* a listener's problem: the link stays exactly as healthy as its fetch made it */
+      }
     }
     this.deps.onPush()
   }
