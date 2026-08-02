@@ -138,7 +138,7 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | agent-web-consent/F2 | medium | `open` | `src/main/browser-dock.ts:674` | beginDriving (line 526) feeds only the volatile in-memory activity list, not recordTrail. |  |
 | agent-web-consent/F3 | medium | `open` | `src/main/browser-dock.ts:673` | MCP writes still record pane, so the asymmetry with mcp-endpoint.ts persists. |  |
 | agent-web-consent/F4 | medium | `open` | `src/main/browser-dock.ts:692` | Contract still documents 'confirmed' = performed after confirm (contracts/integrations/trail.ts:15). |  |
-| agent-web-consent/F5 | medium | `open` | `src/contracts/integrations/grant.ts:71` | 'bank' does catch bankofamerica.com; the gap is non-'bank'-named institutions. |  |
+| agent-web-consent/F5 | medium | `fixed` | `src/contracts/integrations/grant.ts:71` | 'bank' does catch bankofamerica.com; the gap is non-'bank'-named institutions. |  |
 | agent-web-consent/F6 | medium | `open` | `src/main/browser-dock.ts:675` | Window is narrow (page-initiated navigation committing between gate and inject) but it is exactly the boundary the per-origin grant holds. |  |
 | agent-web-consent/F7 | medium | `open` | `tests/unit/ (no grant-store/trail test) · grant-store.ts:63` | The 32-commit window added unit tests in other areas but none here. |  |
 | board-kanban/F1 | medium | `open` | `src/ui/features/board/launch.ts:155` | Held at the prior verifier's medium, not the original HIGH: notes with blank lines submitting fragment-by-fragment is common but harmless; injection needs hosti |  |
