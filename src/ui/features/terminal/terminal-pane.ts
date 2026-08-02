@@ -34,7 +34,8 @@ import {
 } from '../../core/terminal/font-port'
 import { windowsPtyFor } from '../../core/terminal/pty-emulation'
 import { registerPaneInstance, retirePaneInstance } from '../../core/terminal/pane-instance-port'
-import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady, markPaneSpawnSettled } from '../../core/terminal/liveness-port'
+import { markPaneLive, markPaneReattached, markPaneRemoteReady, markPaneSpawnSettled, retirePaneLife } from '../../core/terminal/liveness-port'
+import { freshPaneLife } from '../../core/terminal/pane-life'
 import { claimSpawnRun, forgetSpawnRun, reportSpawnRunOutcome } from '../../core/terminal/spawn-run-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
@@ -107,9 +108,10 @@ export class TerminalPane {
   /** Tears down the window-scoped drag listeners this pane installs (see mountFileDrop). */
   private readonly dropAbort = new AbortController()
   private devHandle: unknown
-  private liveMarked = false
-  private remoteReadyProbe = ''
-  private remoteReadyMarked = false
+  /** Everything that belongs to THIS session life, in one object so a restart resets all of
+   *  it at once (pane-life.ts). Four latches lived here as separate fields and exactly one
+   *  was re-armed on restart. */
+  private life = freshPaneLife()
   private scrollbar?: PaneScrollbarHandle
   private anchor?: PaneAnchorHandle
   private headerFit?: PaneHeaderFitHandle
@@ -145,10 +147,6 @@ export class TerminalPane {
    *  One cleanup tears all of it down when the pane id is retired. */
   private menuCleanup?: () => void
   private blocks?: BlockTracker
-  /** The one session-end capture emission (revision C) — exit and close race;
-   *  whichever fires first sends the ladder, the other finds this latched.
-   *  restart() re-arms it: a respawned pane is a new session life. */
-  private captureEmitted = false
   /** Blocks already captured by a PRIOR life's emission (the ladder spans lives —
    *  scrollback survives restart). Each emission captures only past this mark. */
   private capturedThrough = 0
@@ -310,9 +308,9 @@ export class TerminalPane {
     // covers arbitrary PTY chunk boundaries using the terminal parser itself.
     this.remoteReadyOsc = this.term.parser.registerOscHandler(777, (data) => {
       if (data !== 'mogging-remote-ready') return false
-      if (!this.remoteReadyMarked) {
-        this.remoteReadyMarked = true
-        this.remoteReadyProbe = ''
+      if (!this.life.remoteReadyMarked) {
+        this.life.remoteReadyMarked = true
+        this.life.remoteReadyProbe = ''
         markPaneRemoteReady(this.id)
       }
       return true
@@ -324,20 +322,20 @@ export class TerminalPane {
     this.disposers.push(
       terminalClient.onData((e) => {
         if (e.id === this.id && !this.disposed) {
-          if (!this.remoteReadyMarked) {
-            const probe = this.remoteReadyProbe + e.data
+          if (!this.life.remoteReadyMarked) {
+            const probe = this.life.remoteReadyProbe + e.data
             if (probe.includes(REMOTE_READY_OSC)) {
-              this.remoteReadyMarked = true
-              this.remoteReadyProbe = ''
+              this.life.remoteReadyMarked = true
+              this.life.remoteReadyProbe = ''
               markPaneRemoteReady(this.id)
             } else {
               // OSC sequences are ordinary PTY bytes and may be split at any
               // boundary. Preserve only the possible marker prefix.
-              this.remoteReadyProbe = probe.slice(-(REMOTE_READY_OSC.length - 1))
+              this.life.remoteReadyProbe = probe.slice(-(REMOTE_READY_OSC.length - 1))
             }
           }
-          if (!this.liveMarked) {
-            this.liveMarked = true
+          if (!this.life.liveMarked) {
+            this.life.liveMarked = true
             markPaneLive(this.id) // first PTY output — lineup launches may proceed
           }
           this.term.write(e.data)
@@ -540,7 +538,7 @@ export class TerminalPane {
         // persisted scrollback (daemon cold start, or the cross-version update
         // migration) — no agent lives in it, so the lineup must type the resume, or the
         // user gets painted history over a dead conversation. Neither may a DISPOSED pane:
-        // dispose() scrubs this id's marks (forgetPane), and a spawn landing after that
+        // dispose() scrubs this id's marks (retirePaneLife), and a spawn landing after that
         // would re-mark an id whose pane is gone — the NEXT pane to take it would take the
         // adopt branch on restore (agents/index.ts), labelling a session that isn't there
         // instead of typing its resume, and the agent would never come back.
@@ -548,7 +546,7 @@ export class TerminalPane {
         // The reattach verdict above is now DECIDED — release resume lineups waiting on
         // it (whenPaneSpawnSettled). Liveness cannot carry this: a reattach replays
         // scrollback before this reply lands, so "live" precedes "verdict known".
-        // Never after dispose: forgetPane already flushed the waiters for this id, and
+        // Never after dispose: retirePaneLife already flushed the waiters for this id, and
         // a late mark would leak onto the next pane to recycle it.
         if (!this.disposed) markPaneSpawnSettled(this.id)
         // The reattach/restore REPLAY arrives right after this: thousands of scrollback
@@ -591,7 +589,18 @@ export class TerminalPane {
   private restart(): void {
     if (!this.dead || this.disposed) return
     this.dead = false
-    this.captureEmitted = false // a restarted pane is a NEW session life (revision C)
+    // A restarted pane is a NEW session life. Both halves of that, together:
+    //
+    //   the port's marks — live / spawn-settled / remote-ready / reattached — described the
+    //   shell that just died. Left standing, a restarted REMOTE pane read as remote-READY
+    //   before SSH had authenticated, and as already-reattached, which suppresses the
+    //   relaunch a fresh shell needs.
+    //
+    //   this pane's own latches, which exist to make each of those marks fire ONCE. Clearing
+    //   only the port would leave them set and the marks would never be re-raised — "wrongly
+    //   ready" traded for "never ready".
+    retirePaneLife(this.id)
+    this.life = freshPaneLife()
     this.deadBanner?.remove()
     this.deadBanner = undefined
     if (this.stateDot && this.stateDot.dataset.state === 'exited') {
@@ -968,8 +977,8 @@ export class TerminalPane {
    * no completed blocks sends nothing.
    */
   private emitSessionCapture(): void {
-    if (this.captureEmitted) return
-    this.captureEmitted = true
+    if (this.life.captureEmitted) return
+    this.life.captureEmitted = true
     const ladder = this.blocks?.list() ?? []
     const blocks = ladder
       .slice(this.capturedThrough)
@@ -2282,7 +2291,7 @@ export class TerminalPane {
     }
     clearPaneState(this.id)
     clearPaneCwd(this.id) // stops the backend git watch for this pane (git feature unwatches)
-    forgetPane(this.id) // live/reattached marks die with the pane, not with the id
+    retirePaneLife(this.id) // marks describe a SHELL, not an id
     forgetSpawnRun(this.id) // armed builds/outcomes too — a recycled id must start clean
     if (this.selectionCopyTimer) clearTimeout(this.selectionCopyTimer) // a pane closed mid-drag must not copy after death
     this.dropAbort.abort() // drop the window-scoped drag listeners

@@ -84,8 +84,20 @@ export function wasPaneReattached(id: number): boolean {
   return reattached.has(id)
 }
 
-/** Pane closed for good — drop every mark so a recycled pane id starts clean. */
-export function forgetPane(id: number): void {
+/**
+ * Retire this pane id's SESSION LIFE — drop every mark so the next shell starts clean.
+ *
+ * Every signal here describes a SHELL, not an id: "produced output", "settled its spawn",
+ * "authenticated past SSH", "was already running when we asked". A pane id outlives its
+ * shells — `restart()` respawns a dead pane under the same id, and the daemon's `ensure()`
+ * respawns a removed one on reconnect — so a mark that survives into the next life is a
+ * statement about a process that no longer exists.
+ *
+ * Called from BOTH ends of a life: dispose() (the pane is gone) and restart() (a new shell
+ * under the same id). It was called only from dispose(), which is why a restarted remote pane
+ * read as remote-READY before its new SSH connection had authenticated.
+ */
+export function retirePaneLife(id: number): void {
   drop(live, id)
   drop(spawnSettled, id)
   drop(remoteReady, id)
