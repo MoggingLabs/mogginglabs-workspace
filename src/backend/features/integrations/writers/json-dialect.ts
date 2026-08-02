@@ -20,11 +20,27 @@ export function detectIndent(text: string): string {
  *  costs nothing but a better sentence. */
 const looksLikeJsonc = (text: string): boolean => /(^|\s)\/\/|\/\*|,\s*[}\]]/.test(text)
 
+/** A UTF-8 BOM, if the file opens with one. JSON.parse throws on it, and every Windows
+ *  tool that touches a config writes one — PowerShell's `Out-File`, Notepad, `>` redirection
+ *  in older shells. So a user who edited their own settings.json on Windows got an
+ *  unreadable config here, and (worse, because it is silent) isManagedScopedJson returned
+ *  FALSE for it, which reads as "this file is not ours to write" — the scoped tool-plan
+ *  config was simply abandoned. macOS and Linux never produce one: a parity gap in the
+ *  usual direction. The sibling dialect module has always handled this (agent-settings/
+ *  codecs/common.ts splitBom); this one never adopted it. */
+const splitBom = (text: string): { bom: string; body: string } =>
+  text.startsWith('﻿') ? { bom: '﻿', body: text.slice(1) } : { bom: '', body: text }
+
+/** The BOM a file opened with, so a rewrite gives it back. Dropping it would silently
+ *  re-encode the user's file, which is the same class of betrayal as eating their comments. */
+export const bomOf = (text: string | null): string => (text ? splitBom(text).bom : '')
+
 export function parseConfig(text: string | null): Record<string, unknown> {
   if (!text || !text.trim()) return {}
+  const { body } = splitBom(text)
   let parsed: unknown
   try {
-    parsed = JSON.parse(text) as unknown
+    parsed = JSON.parse(body) as unknown
   } catch (e) {
     // Gemini's settings.json officially TOLERATES JSONC. We refuse rather than
     // "fix" it: parsing and re-serializing would silently delete the user's
@@ -41,9 +57,11 @@ export function parseConfig(text: string | null): Record<string, unknown> {
 export function stringifyConfig(obj: Record<string, unknown>, originalText: string | null): string {
   const indent = originalText ? detectIndent(originalText) : '  '
   const out = JSON.stringify(obj, null, indent)
-  // Preserve the file's trailing-newline convention (absent file -> newline).
+  // Preserve the file's trailing-newline convention (absent file -> newline)...
   const trailing = originalText === null || originalText.endsWith('\n')
-  return trailing ? out + '\n' : out
+  // ...and its BOM, which is a convention of the same kind. We already refuse to rewrite a
+  // file rather than eat its comments; silently re-encoding it is the same betrayal.
+  return bomOf(originalText) + (trailing ? out + '\n' : out)
 }
 
 /** Read the managed entry (ours ONLY — marked) from a config object. */
