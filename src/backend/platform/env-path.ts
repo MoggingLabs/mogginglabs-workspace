@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { statSync, accessSync, lstatSync, constants as fsConstants } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 
@@ -359,6 +359,41 @@ export function mergeEnvFolding(
  * Deliberately a filesystem scan, not `where`/`which`: no subprocess, no shell, and it answers
  * the same question `execFile` will ask a moment later.
  */
+/**
+ * Can the OS run this path?
+ *
+ * `statSync(p).isFile()` asks a different question, and on Windows it gets the wrong answer
+ * for an entire class of program. A WindowsApps **App Execution Alias** — how winget,
+ * python, and every Store-delivered CLI appear on PATH — is a zero-length reparse point that
+ * `stat` cannot follow: it throws EACCES. Measured on this machine:
+ *
+ *     statSync(…\WindowsApps\winget.exe)  -> throws EACCES
+ *     accessSync(same, X_OK)              -> ok
+ *     execFile('winget', ['--version'])   -> v1.29.280
+ *
+ * So resolveOnPath answered null for a program that runs perfectly well, and one-click setup
+ * told every Windows user without Node that "winget isn't available on this PC" — on a
+ * machine where winget was installed and working.
+ *
+ * lstat (not stat) answers "is this a directory?" without following the reparse point;
+ * accessSync(X_OK) answers the executability question directly, which is also the right
+ * question on POSIX, where it checks the executable bit rather than mere existence. The
+ * directory test is required because a directory IS X_OK on POSIX (that is traversal).
+ */
+export function isRunnableEntry(candidate: string): boolean {
+  try {
+    if (lstatSync(candidate).isDirectory()) return false
+  } catch {
+    return false // nothing there
+  }
+  try {
+    accessSync(candidate, fsConstants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function resolveOnPath(bin: string, env: NodeJS.ProcessEnv = process.env): string | null {
   // PATHEXT FIRST on Windows, the bare name last. npm ships BOTH `npm` (a bash script, which
   // CreateProcess cannot run) and `npm.cmd` (which it can) in the same directory — and so does
@@ -371,7 +406,7 @@ export function resolveOnPath(bin: string, env: NodeJS.ProcessEnv = process.env)
     for (const ext of exts) {
       const candidate = join(dir, bin + ext)
       try {
-        if (!statSync(candidate).isFile()) continue
+        if (!isRunnableEntry(candidate)) continue
         return candidate
       } catch {
         /* missing or unreadable — keep looking */
