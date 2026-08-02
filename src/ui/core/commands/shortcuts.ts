@@ -1,18 +1,26 @@
 import { el } from '../../components'
+import { currentChordPlatform, hasModKey } from './chords'
 
 // The single source of truth for keyboard shortcuts (UX audit KB-01). The ?
 // overlay, the Settings › Shortcuts page, and the palette all read from here,
-// so the map can't drift from the real bindings. Keys use Ctrl (which the
-// handlers accept on every platform via ctrlKey/metaKey); ⌘ works too on macOS.
+// so the map can't drift from the real bindings. Keys use Ctrl on Windows/Linux and ⌘ on
+// macOS — isModKey below is the one place that decides which, and it is one or the other,
+// never both (accepting both made the WINDOWS key a modifier on Windows).
 
 /**
  * The platform modifier, in one place. Ctrl on Windows/Linux, ⌘ on macOS — and the ONLY
  * correct way to ask. Written out longhand at each call site, the idiom drifted: the Board
  * and the Browser each checked `e.ctrlKey` alone, so their shortcuts were dead on a Mac
  * (finding 28). A named function is harder to half-remember than a two-term boolean.
+ *
+ * It accepted BOTH, on every platform, and the header above said so as though it were the
+ * design. On Windows `metaKey` is the WINDOWS key — so Win+K, Win+, and Win+E fired our
+ * chords, and several of those are OS-reserved (Win+K is Cast), meaning one press produced
+ * our palette *and* Windows' own panel. "Ctrl works everywhere and ⌘ also works on macOS"
+ * is the intent; "either modifier, anywhere" is what was written.
  */
 export function isModKey(e: KeyboardEvent): boolean {
-  return e.ctrlKey || e.metaKey
+  return hasModKey(e, currentChordPlatform())
 }
 
 export interface ShortcutRow {
