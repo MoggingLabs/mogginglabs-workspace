@@ -61,6 +61,9 @@ export interface PaneWebglHost {
   onRendererChanged(): void
 }
 
+/** Two context losses further apart than this are unrelated events, not a thrash. */
+const GL_LOSS_FORGIVE_MS = 60_000
+
 export class PaneWebglManager {
   private webgl?: WebglAddon
   private glRetry?: ReturnType<typeof setTimeout>
@@ -68,6 +71,9 @@ export class PaneWebglManager {
   private glReleaseDebounce?: ReturnType<typeof setTimeout>
   private glQueued = false
   private glLosses = 0
+  /** When the last context loss landed — losses further apart than the forgive window are
+   *  unrelated events, not a thrash, and must not spend the same budget. */
+  private lastGlLossAt = 0
 
   constructor(private readonly host: PaneWebglHost) {}
 
@@ -158,6 +164,16 @@ export class PaneWebglManager {
       addon.onContextLoss(() => {
         // Evicted (context cap) or GPU reset: drop to the DOM renderer, then retry a few
         // times while visible — self-healing, never a frozen/blank pane.
+        // Forgive losses that are far enough apart to be unrelated. The budget exists to
+        // stop a THRASH — a pane losing its context repeatedly in seconds — not to retire
+        // a pane for the rest of the session. It only reset in onShow, so a pane that
+        // stays visible through four losses spread over hours (a driver reset, a cap
+        // eviction, a sleep/wake) sat on the DOM renderer permanently even after the GPU
+        // recovered, and nothing but hiding and re-showing its workspace brought it back.
+        // docs/05 promises a pane may degrade, never die; this is the "never die" half.
+        const now = Date.now()
+        if (now - this.lastGlLossAt > GL_LOSS_FORGIVE_MS) this.glLosses = 0
+        this.lastGlLossAt = now
         this.glLosses++
         // Renderer-health signal (counts only) — the wedge metric watched in the field.
         getTelemetry().captureEvent({ name: 'gl.context_lost', props: { losses: this.glLosses } })
