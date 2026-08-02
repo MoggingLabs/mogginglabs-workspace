@@ -1,4 +1,6 @@
 import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { delimiter, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   expandWindowsVars,
@@ -6,6 +8,7 @@ import {
   mergeEnv,
   parseRegPath,
   pathEntries,
+  addToProcessPath,
   planWindowsPathWrite,
   rcBlock,
   type RunOutcome
@@ -170,11 +173,33 @@ describe('rcBlock', () => {
     const block = rcBlock(['/home/me/.npm-global/bin'], 'posix')
     expect(block.startsWith('# >>> MoggingLabs Workspace PATH >>>')).toBe(true)
     expect(block.trimEnd().endsWith('# <<< MoggingLabs Workspace PATH <<<')).toBe(true)
-    expect(block).toContain('export PATH="/home/me/.npm-global/bin":"$PATH"')
+    // APPENDS. These two rows pinned the PREPEND until 2026-08; a dir this app manages must
+    // not shadow a tool the user already had, which is the module's own stated law and what
+    // planWindowsPathWrite has always done. Flipped deliberately, not routed around.
+    expect(block).toContain('export PATH="$PATH":"/home/me/.npm-global/bin"')
+    expect(block, 'a managed dir must never win over the user\x27s own').not.toContain(
+      'export PATH="/home/me/.npm-global/bin":"$PATH"'
+    )
   })
 
-  it('speaks fish in a fish rc', () => {
-    expect(rcBlock(['/opt/x/bin'], 'fish')).toContain('fish_add_path -g "/opt/x/bin"')
+  it('speaks fish in a fish rc, and appends there too', () => {
+    const block = rcBlock(['/opt/x/bin'], 'fish')
+    expect(block).toContain('fish_add_path -g -a "/opt/x/bin"')
+    expect(block, '-g alone prepends').not.toContain('fish_add_path -g "/opt/x/bin"')
+  })
+
+  it('puts the new dir LAST on both platforms — the parity that made this a bug', () => {
+    const posix = rcBlock(['/opt/x/bin'], 'posix')
+    expect(posix.indexOf('"$PATH"'), '$PATH comes first, the new dir after it').toBeLessThan(
+      posix.indexOf('"/opt/x/bin"')
+    )
+    // Windows has always appended. That is what made the POSIX prepend a PARITY bug rather
+    // than a preference, and it is why both are asserted in one place.
+    const existing = ran('HKCU\\Environment\r\n    Path    REG_SZ    C:\\user\\bin\r\n')
+    const plan = planWindowsPathWrite(parseRegPath(existing), 'absent', ['C:\\app\\bin'])
+    expect(plan.action).toBe('write')
+    if (plan.action !== 'write') return
+    expect(plan.value.indexOf('C:\\user\\bin')).toBeLessThan(plan.value.indexOf('C:\\app\\bin'))
   })
 
   it('quotes a path containing spaces', () => {
@@ -194,5 +219,79 @@ describe('loginRcFile', () => {
   it('falls back to .profile for an unknown shell rather than guessing wrong', () => {
     expect(loginRcFile('/usr/bin/nu', '/home/me').file).toBe(join('/home/me', '.profile'))
     expect(loginRcFile(undefined, '/home/me').file).toBe(join('/home/me', '.profile'))
+  })
+})
+
+describe('addToProcessPath clears BOTH caches', () => {
+  // A refresh already in flight snapshotted process.env.PATH BEFORE this dir was added, and
+  // applyLivePathToProcess assigns that whole snapshot back when it resolves — silently
+  // dropping the dir a setup step just created. Clearing only `cached` left that window open,
+  // and a setup run is exactly when both happen at once.
+  //
+  // Asserted over the source: `inFlight` is module-private and the real refresh spawns
+  // reg.exe / $SHELL, which a unit test must not do.
+  const src = readFileSync(resolve(import.meta.dirname, '../../src/backend/platform/env-path.ts'), 'utf8')
+  const body = (() => {
+    const at = src.indexOf('export function addToProcessPath(')
+    expect(at, 'addToProcessPath not found').toBeGreaterThan(-1)
+    return src.slice(at, src.indexOf('\n}', at)).replace(/^\s*\/\/.*$/gm, '')
+  })()
+
+  it('invalidates the settled union', () => {
+    expect(body).toMatch(/cached = null/)
+  })
+
+  it('invalidates the refresh already in flight', () => {
+    expect(body, 'a refresh started before this call will overwrite PATH with its stale snapshot').toMatch(
+      /inFlight = null/
+    )
+  })
+
+  it('actually adds the dir, and reports whether it did', () => {
+    const before = process.env.PATH
+    try {
+      process.env.PATH = ['/one', '/two'].join(delimiter)
+      expect(addToProcessPath('/three')).toBe(true)
+      expect(process.env.PATH?.split(delimiter)).toEqual(['/one', '/two', '/three'])
+      expect(addToProcessPath('/three'), 'already there — nothing to report').toBe(false)
+    } finally {
+      process.env.PATH = before
+    }
+  })
+
+  it('appends rather than prepends, so a managed dir cannot shadow the user’s', () => {
+    const before = process.env.PATH
+    try {
+      process.env.PATH = '/user/bin'
+      addToProcessPath('/app/bin')
+      expect(process.env.PATH?.split(delimiter)).toEqual(['/user/bin', '/app/bin'])
+    } finally {
+      process.env.PATH = before
+    }
+  })
+})
+
+describe('persistPosix reports what it WROTE, not what it was asked for', () => {
+  // `added` fed the setup UI's "…and your own terminals will see it too". Returning
+  // [...wanted] unconditionally printed that over a write that never happened — the caller
+  // has no other signal, and PersistPathResult.error is read nowhere in the repo.
+  const src = readFileSync(resolve(import.meta.dirname, '../../src/backend/platform/env-path.ts'), 'utf8')
+  const body = (() => {
+    const at = src.indexOf('async function persistPosix(')
+    expect(at, 'persistPosix not found').toBeGreaterThan(-1)
+    return src.slice(at, src.indexOf('\n}', at))
+  })()
+
+  it('returns an empty added[] when the file already said it', () => {
+    expect(body).toMatch(/if \(next === body\)[\s\S]{0,400}?added: \[\]/)
+  })
+
+  it('only claims the dirs on a real write', () => {
+    const claim = body.slice(body.indexOf('writeFileSync(file, next'))
+    expect(claim).toContain('added: [...wanted]')
+    expect(
+      body.slice(0, body.indexOf('if (next === body)')),
+      'nothing may claim added[] before the no-op check'
+    ).not.toContain('added: [...wanted]')
   })
 })

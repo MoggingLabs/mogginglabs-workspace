@@ -304,7 +304,12 @@ export function addToProcessPath(dir: string): boolean {
   const current = pathEntries(process.env.PATH)
   if (current.some((entry) => fold(entry) === fold(dir))) return false
   process.env.PATH = [...current, dir].join(delimiter)
-  cached = null // the cached union is stale the instant the process PATH moves
+  // BOTH caches. `cached` is the settled union; `inFlight` is a refresh that snapshotted
+  // process.env.PATH BEFORE this line ran and will assign its whole snapshot back when it
+  // resolves — silently dropping the dir a setup step just created. Clearing only `cached`
+  // left that window open, which is exactly when setup steps run.
+  cached = null
+  inFlight = null
   return true
 }
 
@@ -538,8 +543,11 @@ const BLOCK_CLOSE = '# <<< MoggingLabs Workspace PATH <<<'
 /** The managed block, rebuilt whole each time — so this is idempotent no matter how often
  *  a setup runs, and a user who deletes the block gets it back rather than a second copy. */
 export function rcBlock(dirs: readonly string[], flavour: 'posix' | 'fish'): string {
+  // APPEND, on both platforms. A prepend lets a dir this app manages SHADOW a tool the user
+  // already had — the opposite of the module's stated law, and the opposite of what
+  // planWindowsPathWrite does. `fish_add_path -g -a` is fish's append.
   const lines = dirs.map((dir) =>
-    flavour === 'fish' ? `fish_add_path -g ${JSON.stringify(dir)}` : `export PATH=${JSON.stringify(dir)}:"$PATH"`
+    flavour === 'fish' ? `fish_add_path -g -a ${JSON.stringify(dir)}` : `export PATH="$PATH":${JSON.stringify(dir)}`
   )
   return [BLOCK_OPEN, '# Added so the CLIs this app installed are on your PATH. Safe to delete.', ...lines, BLOCK_CLOSE].join('\n')
 }
@@ -563,7 +571,12 @@ async function persistPosix(wanted: readonly string[]): Promise<PersistPathResul
       start >= 0 && end > start
         ? body.slice(0, start) + block + body.slice(end + BLOCK_CLOSE.length)
         : `${body.replace(/\n*$/, '')}\n\n${block}\n`
-    if (next !== body) writeFileSync(file, next, 'utf8')
+    if (next === body) {
+      // Nothing changed on disk. Reporting `added` here is how "your own terminals will see
+      // it too" got printed over a write that never happened — the caller has no other signal.
+      return { ok: true, added: [], target: file }
+    }
+    writeFileSync(file, next, 'utf8')
     return { ok: true, added: [...wanted], target: file }
   } catch (err) {
     return { ok: false, added: [], error: err instanceof Error ? err.message : String(err) }
