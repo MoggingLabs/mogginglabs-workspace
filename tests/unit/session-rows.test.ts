@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PersistedPane } from '@contracts'
+import { REMOTE_READY_OSC } from '@contracts'
 import {
   PERSISTED_SCROLLBACK_CHARS,
   paneToRow,
@@ -73,5 +74,53 @@ describe('session pane row mapping', () => {
     const row = paneToRow({ ...LOCAL, scrollback: long })
     expect(row.scrollback.length).toBe(PERSISTED_SCROLLBACK_CHARS)
     expect(row.scrollback.endsWith('x')).toBe(true)
+  })
+})
+
+describe('the remote-readiness marker never rides in persisted history', () => {
+  // REMOTE_READY_OSC is how a remote shell says "I am past SSH auth". It is ordinary pty
+  // output, so it lands in scrollback like anything else — and on a COLD-START restore the
+  // replay feeds it back through the pane's parser, which declares a brand-new,
+  // unauthenticated ssh session ready. The resume lineup then types into a password prompt.
+  //
+  // The audit's recommended fix was the replayCopyGraceUntil window. That does not work here:
+  // it arms in the spawn `.then()`, which runs AFTER the replay has already fired, and the
+  // adjacent scrub only runs for replay === 'reset', which a cold-start restore is not.
+  const withMarker = `some history\n${REMOTE_READY_OSC}more history\n`
+
+  it('is stripped on the way OUT', () => {
+    const row = paneToRow({ ...LOCAL, scrollback: withMarker })
+    expect(row.scrollback).not.toContain(REMOTE_READY_OSC)
+    expect(row.scrollback, 'only the marker goes').toContain('more history')
+  })
+
+  // A write-side fix alone protects nobody who is upgrading: every row written by every
+  // previous build already holds the marker.
+  it('is stripped on the way IN, for rows older builds wrote', () => {
+    const pane = rowToPane({ ...paneToRow(LOCAL), scrollback: withMarker })
+    expect(pane, 'the row must still map to a pane').toBeTruthy()
+    expect(pane?.scrollback).not.toContain(REMOTE_READY_OSC)
+    expect(pane?.scrollback).toContain('more history')
+  })
+
+  it('strips every occurrence, not just the first', () => {
+    const many = `a${REMOTE_READY_OSC}b${REMOTE_READY_OSC}c`
+    expect(rowToPane({ ...paneToRow(LOCAL), scrollback: many })?.scrollback).toBe('abc')
+  })
+
+  it('leaves ordinary history untouched', () => {
+    const plain = 'no markers here\n\x1b[32mgreen\x1b[m\n'
+    expect(rowToPane({ ...paneToRow(LOCAL), scrollback: plain })?.scrollback).toBe(plain)
+  })
+
+  it('strips BEFORE the length cap, so markers do not evict real history', () => {
+    // Real history that FITS the cap on its own, padded with markers until it does not. Cap
+    // first and the head of the history is trimmed to make room for bytes that are about to be
+    // deleted anyway; strip first and all of it survives.
+    const real = 'H'.repeat(PERSISTED_SCROLLBACK_CHARS - 10)
+    const marker = REMOTE_READY_OSC.repeat(200)
+    const row = paneToRow({ ...LOCAL, scrollback: marker + real })
+    expect(row.scrollback).not.toContain(REMOTE_READY_OSC)
+    expect(row.scrollback.length, 'the cap must count history, not markers').toBe(real.length)
   })
 })

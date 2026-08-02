@@ -18,8 +18,8 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | | count |
 | --- | --- |
 | rows | 497 |
-| open | 356 |
-| fixed | 134 |
+| open | 355 |
+| fixed | 135 |
 | invalid | 7 |
 | deferred | 0 |
 
@@ -106,7 +106,7 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | pty-daemon/F4 | high | `open` | `src/pty-daemon/transport.ts:227` | Lines drifted (222->224/227) from the v11 gen-gate blocks. The v11 optional gen field gates staleness, not identity — it does not close forged sibling notify or |  |
 | qa-gates-integrity/F1 | high | `fixed` | `scripts/check-sweep-log.sh:10 · .github/workflows/ci.yml:305,389` | FIXED - the SAME defect as ci-workflows/F1, filed twice against the same file and lines. Closed by the same change (75a1a0e). Recorded as a duplicate rather than silently left open, so the ledger does not show one green and one red over identical code. |  |
 | remotes-ssh/F1 | high | `fixed` | `src/ui/features/terminal/terminal-pane.ts:591-606` | FIXED restart() now calls retirePaneLife(this.id) (was forgetPane, called only from dispose) AND this.life = freshPaneLife(). Root cause: marks describe a SHELL, not a pane id, and a pane id outlives its shells. Clearing the port alone would have traded 'wrongly ready' for 'never ready' because liveMarked/remoteReadyMarked latch each mark to fire once and were never re-armed — new src/ui/core/terminal/pane-life.ts groups all four per-life latches so a new one resets by construction. tests/unit/pane-life.test.ts (10 cases incl. source-structure assertions on restart/dispose); 5 break proofs. |  |
-| remotes-ssh/F2 | high | `open` | `src/pty-daemon/session.ts:480 (seed); :901 (snapshot)` | Slightly likelier now: a cold-start restore spawns at the persisted grid and the resume is deferred until dims are confirmed (deferLaunch/confirmDims) — it fire |  |
+| remotes-ssh/F2 | high | `fixed` | `src/pty-daemon/session.ts:480 (seed); :901 (snapshot)` | FIXED REMOTE_READY_OSC is stripped from persisted scrollback on BOTH sides of the row mapping. It is a LIVE signal that a remote shell is past SSH auth, but it is ordinary pty output so it lands in scrollback like anything else - and on a cold-start restore the replay feeds it back through the pane parser, declaring a brand-new UNAUTHENTICATED ssh session ready. The resume lineup then types into a password prompt. Stripped on the way OUT so it stops being persisted, and on the way IN because every row written by every previous build already holds it - a write-side fix alone protects nobody who is upgrading. Stripped BEFORE the length cap so markers cannot evict real history. The audit recommended the replayCopyGraceUntil window instead; that does not work here - it arms in the spawn .then() which runs AFTER the replay has fired, and the adjacent scrub only runs for replay===reset, which a cold-start restore is not. tests/unit/session-rows.test.ts; break proofs EJ-EM. |  |
 | review-merge-gate/F1 | high | `fixed` | `src/backend/features/review/redact.ts:41` | File unchanged since baseline (git diff c026463..HEAD empty). Real credentials still reach the renderer and the copy-hunks clipboard (ui/features/review/index.t |  |
 | security-hardening/F1 | high | `fixed` | `src/main/libfetch.ts:29` | Delta touched none of libfetch.ts, origins.ts, check-originpin.mjs. Severity unchanged: fetched text lands in agent context; ADR 0016 §6 forbids env-readable or |  |
 | service-adapters-github/F1 | high | `open` | `src/backend/features/integrations/services/engine.ts:163` | Untouched by the delta (no diff in engine.ts/services.ts since c026463); severity unchanged. |  |
