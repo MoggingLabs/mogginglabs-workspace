@@ -27,7 +27,7 @@ export interface CwdReportResult {
  * is user-facing identity. Remote OSC paths use `mustExist:false` on the local host. */
 export function normalizePaneCwd(
   raw: unknown,
-  opts: { mustExist: boolean; platform?: NodeJS.Platform } = { mustExist: true }
+  opts: { mustExist: boolean; platform?: NodeJS.Platform; rejectUnc?: boolean } = { mustExist: true }
 ): string | null {
   if (
     typeof raw !== 'string' ||
@@ -38,6 +38,13 @@ export function normalizePaneCwd(
   const platform = opts.platform ?? process.platform
   const flavor = platform === 'win32' ? path.win32 : path.posix
   if (!flavor.isAbsolute(raw)) return null
+  // A UNC path is a NETWORK request, and it is made by the existence probe below — before
+  // any caller has decided the path is acceptable. For a path the local machine reported
+  // about itself that is fine and normal. For one that arrived from OUTSIDE the machine
+  // (a deep link is a URL anyone can hand the OS) it means an attacker chooses a host we
+  // connect to, and on Windows that connection can carry credentials. Callers holding
+  // untrusted input pass rejectUnc and the probe never happens.
+  if (opts.rejectUnc && /^[\\/]{2}/.test(raw)) return null
   const normalized = flavor.normalize(raw)
   if (!normalized || normalized.length > PANE_CWD_MAX) return null
   const root = flavor.parse(normalized).root
@@ -50,6 +57,20 @@ export function normalizePaneCwd(
     }
   }
   return canonical
+}
+
+/**
+ * The normalizer for a path that came from OUTSIDE this machine — a `mogging://` URL, which
+ * is a string the OS will hand us on behalf of anyone who can get a link clicked.
+ *
+ * The deep-link parser used to accept `cwd` as-is (`return cwd ? cwd : null`) and the
+ * control payload checked only `length > 1024`. So a relative path, a NUL byte, a
+ * 40k-character string and `\\attacker\share` all rode straight through to a workspace
+ * open — while nine other call sites in this codebase already ran the real normalizer.
+ * This is that normalizer, with the network probe refused.
+ */
+export function normalizeUntrustedCwd(raw: unknown): string | null {
+  return normalizePaneCwd(raw, { mustExist: true, rejectUnc: true })
 }
 
 /** Remote terminals are explicitly POSIX-only; local host path flavor is irrelevant. */
