@@ -13,9 +13,15 @@ const PATTERNS: RegExp[] = [
   // AWS access key id + GCP API key
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\bAIza[0-9A-Za-z_-]{30,}\b/g,
-  // GitHub tokens (classic + fine-grained), OpenAI/Anthropic-style, Slack
-  /\bghp_[A-Za-z0-9]{20,}\b/g,
+  // GitHub tokens. `ghp_` is the personal one; the OAuth/user/server/refresh siblings
+  // (gho_/ghu_/ghs_/ghr_) ride the same shape and were simply never listed — an
+  // incomplete enumeration, not a missing idea. `gho_` in particular is what a `gh auth
+  // login` writes, which is the token an agent working in a repo is most likely to touch.
+  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+  // npm (`npm_` + 36 chars, what lands in .npmrc as _authToken) and GitLab PATs.
+  /\bnpm_[A-Za-z0-9]{36}\b/g,
+  /\bglpat-[A-Za-z0-9_-]{20,}\b/g,
   /\bsk-[A-Za-z0-9_-]{16,}\b/g,
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
   // JWT-shaped triplets
@@ -38,7 +44,13 @@ const KV_KEYWORDS = new Set(['password', 'passwd', 'pwd', 'secret', 'token', 'ap
 // example a generated 2 MiB run of `x`) from being reconsidered from every character while
 // the engine searches for a separator. Review must stay responsive even for a patch that is
 // ultimately rejected as oversized.
-const KV = /\b([A-Za-z][A-Za-z0-9_.-]{0,127})((?:["']?)\s*[:=]\s*)(?:(["'])((?:(?!\3).){4,}?)\3|([^\s"'`;,)}\]]{4,}))/g
+// The leading class admits `_` for one specific reason: npm writes its credential as
+// `//registry.npmjs.org/:_authToken=<token>`, and `_` is a WORD character — so `\b([A-Za-z]`
+// could not match a leading-underscore key at any position, and .npmrc, one of the most
+// common secret files an agent touches, walked through the scrub untouched. `:` before the
+// `_` is a non-word char, so the boundary holds at the underscore. Segment matching in
+// keyLooksSecret already reads `_authToken` as auth|token, so the keyword gate is unchanged.
+const KV = /\b([A-Za-z_][A-Za-z0-9_.-]{0,127})((?:["']?)\s*[:=]\s*)(?:(["'])((?:(?!\3).){4,}?)\3|([^\s"'`;,)}\]]{4,}))/g
 
 function keyLooksSecret(key: string): boolean {
   // Split on separators and camelCase boundaries; also try joining adjacent

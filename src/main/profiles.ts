@@ -115,7 +115,12 @@ export function sanitizeProfile(raw: unknown): AgentProfile | null {
     if (!ENV_NAME.test(k)) return null
     if (typeof v !== 'string' || !v || v.length > 512) return null
     if (/["`\r\n$]/.test(v)) return null // keeps shell quoting trivial + injection-free
-    if (redactSecrets(v).redactions > 0) return null // THE deny-list: secret-shaped -> refused
+    // THE deny-list: secret-shaped -> refused. Scanned as the PAIR, not the value alone.
+    // Half the scrub's power is in the key: `ANTHROPIC_API_KEY=<40 ordinary chars>` matches
+    // no token shape on its own, so scanning `v` by itself let exactly the credentials this
+    // is here to stop walk into plaintext SQLite. settings-store.ts:52 already feeds the
+    // pair for the same reason.
+    if (redactSecrets(`${k}=${v}`).redactions > 0) return null
     env[k] = v
   }
   return { id: p.id, name: p.name.trim(), provider: p.provider, email, env, order }
