@@ -1,4 +1,6 @@
 import * as Sentry from '@sentry/electron/main'
+import { homedir } from 'node:os'
+import { scrubBreadcrumb, scrubSentryEvent, type ScrubbableBreadcrumb, type ScrubbableEvent } from '@contracts'
 import type { Breadcrumb, Telemetry, TelemetryEvent, TelemetryProps } from '@contracts'
 
 interface SentryOpts {
@@ -28,12 +30,16 @@ export function createSentryTelemetry(opts: SentryOpts): Telemetry & { setEnable
         environment: opts.environment,
         release: opts.release,
         sendDefaultPii: false,
+        // ADR 0005 requires BOTH hooks. This one deleted three top-level fields and nothing
+        // else, and the other did not exist — so the SDK default console integration attached
+        // whatever the app had logged, and this repo logs absolute paths as a matter of course.
         beforeSend(event) {
-          const e = event as unknown as Record<string, unknown>
-          delete e.server_name // hostname
-          delete e.user
-          delete e.request // urls / headers / env
-          return event
+          return scrubSentryEvent(event as unknown as ScrubbableEvent, homedir()) as unknown as typeof event
+        },
+        // Renderer breadcrumbs arrive PRE-EMBEDDED in event.breadcrumbs[] and never reach this
+        // hook, which is why beforeSend walks them too.
+        beforeBreadcrumb(crumb) {
+          return scrubBreadcrumb(crumb as ScrubbableBreadcrumb, homedir()) as unknown as typeof crumb | null
         }
       })
     },

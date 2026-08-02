@@ -18,8 +18,8 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | | count |
 | --- | --- |
 | rows | 497 |
-| open | 358 |
-| fixed | 132 |
+| open | 356 |
+| fixed | 134 |
 | invalid | 7 |
 | deferred | 0 |
 
@@ -111,8 +111,8 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | security-hardening/F1 | high | `fixed` | `src/main/libfetch.ts:29` | Delta touched none of libfetch.ts, origins.ts, check-originpin.mjs. Severity unchanged: fetched text lands in agent context; ADR 0016 §6 forbids env-readable or |  |
 | service-adapters-github/F1 | high | `open` | `src/backend/features/integrations/services/engine.ts:163` | Untouched by the delta (no diff in engine.ts/services.ts since c026463); severity unchanged. |  |
 | telemetry/F1 | high | `fixed` | `src/main/telemetry.ts:38` | Unchanged. Renderer comment at telemetry.ts:53 asserts 'main routes to PostHog only while product analytics is consented' — main does no such check, which is wh |  |
-| telemetry/F2 | high | `open` | `src/main/sentry-telemetry.ts:31` | Unchanged. The delta widened exposure: one-click agent setup added agents/install.ts:74 captureError(op:'install-spawn') — spawn/ENOENT messages are exactly the |  |
-| telemetry/F3 | high | `open` | `src/main/sentry-telemetry.ts:26` | Unchanged, but the delta made it concrete: boot.ts:267 now console.warns '[env] PATH repaired — the launch environment was missing ' + dirs — a console breadcru |  |
+| telemetry/F2 | high | `fixed` | `src/main/sentry-telemetry.ts:31` | FIXED new src/contracts/observability/scrub.ts. beforeSend deleted three top-level fields (server_name, user, request) and nothing else, so absolute paths rode out in stack frames, extra, tags and the exception value. A home directory IS a username, and this repo logs absolute paths as a matter of course. scrubSentryEvent now rewrites every home path to ~ ANYWHERE in the event rather than in fields someone remembered to list, matching either path separator and case-insensitively because Windows paths are. It does not mutate the event it was handed and survives a cyclic payload. Break proofs EE, EF, EH. |  |
+| telemetry/F3 | high | `fixed` | `src/main/sentry-telemetry.ts:26` | FIXED ADR 0005 requires BOTH beforeSend and beforeBreadcrumb and says console breadcrumbs must be dropped; beforeBreadcrumb did not exist in either process, so the SDK default console integration attached whatever the app had logged to every event. Both Sentry.init sites now set it. The subtlety that makes one hook insufficient: renderer breadcrumbs arrive PRE-EMBEDDED in event.breadcrumbs[] and never pass through main beforeBreadcrumb - so beforeSend walks them too, and the renderer sets its own hook because the console/debug DROP has to happen there or it does not happen for them at all. Path scrubbing stays in main, which is the process that knows the home directory. Break proofs ED, EG, EI. |  |
 | templates/F1 | high | `open` | `src/backend/features/workspace/settings-store.ts:898 (was :777); src/main/templates.ts:30` | File grew ~121 lines since baseline, but the 06b template block is byte-identical; only line numbers shifted. |  |
 | terminal-rendering/F1 | high | `fixed` | `src/ui/features/terminal/pane-anchor.ts:227` | The delta's mid-frame defer makes the yank land one frame later during TUI repaints but does not prevent it. Keyboard scrollback paging and shift-click history |  |
 | updater-distribution/F2 | high | `fixed` | `.github/workflows/release.yml:332` | Unchanged. Still the highest-impact item here: one dispatch re-run against an old tag repoints /releases/latest for every install; prerelease users downgrade. |  |

@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/electron/renderer'
+import { scrubBreadcrumb, type ScrubbableBreadcrumb } from '@contracts'
 import { NoopTelemetry, setTelemetry } from '@ui/core/telemetry'
 import { getBridge } from '@ui/core/ipc/bridge'
 import {
@@ -28,7 +29,16 @@ function buildAdapter(cfg: TelemetryRendererConfig): Telemetry {
   if (cfg.errorReporting && !sentryInited) {
     // Renderer init auto-forwards to main's SDK — no DSN needed here. Consent for the
     // whole pipeline is enforced in main (a disabled client sends nothing).
-    Sentry.init({ sendDefaultPii: false })
+    // The renderer has no homedir() — it is not Node. But its breadcrumbs are the ones that
+    // ride PRE-EMBEDDED into main event.breadcrumbs[] and never reach main beforeBreadcrumb,
+    // so the console/debug DROP has to happen here or it does not happen for them at all.
+    // Path scrubbing still lands in main, which knows the home directory.
+    Sentry.init({
+      sendDefaultPii: false,
+      beforeBreadcrumb(crumb) {
+        return scrubBreadcrumb(crumb as ScrubbableBreadcrumb, "") as unknown as typeof crumb | null
+      }
+    })
     sentryInited = true
   }
 
