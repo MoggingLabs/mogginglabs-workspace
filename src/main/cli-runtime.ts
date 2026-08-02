@@ -15,8 +15,14 @@ const SATELLITES = [
   // derive their runtime paths from lib/runtime-paths.mjs (the bin twin of
   // src/backend/platform/runtime-paths.ts), and mogging-mcp/-connection speak the daemon
   // via lib/endpoint-client.mjs.
+  //
+  // A file reachable by import from any entry below but MISSING here installs a CLI that
+  // dies with ERR_MODULE_NOT_FOUND on every invocation — and only from the installed copy,
+  // never from the repo, where the file is simply on disk. scripts/check-cli-satellites.mjs
+  // walks the real import graph and fails on both a missing file and a wrong order.
   join('lib', 'runtime-paths.mjs'),
   join('lib', 'endpoint-client.mjs'),
+  join('lib', 'cli-core.mjs'),
   'mogging.mjs',
   'mcp-catalog.json',
   // The connection bridge (ADR 0014): a CLI spawns this to reach a service the APP

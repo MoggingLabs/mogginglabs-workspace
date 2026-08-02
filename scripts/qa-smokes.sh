@@ -9,7 +9,7 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 209 gates: 34 static (AUDIT · LEDGER · VERDICT · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 175 app-boot
+# 211 gates: 36 static (AUDIT · LEDGER · VERDICT · SATELLITE · CLIGRAM · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 175 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -201,6 +201,15 @@ run_static LEDGER  node scripts/check-findings-ledger.mjs
 # measurement it bounds (`x === -1 || x <= budget`). Three of those shipped, including the
 # echo budget docs/07 says is never relaxed.
 run_static VERDICT node scripts/check-smoke-verdict.mjs
+# The installed CLI is assembled from a hand-written file list in src/main/cli-runtime.ts.
+# A helper reachable by import but missing from that list runs fine in the repo and dies with
+# ERR_MODULE_NOT_FOUND in every installed copy — a break that cannot be reproduced by running
+# what you just edited. This walks the real import graph instead.
+run_static SATELLITE node scripts/check-cli-satellites.mjs
+# The CLI's observable contract against the REAL binary: exit codes, which stream carries
+# which output, and that a half-written endpoint.json never becomes a node:net stack trace on
+# an agent's stderr. bin/ had no coverage of any kind.
+run_static CLIGRAM  node scripts/check-cli-grammar.mjs
 run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs

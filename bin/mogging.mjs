@@ -17,6 +17,7 @@ import { resolve } from 'node:path'
 import { closeSync, openSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs'
 import net from 'node:net'
 import { runFile } from './lib/runtime-paths.mjs'
+import { parseInvocation, splitTrailingFlags, takeLeadingOption, usageStream } from './lib/cli-core.mjs'
 
 // Keep in sync with DAEMON_PROTOCOL_VERSION in src/contracts/daemon/protocol.ts
 // (this file is plain Node — it cannot import the TS contract). It is BOTH the handshake
@@ -29,12 +30,17 @@ const PROTOCOL_VERSION = 11
 // mogging-dev:// instead of run/v4 and mogging://, so dev and an installed release never answer
 // each other's commands. Inside a dev pane MOGGING_CHANNEL=dev is inherited from the daemon, so
 // hooks and `mogging notify` target the right app with no flags; outside one, pass --dev.
-const CHANNEL = process.argv.includes('--dev') || process.env.MOGGING_CHANNEL === 'dev' ? 'dev' : 'prod'
+// The whole grammar is parsed once, in lib/cli-core.mjs. --dev is consumed only from the
+// LEADING flag region: it used to be filtered out of the entire argv, so `mogging send 1 --dev`
+// could never type that literal into a pane.
+const INVOCATION = parseInvocation(process.argv.slice(2))
+const CHANNEL = INVOCATION.dev || process.env.MOGGING_CHANNEL === 'dev' ? 'dev' : 'prod'
 const RUN_SEGMENT = (CHANNEL === 'dev' ? 'dev-v' : 'v') + PROTOCOL_VERSION
 const SCHEME = CHANNEL === 'dev' ? 'mogging-dev' : 'mogging'
 
-const argv = process.argv.slice(2).filter((a) => a !== '--dev')
-const cmd = argv[0]
+// Shaped exactly as the dispatch below expects: the verb at [0], its payload after it.
+const argv = INVOCATION.kind === 'verb' ? [INVOCATION.verb, ...INVOCATION.args] : (INVOCATION.args ?? [])
+const cmd = INVOCATION.kind === 'verb' ? INVOCATION.verb : undefined
 
 if (cmd === 'usage') runUsage(argv.slice(1))
 else if (cmd === 'map') runMap(argv.slice(1))
@@ -58,11 +64,21 @@ else if (cmd === 'focus') runControl({ verb: 'focus', paneId: Number(argv[1]) },
 else if (cmd === 'expand')
   runControl({ verb: 'expand', paneId: Number(argv[1]), mode: argv[2] && !argv[2].startsWith('--') ? argv[2] : 'full' }, argv)
 else if (cmd === 'close-pane') runControl({ verb: 'close-pane', paneId: Number(argv[1]) }, argv)
-else if (cmd === '--help' || cmd === '-h' || cmd === 'help') usage(0)
-else runOpen(argv)
+else if (INVOCATION.kind === 'help') usage(0)
+else if (INVOCATION.kind === 'open') runOpen(argv)
+else if (INVOCATION.kind === 'unknown') {
+  // A typo is not a directory. This used to fall through to runOpen, which cold-started the
+  // GUI on a folder that does not exist and exited 0 — so a script could not tell a mistyped
+  // command from a successful one.
+  process.stderr.write('mogging: unknown command `' + INVOCATION.verb + '`\n')
+  usage(2)
+} else usage(2)
 
 function usage(code) {
-  process.stderr.write(
+  // Help that was ASKED for is stdout; only an error is stderr. `mogging --help | less`
+  // showed nothing because both went to stderr.
+  const write = (s) => (usageStream(code) === 'stdout' ? process.stdout.write(s) : process.stderr.write(s))
+  write(
     'usage: mogging [<dir>] | notify --event <e> | cwd [path] | list | send <pane> <text...> [--no-enter]\n' +
       '       mogging send-key <pane> <key> | capture <pane> [--lines N]\n' +
       '       mogging open <dir> [--panes N] | layout <N> | focus <pane>\n' +
@@ -76,8 +92,10 @@ function usage(code) {
       '       mogging usage set-key --provider <id> --stdin | usage clear-key --provider <id>\n' +
       '       mogging map [--budget N]   ranked repo map (signatures only) for the current checkout\n' +
       '       mogging recall [--limit N] <task…>   team memories ranked against a task (pre-brief a pane)\n' +
-      '       any verb: --dev   target a repo-checkout (dev-channel) app instead of the installed\n' +
-      '                 release. Inside dev panes MOGGING_CHANNEL=dev is inherited — no flag needed.\n'
+      '       mogging --dev <verb> …   target a repo-checkout (dev-channel) app instead of the\n' +
+      '                 installed release. Leading position only, so a later --dev stays in the\n' +
+      '                 payload (`mogging send 1 --dev` types the literal). Inside dev panes\n' +
+      '                 MOGGING_CHANNEL=dev is inherited — no flag needed.\n'
   )
   process.exit(code)
 }
@@ -110,10 +128,8 @@ function appEndpointFilePath() {
  *  verb can make several). Same handshake the MCP server uses; the token
  *  never leaves this process except in the hello frame. */
 function withApp(onReady, { timeoutMs = 15000, label = 'usage' } = {}) {
-  let ep
-  try {
-    ep = JSON.parse(readFileSync(appEndpointFilePath(), 'utf8'))
-  } catch {
+  const ep = readEndpointFile(appEndpointFilePath())
+  if (!ep) {
     process.stderr.write(`mogging ${label}: app not running (no app endpoint found)\n`)
     process.exit(3)
   }
@@ -635,14 +651,12 @@ function runMail(args) {
 }
 
 function runMailSend(args) {
+  // Leading region only — a "--to" inside the message body is body, not an address.
+  const { value, rest } = takeLeadingOption(args, '--to')
   let to = 'all'
-  const ti = args.indexOf('--to')
-  if (ti >= 0) {
-    to = args[ti + 1]
-    if (!to) usage(2)
-    args = args.slice(0, ti).concat(args.slice(ti + 2))
-  }
-  const body = args.join(' ')
+  if (value !== undefined) to = value
+  else if (args[0] === '--to') usage(2)
+  const body = rest.join(' ')
   if (!body) usage(2)
   // Inside a pane, mail is sent AS that pane and must carry its token (the daemon
   // refuses an unbound pane sender). Outside one, '0' is the human — no token exists.
@@ -722,12 +736,8 @@ function runRole(args) {
  *  refused. The app publishes browser-control.json for as long as it runs (6/05b) and unlinks it
  *  on quit; a crash can leave the file, so connect too — a dead pipe/socket answers instantly. */
 function appRunning(timeoutMs = 1500) {
-  let ep
-  try {
-    ep = JSON.parse(readFileSync(appEndpointFilePath(), 'utf8'))
-  } catch {
-    return Promise.resolve(false)
-  }
+  const ep = readEndpointFile(appEndpointFilePath())
+  if (!ep) return Promise.resolve(false)
   return new Promise((res) => {
     const sock = net.connect(ep.address)
     const done = (alive) => {
@@ -802,6 +812,20 @@ async function runControlOpen(args) {
 
 function runOpen(args) {
   const dir = resolve(args[0] ?? '.')
+  // A directory that is not there is an ERROR, not a workspace. Unchecked, this printed
+  // "opening workspace for <dir>" and exited 0 while the app cold-started on nothing — so a
+  // typo'd path and a real one were indistinguishable to any script, and the only report of
+  // the mistake arrived in the GUI, minutes later.
+  let st = null
+  try {
+    st = statSync(dir)
+  } catch {
+    st = null
+  }
+  if (!st?.isDirectory()) {
+    process.stderr.write(`mogging: not a directory: ${dir}\n`)
+    process.exit(2)
+  }
   const url = `${SCHEME}://open?cwd=${encodeURIComponent(dir)}`
   const platform = process.platform
   if (platform === 'win32') {
@@ -823,12 +847,33 @@ function endpointFilePath() {
   return runFile(RUN_SEGMENT, 'endpoint.json')
 }
 
-function readEndpoint() {
+/**
+ * Read an endpoint file, or null.
+ *
+ * `JSON.parse` succeeding says the bytes are JSON — NOT that they are an endpoint. A file
+ * half-written by a crashing daemon, or left by a different protocol version, parses fine and
+ * then `net.connect(undefined)` throws SYNCHRONOUSLY, before any socket exists to carry it:
+ * past every `sock.on('error')` handler, out as a raw node:net stack trace, from a
+ * `mogging notify` hook whose entire contract is that it never fails its agent.
+ *
+ * Five sites read an endpoint and dereference `.address`/`.token`; exactly one checked the
+ * shape. The check was right — it was just in a leaf instead of at the read.
+ */
+function validEndpoint(ep) {
+  return !!ep && typeof ep.address === 'string' && ep.address !== '' && typeof ep.token === 'string'
+}
+
+function readEndpointFile(path) {
   try {
-    return JSON.parse(readFileSync(endpointFilePath(), 'utf8'))
+    const ep = JSON.parse(readFileSync(path, 'utf8'))
+    return validEndpoint(ep) ? ep : null
   } catch {
     return null
   }
+}
+
+function readEndpoint() {
+  return readEndpointFile(endpointFilePath())
 }
 
 /**
@@ -975,15 +1020,8 @@ function runCwd(args) {
   // Pane-scoped cwd must not discover an arbitrary same-user daemon through the well-known
   // path: an in-process pane intentionally has no endpoint, while a detached pane always gets
   // its exact endpoint file injected. Absence here selects OSC on this PTY, not another daemon.
-  let ep
-  try {
-    ep = process.env.MOGGING_DAEMON_ENDPOINT
-      ? JSON.parse(readFileSync(process.env.MOGGING_DAEMON_ENDPOINT, 'utf8'))
-      : null
-  } catch {
-    ep = null
-  }
-  if (!ep || typeof ep.address !== 'string' || typeof ep.token !== 'string') {
+  const ep = process.env.MOGGING_DAEMON_ENDPOINT ? readEndpointFile(process.env.MOGGING_DAEMON_ENDPOINT) : null
+  if (!ep) {
     fallback()
     return
   }
@@ -1111,8 +1149,9 @@ function runList() {
 // --- mogging send <pane> <text...> [--no-enter] ---------------------------------------------------
 
 function runSend(args) {
-  const noEnter = args.includes('--no-enter')
-  const rest = args.filter((a) => a !== '--no-enter')
+  // Trailing region only — `--no-enter` inside the text is text (cli-core.mjs).
+  const { found, rest } = splitTrailingFlags(args, ['--no-enter'])
+  const noEnter = found.has('--no-enter')
   const pane = rest[0]
   const text = rest.slice(1).join(' ')
   if (!pane || !text) usage(2)
@@ -1338,10 +1377,8 @@ async function runNotify(args) {
     }
   }
 
-  let ep
-  try {
-    ep = JSON.parse(readFileSync(endpointFile, 'utf8'))
-  } catch {
+  const ep = readEndpointFile(endpointFile)
+  if (!ep) {
     bail('cannot read the daemon endpoint file; skipping')
     return
   }
