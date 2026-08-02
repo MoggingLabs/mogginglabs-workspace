@@ -5,7 +5,7 @@
 // forces the in-proc backend, and any daemon start failure falls back to it (boot.ts).
 import { ipcMain, type WebContents } from 'electron'
 import * as path from 'node:path'
-import { TerminalChannels, LedgerChannels, GateChannels, PANE_CWD_MAX, normalizeRemoteConnection } from '@contracts'
+import { TerminalChannels, LedgerChannels, GateChannels, PANE_CWD_MAX, normalizeRemoteConnection, stampGen } from '@contracts'
 import type { AgentState, Approval, SpawnRequest, SpawnResult, SpawnSpec, StateSyncRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
 import { getEntitlements, getTelemetry } from '@backend'
 import { ptyEmulation } from '@backend/platform/pty-host'
@@ -440,17 +440,32 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   // Tombstone-gated at MAIN too: the daemon's gen gate needs a claimed gen to act, but a
   // command for a pane the app already CLOSED needs no claim to refuse — 'killed' is the
   // relay's own verdict, and forwarding past it re-delivered a disposed pane's stragglers
-  // to whatever session reuses the id next. The renderer's own gen (from SpawnResult)
-  // rides through for the daemon-side half of the guard.
+  // to whatever session reuses the id next.
+  //
+  // The gen we send is OURS, never the renderer's. `gens` is the authoritative map (it is
+  // refreshed by onGen from `spawned`/`attached`, ahead of every replay); the renderer's
+  // copy is written once, from its own spawn reply, and never again. A daemon restart
+  // remints generations from 1 in restore order, so after a heal the renderer can hold a
+  // number this daemon issued to a DIFFERENT pane — or never issued at all — and
+  // transport.ts's gate then drops its every keystroke and resize in silence: no exit
+  // event, no dead banner, a pane that simply stops accepting input forever.
+  //
+  // Sending undefined when we have not learned a gen keeps today's behavior exactly: the
+  // daemon accepts a gen-less message by design (transport.ts:214/:221). The decision
+  // itself is stampGen, pure and pinned in tests/unit/daemon-gen.test.ts.
   ipcMain.on(TerminalChannels.write, (_e, cmd: WriteCommand) => {
-    if (gens.get(String(cmd.id)) === 'killed') return
-    client.input(String(cmd.id), cmd.data, cmd.gen)
+    const id = String(cmd.id)
+    const gen = stampGen(gens, id)
+    if (gen === 'drop') return
+    client.input(id, cmd.data, gen)
   })
   ipcMain.on(TerminalChannels.resize, (_e, cmd: ResizeCommand) => {
-    if (gens.get(String(cmd.id)) === 'killed') return
-    const spec = specs.get(String(cmd.id))
+    const id = String(cmd.id)
+    const gen = stampGen(gens, id)
+    if (gen === 'drop') return
+    const spec = specs.get(id)
     if (spec) Object.assign(spec, { cols: cmd.cols, rows: cmd.rows }) // the replay must use CURRENT dims
-    client.resize(String(cmd.id), cmd.cols, cmd.rows, cmd.gen)
+    client.resize(id, cmd.cols, cmd.rows, gen)
   })
   ipcMain.on(TerminalChannels.kill, (_e, cmd: KillCommand) => {
     specs.delete(String(cmd.id)) // closed on purpose — never resurrected by a reconnect replay
