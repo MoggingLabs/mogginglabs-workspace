@@ -31,11 +31,22 @@ export function runDefaultsUxSmoke(win: BrowserWindow): void {
   /** The row whose <code> shortPath equals the given catalog path, by search. */
   const rowScript = (path: string): string =>
     `[...document.querySelectorAll('.agentcfg-setting')].find((row) => row.querySelector('code')?.textContent === ${JSON.stringify(path)})`
+  /** Type into the settings search box — POLLED and guarded. Every `changed` push from a
+   *  cross-account save re-runs load(), which blanks the panel to a spinner; a bare
+   *  `input.value = …` landing in that window dereferences null, throws, and takes the
+   *  WHOLE smoke down with "Script failed to execute" and zero diagnostics (windows run
+   *  30722988990). The same blanking already cost this gate three flag reds. */
   const search = async (text: string): Promise<void> => {
-    await execute(`(() => {
-      const input = document.querySelector('.agentcfg-search-input');
-      input.value = ${JSON.stringify(text)}; input.dispatchEvent(new Event('input', { bubbles: true }));
-    })()`)
+    const typed = await waitTrue(
+      `(() => {
+        const input = document.querySelector('.agentcfg-search-input');
+        if (!input) return false;
+        input.value = ${JSON.stringify(text)}; input.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      })()`,
+      90
+    )
+    if (!typed) throw new Error(`search box never appeared for ${text}`)
   }
 
   const run = async (): Promise<void> => {
