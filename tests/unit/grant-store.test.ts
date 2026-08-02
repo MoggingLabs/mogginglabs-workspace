@@ -143,12 +143,27 @@ describe('a cleared workspace does not come back', () => {
     expect(readGrant(kv, 'ws').web, 'a reused id must not inherit browsing consent').not.toBe('public')
   })
 
-  it('holds on a KV that cannot delete, where defaults ARE the revoke', () => {
+  // THE case that actually ships. `SettingsStore` has only getSetting/setSetting, and the sole
+  // caller (app-settings.ts's `gone` loop) passes no `del` — so the delete branch above is dead
+  // code in production and this is the only path that runs.
+  it('holds on a KV that cannot delete — the one production uses', () => {
     const kv = kvNoDel()
     kv.map.set('browser.agentControl.ws', '1')
     readGrant(kv, 'ws')
     clearGrant(kv, 'ws')
     expect(readGrant(kv, 'ws').web).not.toBe('public')
+  })
+
+  // …and asserting only `readGrant` is not enough. browser-dock reads the legacy key DIRECTLY
+  // (`consentFor` tests `=== '1'`), never through readGrant, so a closed-fist grant row revokes
+  // nothing as far as the dock is concerned. Asserted on the key itself, on BOTH kinds of KV.
+  it('actually revokes the legacy consent row the dock reads', () => {
+    for (const kv of [kvWithDel(), kvNoDel()]) {
+      kv.map.set('browser.agentControl.ws', '1')
+      readGrant(kv, 'ws')
+      clearGrant(kv, 'ws')
+      expect(kv.map.get('browser.agentControl.ws'), 'the dock would still see consent').not.toBe('1')
+    }
   })
 
   it('clearing drops the write tools too', () => {

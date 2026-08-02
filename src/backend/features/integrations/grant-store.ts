@@ -125,14 +125,25 @@ export function writeGrant(kv: GrantKv, grant: WorkspaceIntegrationsGrant): Work
 export function clearGrant(kv: GrantKv, workspaceId: string): void {
   const id = String(workspaceId ?? '')
   if (!id) return
+  // The LEGACY 6/05b consent row, ALWAYS — before the branch, because both paths need it and
+  // only one of them exists in production.
+  //
+  // Two separate reasons, and the second is the one that bites:
+  //
+  //   readGrant falls through to this key when no grant row exists, so a `del` that removed
+  //   only the grant would migrate `web:'public'` straight back onto the reused id;
+  //
+  //   and browser-dock reads `browser.agentControl.<wsId>` DIRECTLY (its `consentFor`), never
+  //   through readGrant. So writing a closed-fist grant row does not revoke anything as far as
+  //   the dock is concerned — the legacy row has to actually change.
+  //
+  // `''` is the app's own "off": it is what browser-dock writes when consent is withdrawn, and
+  // `consentFor` tests `=== '1'`.
+  if (kv.del) kv.del(kvLegacyConsent(id))
+  else kv.set(kvLegacyConsent(id), '')
+
   if (kv.del) {
     kv.del(kvGrant(id))
-    // The LEGACY row too. Deleting only the grant leaves readGrant with nothing to read, so
-    // it falls through to the 6/05b consent key and migrates `web:'public'` straight back —
-    // handing a brand-new workspace on a reused id the deleted one's browsing consent. The
-    // comment above already claims this is prevented; it was only true of the `kv.set`
-    // fallback below, which writes the closed fist over the row instead of removing it.
-    kv.del(kvLegacyConsent(id))
     return
   }
   kv.set(kvGrant(id), JSON.stringify(defaultIntegrationsGrant(id)))
