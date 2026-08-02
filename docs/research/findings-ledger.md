@@ -33,7 +33,7 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 
 | id | sev | status | location | note / next action | reason (deferred only) |
 | --- | --- | --- | --- | --- | --- |
-| connection-stdio-bridge-into-agent-clis-adr-0014/F1 | critical | `open` | `src/main/cli-runtime.ts:153` | Unchanged. The v11 bump does not alter the redirect (any vN matches). bin/mogging-mcp.mjs still has no --connection handling, so the flag is silently ignored. |  |
+| connection-stdio-bridge-into-agent-clis-adr-0014/F1 | critical | `fixed` | `src/main/cli-runtime.ts:153` | Unchanged. The v11 bump does not alter the redirect (any vN matches). bin/mogging-mcp.mjs still has no --connection handling, so the flag is silently ignored. |  |
 | connection-stdio-bridge-into-agent-clis-adr-0014/F2 | critical | `open` | `src/main/cli-runtime.ts:203` | Raised from HIGH: fb72bef bumped DAEMON_PROTOCOL_VERSION 10->11 (contracts/daemon/protocol.ts:38), so this release actually strands existing entries on the swep |  |
 | delta/conpty-v2-and-pin/2 | critical | `invalid` | `src/pty-daemon/session.ts:1026` | refuted by verification: Bare kill at session.ts:1026 is real, but the DLL branch isn't sweep-less: conpty.cc:534-566 PtyKill = ConptyClosePseudo |  |
 | delta/daemon-protocol-v11/10 | critical | `fixed` | `src/ui/features/terminal/terminal-pane.ts:529` | After the reconnect replay resolves, push the new gen to the renderer (a gen-refresh IPC the pane applies to sessionGen), or re-stamp in the relay's write/resiz |  |

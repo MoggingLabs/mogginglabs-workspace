@@ -4,6 +4,9 @@ import { basename, delimiter, dirname, join } from 'node:path'
 import { channelFromEnv } from '@contracts'
 import { runtimeDir } from './daemon-client'
 import { helperRuntime } from './node-helper'
+import { stableMcpLauncherSource } from '@backend/platform/mcp-launcher'
+
+export { stableMcpLauncherSource }
 
 const SATELLITES = [
   // Shared ESM helpers FIRST — every satellite below imports from lib/, so the helpers
@@ -132,31 +135,6 @@ function writePrivateFileAtomic(target: string, content: string, mode = 0o600): 
   }
 }
 
-/**
- * A managed MCP config may outlive the protocol release that wrote it. Keep its argument stable
- * and atomically switch this tiny launcher only after the complete versioned bundle is installed.
- * Existing MCP processes keep their imported target; new ones select the current target.
- */
-export function stableMcpLauncherSource(target: string): string {
-  return (
-    '#!/usr/bin/env node\n' +
-    "import { existsSync } from 'node:fs'\n" +
-    "import { dirname, join, relative } from 'node:path'\n" +
-    "import { pathToFileURL } from 'node:url'\n" +
-    `const current = ${JSON.stringify(target)}\n` +
-    'let selected = current\n' +
-    'const endpoint = process.env.MOGGING_DAEMON_ENDPOINT\n' +
-    'if (endpoint) {\n' +
-    '  const runRoot = dirname(dirname(dirname(current)))\n' +
-    '  const segment = relative(runRoot, dirname(endpoint))\n' +
-    "  if (/^(?:dev-)?v[1-9]\\d*$/.test(segment)) {\n" +
-    "    const paneTarget = join(runRoot, segment, 'bin', 'mogging-mcp.mjs')\n" +
-    '    if (existsSync(paneTarget)) selected = paneTarget\n' +
-    '  }\n' +
-    '}\n' +
-    'await import(pathToFileURL(selected).href)\n'
-  )
-}
 
 /**
  * Install the app-owned `mogging` command for pane descendants.
