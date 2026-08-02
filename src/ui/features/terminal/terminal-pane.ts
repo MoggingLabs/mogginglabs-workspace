@@ -505,13 +505,20 @@ export class TerminalPane {
     // holds its own 80×24 default, and sending THAT resized a surviving agent session
     // to the wrong grid on every app restart; absent dims tell the daemon to keep the
     // session's size (attachDims), and the reveal's refit sends the real ones.
-    const measured = proposeGrid(this.term) !== null
+    //
+    // Send the PROPOSAL, not `term.cols`. The measurement used to be taken, reduced to a
+    // boolean, and thrown away — and then the numbers came from xterm's CURRENT grid, which
+    // is a different quantity. The two agree only AFTER a fit has been applied; before the
+    // first one, the pane is perfectly measurable and xterm still holds its 80x24 default, so
+    // the "unmeasured" guard passed and 80x24 went out anyway. That is the very resize this
+    // guard exists to prevent, in a narrower window.
+    const grid = proposeGrid(this.term)
     return terminalClient
       .spawn({
         id: this.id,
         cwd,
-        cols: measured ? this.term.cols : undefined,
-        rows: measured ? this.term.rows : undefined,
+        cols: grid?.cols,
+        rows: grid?.rows,
         workspaceId: workspaceIdForPane(this.id),
         agentId: assignmentForPane(this.id),
         remoteHostId: remote?.hostId,
