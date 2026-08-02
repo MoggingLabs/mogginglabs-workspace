@@ -15,12 +15,17 @@
 //   3. a `deferred` row carries a reason of >= MIN_REASON chars — "not now" is not
 //      a reason, and a deferral nobody wrote down is just an open row in disguise;
 //   4. the row count matches PINNED_ROWS, so a finding cannot leave by deletion.
-//      Closing work moves a row to `fixed`; it never removes it.
+//      Closing work moves a row to `fixed`; it never removes it;
+//   5. the Totals table at the top agrees with the tally of the rows below it;
+//   6. an OPEN row cites a file that exists, at a line inside it.
 //
 // The count is pinned rather than derived on purpose: deriving it from the file
 // would make the file its own authority, which is the failure mode this gate exists
 // to prevent. Re-pin deliberately with --update-count when rows are genuinely added.
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+
+/** Line counts of files cited by open rows, read once each. */
+const fileLines = new Map()
 
 const STATUSES = new Set(['open', 'fixed', 'invalid', 'deferred'])
 const MIN_REASON = 20
@@ -81,6 +86,29 @@ for (const { n, cs } of rows) {
   } else counts[status]++
 
   if (!loc) fail('location', `line ${n}: \`${id}\` names no location — a finding you cannot find is not tracked`)
+
+  // 6. an OPEN row's location must still resolve. Citations rot: extracting claims.ts shrank
+  //    protocol.ts by 28 lines and every citation past :162 there silently pointed at the wrong
+  //    code. A reader who follows a dead citation concludes the finding is fixed.
+  //
+  //    Deliberately only OPEN rows, and deliberately only "does this line exist" — a closed row
+  //    describes code that is meant to have changed, and proving a citation points at the RIGHT
+  //    construct is a job for a person.
+  if (status === 'open' && loc) {
+    const m = /^([^\s:]+):(\d+)/.exec(loc.replace(/`/g, '').trim())
+    if (m) {
+      const [, file, lineNo] = m
+      if (!existsSync(file)) {
+        fail('citation', `line ${n}: \`${id}\` cites ${file}, which does not exist`)
+      } else {
+        if (!fileLines.has(file)) fileLines.set(file, readFileSync(file, 'utf8').split('\n').length)
+        const len = fileLines.get(file)
+        if (Number(lineNo) > len) {
+          fail('citation', `line ${n}: \`${id}\` cites ${file}:${lineNo}, but that file has ${len} lines — the citation has rotted`)
+        }
+      }
+    }
+  }
 
   if (status === 'deferred' && reason.replace(/[`*_]/g, '').length < MIN_REASON) {
     fail('deferred', `line ${n}: \`${id}\` is deferred with no reason (>= ${MIN_REASON} chars) — deferring is a decision, and a decision gets written down`)
