@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
+import { httpsOrLoopbackUrl, validateAuthServerMetadata } from '../../core/net/url-guard'
 import type { OAuthClientRecord } from '@contracts'
 import { normalizeTokenResponse, type NormalizeQuirks } from './credential-core'
 
@@ -208,7 +209,11 @@ export async function fetchAuthServerMetadata(asUrl: string): Promise<AuthServer
   ]
   for (const c of candidates) {
     const meta = await getJson<AuthServerMetadata>(c)
-    if (meta?.authorization_endpoint && meta.token_endpoint) return meta
+    // PRESENCE was the entire check. `authorization_endpoint` is fully remote-supplied — we
+    // followed the 401's resource_metadata pointer to get here — and it ends up at
+    // shell.openExternal, which hands the string to the OS to pick a program by scheme.
+    // Refused where it ARRIVES, so a bad server fails once with a nameable reason.
+    if (meta && validateAuthServerMetadata(meta).ok) return meta
   }
   return null
 }
@@ -599,6 +604,15 @@ export async function requestDeviceCode(o: {
   if (!deviceCode || !userCode || !verificationUri) {
     return { ok: false, reason: `${hostOf(o.endpoint)} did not return a device code.` }
   }
+  // The REQUEST host is pinned by the provider catalog; the RESPONSE body is not. Both of
+  // these are opened in the user's browser, so both are checked here — the card then carries
+  // an honest reason instead of the app launching whatever program the scheme names.
+  const safeVerificationUri = httpsOrLoopbackUrl(verificationUri)
+  const rawComplete = str('verification_uri_complete')
+  const safeComplete = rawComplete ? (httpsOrLoopbackUrl(rawComplete) ?? undefined) : undefined
+  if (!safeVerificationUri || (rawComplete && !safeComplete)) {
+    return { ok: false, reason: `${hostOf(o.endpoint)} returned a sign-in URL we will not open.` }
+  }
   const expiresIn = num('expires_in') ?? 900
   const interval = num('interval')
   return {
@@ -606,8 +620,8 @@ export async function requestDeviceCode(o: {
     grant: {
       deviceCode,
       userCode,
-      verificationUri,
-      verificationUriComplete: str('verification_uri_complete'),
+      verificationUri: safeVerificationUri,
+      verificationUriComplete: safeComplete,
       expiresAt: now() + expiresIn * 1000,
       intervalMs: interval != null && interval > 0 ? interval * 1000 : DEVICE_DEFAULT_INTERVAL_MS
     }
