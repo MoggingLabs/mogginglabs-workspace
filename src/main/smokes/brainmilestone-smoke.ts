@@ -501,15 +501,33 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
         const names = (((await cA.rpc('tools/list')).result as { tools?: { name: string }[] })?.tools ?? []).map((t) => t.name)
         return WRITES.every((n) => names.includes(n))
       }, 15000)
-      const symAlpha = await call(cA, 'find_symbol', { name: 'mzAlpha' })
-      const alpha = hits(symAlpha, 'matches')[0]
-      const nodeAlpha = await call(cA, 'get_node', { id: alpha?.id ?? '' })
-      const hash0 = String(nodeAlpha.data.fileHash ?? '')
+      // The CAS handshake is only meaningful once the INDEX has caught up to the bytes on
+      // disk. Arm (d) above just drove a mutation through the same index, and on a loaded
+      // windows runner `find_symbol` can still be serving the previous generation — the
+      // symbol missing, or its node carrying the PRE-mutation fileHash. A one-shot read
+      // there hands `replace_symbol_body` a hash the file no longer has: the write is
+      // refused, and staleOk/mergeOk cascade off it (windows run 30725736363 — writeOk
+      // false, staleMsg empty, merge burning its whole 25s budget on a landing that never
+      // happened). Wait for the index to agree with the disk, THEN handshake.
+      let alpha: NodeHit | undefined
+      let hash0 = ''
+      const alphaIndexed = await until(async () => {
+        const s = await call(cA, 'find_symbol', { name: 'mzAlpha' })
+        const hit = hits(s, 'matches')[0]
+        if (!hit) return false
+        const n = await call(cA, 'get_node', { id: hit.id })
+        const h = String(n.data.fileHash ?? '')
+        if (h !== sha256(TARGET_BEFORE)) return false
+        alpha = hit
+        hash0 = h
+        return true
+      }, 20000, 250)
       const replaced = await call(cA, 'replace_symbol_body', { id: alpha?.id ?? '', expectedFileHash: hash0, body: ALPHA_BODY })
       const diskAfter = readFileSync(join(F.repo, 'src', 'target.ts'))
       const omegaNow = await call(cA, 'find_symbol', { name: 'mzOmega' }) // the NEXT query — no wait
       const writeOk =
         grantVisible.ok &&
+        alphaIndexed.ok &&
         hash0 === sha256(TARGET_BEFORE) && // the CAS handshake's truth is the disk's
         replaced.ok &&
         diskAfter.equals(Buffer.from(TARGET_AFTER, 'utf8')) &&
@@ -774,7 +792,7 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
         graphTruthOk, pathDepth: path3.data.depth ?? null,
         partitionsOk, projRoots,
         freshOk, freshMs: appeared.ms, freshBudgetMs,
-        writeOk, staleOk, staleMsg: staleRetry.text.slice(0, 200),
+        writeOk, alphaIndexedMs: alphaIndexed.ms, staleOk, staleMsg: staleRetry.text.slice(0, 200),
         docsOk, docsVersion: docs.data.version ?? null, docsSource: docs.data.source ?? null,
         mergeOk, mergeMs: merged.ms,
         draftOk, draftSlug,
