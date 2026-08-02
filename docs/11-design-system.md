@@ -9,7 +9,7 @@ AA thresholds used: **4.5:1** for text/icon-grade ink, **3:1** for non-text UI.
 > audit script". *There was no audit script* — `git log -S luminance` finds one
 > commit whose only surviving trace is this prose and a few comments in `global.css`.
 > Every AA number here was a claim re-derived by hand. The math now lives in
-> `src/main/setshell-smoke.ts` (sRGB linearization → relative luminance → contrast,
+> `src/main/smokes/setshell-smoke.ts` (sRGB linearization → relative luminance → contrast,
 > with real alpha compositing up the ancestor chain, because `--accent-weak` is an
 > `rgba()` and measuring it against `transparent` scores it as pure black). It runs
 > in **all four themes** on every text class the Settings shell introduces, and it
@@ -25,7 +25,7 @@ AA thresholds used: **4.5:1** for text/icon-grade ink, **3:1** for non-text UI.
 > `.settings-nav-item:not(.is-active)` and `.settings-nav-item.is-active` as separate
 > nodes: the active item is first in the DOM, so a bare selector measures it twice and
 > silently never checks the other state. When 8.5/06 lifts the probe into
-> `src/main/aa-probe.ts`, the freeze goes with it — **inside** the exported call, so a
+> `src/main/smokes/aa-probe.ts`, the freeze goes with it — **inside** the exported call, so a
 > caller cannot forget what it never had to remember.
 >
 > **The shared probe, and what it caught at the freeze (8.5/09).** SETSHELL, HOMEUX,

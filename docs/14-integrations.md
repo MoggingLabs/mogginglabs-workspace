@@ -82,7 +82,7 @@ sections below; the UI speaks outcomes.
 > answer when you want a CLI to own its own auth.
 
 > New here? The end-to-end proof that all five compose in one fixture world is
-> `MOGGING_INTEGMILESTONE` (`src/main/integmilestone-smoke.ts`). This page is the
+> `MOGGING_INTEGMILESTONE` (`src/main/smokes/integmilestone-smoke.ts`). This page is the
 > map; that smoke is the territory.
 
 ## The REST bridge — a global API key becomes curated tools (ADR 0021)

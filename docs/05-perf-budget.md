@@ -7,7 +7,7 @@ by an automated smoke, not eyeballed, and **a regression fails the gate**.
 
 ## The budget (asserted by `MOGGING_MILESTONE`)
 
-Source of truth: `BUDGET` in `src/main/milestone-smoke.ts`.
+Source of truth: `BUDGET` in `src/main/smokes/milestone-smoke.ts`.
 
 | Gate | Value | Meaning |
 |---|---|---|

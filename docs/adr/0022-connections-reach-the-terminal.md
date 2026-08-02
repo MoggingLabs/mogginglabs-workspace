@@ -210,7 +210,7 @@ git clone https://github.com/me/private.git
 
 | Piece | Where | Note |
 |---|---|---|
-| `bin/mogging-credential.mjs` | new | Git credential protocol on stdin/stdout: `get` answers, `store`/`erase` are no-ops. Reuses `bin/lib/endpoint-client.mjs` and `runtime-paths.mjs` verbatim. |
+| `bin/mogging-connection.mjs` (the `mogging-credential` shim landed inside it, not as its own file) | new | Git credential protocol on stdin/stdout: `get` answers, `store`/`erase` are no-ops. Reuses `bin/lib/endpoint-client.mjs` and `runtime-paths.mjs` verbatim. |
 | `credentialShim` | `src/main/cli-runtime.ts` | Third shim alongside `connectionShim` (`cli-runtime.ts:203`), same stable-path + launcher treatment. |
 | `credential.get` handler | `src/main/mcp-endpoint.ts` | Sibling of `connection.rpc` (`mcp-endpoint.ts:543`), same `boundPane` gating. |
 | `credentialForHost(host, pane)` | `src/main/connections.ts` | Resolves pane → workspace (`workspaceIdForPane`, `integrations.ts:197`) → plan → `accessTokenFor`. Fail-closed at every step. |
