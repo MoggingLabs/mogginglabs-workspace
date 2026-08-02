@@ -18,8 +18,8 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | | count |
 | --- | --- |
 | rows | 497 |
-| open | 368 |
-| fixed | 122 |
+| open | 367 |
+| fixed | 123 |
 | invalid | 7 |
 | deferred | 0 |
 
@@ -465,7 +465,7 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | local-endpoint-token-custody-and-lifecycle/F6 | low | `fixed` | `src/main/mcp-endpoint.ts:594` | FIXED the unix socket is chmod 0600 on listen, matching what the PTY daemon has always done at pty-daemon/index.ts. docs/06 promises 'a 0600 unix socket'; this one was created at the default umask, so on a shared macOS box any local account could connect and spend the auth budget. Guarded to non-win32, where a chmod on a named pipe is meaningless. The address embeds our pid and nothing ever swept it, so stopMcpEndpoint now unlinks it too. Break proof AY. |  |
 | mcp-registration/F5 | low | `fixed` | `src/backend/features/integrations/writers/json-dialect.ts:27` | Unchanged Windows-leaning parity gap. Additionally isManagedScopedJson (json-dialect.ts:108-115) returns false on a BOM file, so a BOM also turns a scoped tool- |  |
 | mcp-registration/F6 | low | `open` | `docs/14-integrations.md:478` | Unchanged. The docs/14 rewrite in this delta touched other sections and left both drifts, so this is live drift, not a stale citation. |  |
-| mcp-registration/F7 | low | `open` | `src/backend/features/integrations/writers/codex.ts:70` | Unchanged, but sharper as a gate-honesty concern: F1 shows the toolplan smoke passing on a fixture that structurally cannot reach the broken path — exactly the |  |
+| mcp-registration/F7 | low | `fixed` | `src/backend/features/integrations/writers/codex.ts:70` | FIXED tests/unit/mcp-writers.test.ts (26) across all three writers. These are the most dangerous writes the app makes - the CLI config files are the user own, hand-edited, and a bad splice breaks the CLI on next launch. The contract each writer signs and that was never tested: writing an entry then reading it back MUST reproduce canonical(entry) exactly, because that string is the drift hash - a lossy round trip reports drift on a file nobody touched, forever, and the app repairs it every time. Also pins applyState never guessing: a present-but-UNCLAIMED entry is drift-edited not applied (adopting it would let the app rewrite an entry the user wrote), and an unparseable file is drift-edited when claimed and not-applied when not, never applied. NOTE the interface comment `Throws on an unparseable file` describes only the PARSING writers - codex is line-based and never parses; it closes the same hazard at upsert, which refuses a foreign untagged table because two definitions make codex drop its whole config. The test asserts that HAZARD per writer rather than the mechanism. Break proofs DJ-DM. |  |
 | mogging-mcp-server/F1 | low | `open` | `src/main/mcp-endpoint.ts:451` | Holds at the prior verifier's LOW, not the original HIGH: `by` is server-derived after verifyPaneToken (:427-435) and trail.ts:54 drops unattributable rows, so |  |
 | mogging-mcp-server/F4 | low | `open` | `bin/mogging-mcp.mjs:115` | Unchanged; fail-closed is still correct, only the diagnostic misdirects. One-click agent setup + live PATH landed this window, making hand-launched MCP processe |  |
 | mogging-mcp-server/F5 | low | `open` | `src/main/mcp-status.ts:119` | Unchanged. Added angle: minimize/restore event ordering differs between Windows and macOS, so a last-writer-wins flag fed by every window is also a latent platf |  |
