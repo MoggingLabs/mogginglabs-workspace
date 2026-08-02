@@ -218,10 +218,15 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
       /* best effort */
     }
   }
+  // 600s, not 420: this gate indexes ~5000 files across three checkouts, drives real
+  // worktrees, a real merge and a real MCP surface, and on a windows runner it was
+  // finishing close enough to the old ceiling that adding one 20s index-catch-up poll
+  // turned an honest assertion failure into a bare TIMEOUT with no diagnostics at all.
+  // The qa row (scripts/qa-smokes.sh) carries the matching outer budget.
   setTimeout(() => {
     write({ pass: false, error: 'TIMEOUT: brainmilestone smoke did not complete' })
     app.exit(1)
-  }, 420000)
+  }, 600000)
 
   // (j)'s witness: a recorder on the PORT for the whole run — every event,
   // breadcrumb, and context any code path emits lands here for the final scan.
