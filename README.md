@@ -154,7 +154,7 @@ docs/
   02-mvp-and-roadmap.md
   03-research-synthesis.md      full competitive + open-source research report
   04-adding-a-feature.md        the parallel-work playbook
-  adr/                          decision records (0001–0004)
+  adr/                          decision records (numbered, one per decision)
 ```
 
 **Layer boundaries** (aliases `@contracts` / `@backend` / `@ui`): `contracts`

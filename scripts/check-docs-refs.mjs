@@ -103,4 +103,43 @@ if (stale.length) {
   process.exit(1)
 }
 
-console.log(`docs refs: ${docs.length} docs, every relative link resolves; ${cites} cited source paths all exist.`)
+// ── RULE 3: an ADR number identifies exactly one ADR ────────────────────────────────
+//
+// Two files landed in the same release both claiming "ADR 0022" — one Accepted and cited
+// by ~14 code sites, one Proposed. An ADR number is how the code refers to a decision
+// (`// ADR 0022` appears throughout src/), so a duplicate makes every one of those
+// references ambiguous, and nothing anywhere noticed. Numbering is exactly the kind of
+// list-that-must-agree-with-itself this gate family exists for.
+//
+// The H1 is checked against the filename too: renaming the file without renumbering the
+// heading (or the reverse) leaves the same ambiguity one layer down.
+const adrs = docs
+  .filter((d) => /(^|[\\/])adr[\\/]\d{4}-/.test(d))
+  .map((d) => {
+    const file = d.split(/[\\/]/).pop()
+    const num = file.slice(0, 4)
+    const h1 = (readFileSync(d, 'utf8').match(/^#\s*ADR\s*(\d{4})/m) ?? [])[1]
+    return { d, num, h1 }
+  })
+const adrProblems = []
+const byNum = new Map()
+for (const a of adrs) {
+  if (byNum.has(a.num)) adrProblems.push(`ADR ${a.num} is claimed by BOTH ${byNum.get(a.num)} and ${a.d}`)
+  else byNum.set(a.num, a.d)
+  if (a.h1 && a.h1 !== a.num) adrProblems.push(`${a.d} is filed as ${a.num} but its heading says ADR ${a.h1}`)
+}
+if (!adrs.length) {
+  console.error('\nDOCS REFS: found no ADRs under docs/adr — the pattern is blind.\n')
+  process.exit(1)
+}
+if (adrProblems.length) {
+  console.error(`\nDOCS REFS: ${adrProblems.length} ADR numbering problem(s).\n`)
+  for (const p of adrProblems) console.error(`  ${p}`)
+  console.error('\nAn ADR number is how the CODE cites a decision. Two files cannot share one.\n')
+  process.exit(1)
+}
+
+console.log(
+  `docs refs: ${docs.length} docs, every relative link resolves; ${cites} cited source paths all exist; ` +
+    `${adrs.length} ADRs uniquely numbered.`
+)

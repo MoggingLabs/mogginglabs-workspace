@@ -14,7 +14,7 @@ mostly independent, so it slots in as Phase 2.5 once the core renders reliably.
 
 ## Phases
 
-### Phase 0 — Parity spike (1–2 wks) · *current*
+### Phase 0 — Parity spike (1–2 wks) ✅
 Electron + xterm.js(WebGL) + node-pty. One live PTY pane rendering an actual **Claude
 Code** session **identically on Windows (ConPTY) and macOS (forkpty)** — same
 rendering, input, resize. **Gate:** if rendering diverges, revisit the engine choice
@@ -162,7 +162,9 @@ Phase 8. Everything the app does today is a SESSION: someone starts it, someone
 ends it. A **loop** is a standing harness — a trigger fires (schedule, queued card,
 Sentry spike), an iteration launches the user's own CLI in a fresh worktree pane, an
 **objective verify command** judges the work, the Phase-3/4 review gates land it, and
-a staged playbook rewrite makes the next pass start sharper. Codified as ADR 0009:
+a staged playbook rewrite makes the next pass start sharper. The laws below are the
+pack's, in `prompts/phase-9/` — ADR **0009 is reserved and unwritten**, and lands with
+the phase:
 fresh context per iteration · one work item per pass · **nothing lands without the
 verify gate green AND a sign-off** (autoland is a typed per-loop opt-in stacked on
 top of both, never a default) · budgets as the primary safety mechanism.
@@ -453,7 +455,7 @@ Phase 9's harness is sound; the sweep gives it the two organs it lacks:
 - **Where the work lives** (Backlog.md's shape): tasks as **committed markdown in the
   repo**, human- and agent-readable. Git is the database: zero infra, survives restarts,
   syncs across machines, and it is the natural memory for a loop that must start fresh
-  each iteration (ADR 0009's law 1).
+  each iteration (the phase-9 pack's law 1; ADR 0009 is reserved, not yet written).
 - **The board pulls** (vibe-kanban's queueing, the one thing our board doesn't do): the
   backlog auto-spawns the next agent when a pane frees.
 

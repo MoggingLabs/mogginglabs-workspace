@@ -1,4 +1,4 @@
-# ADR 0022 — Connections reach the terminal, not only the agent
+# ADR 0023 — Connections reach the terminal, not only the agent
 
 Date: 2026-07-31 · Status: **proposed** · Owner: integrations
 Builds on ADR 0014 (app-held service connections) and ADR 0020 (tool-first
