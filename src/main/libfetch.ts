@@ -1,9 +1,10 @@
 import { BRAIN_LIBDOC_README_CAP, BRAIN_LIBFETCH_BYTE_CAP, type BrainLibEcosystem } from '@contracts'
+import { ORIGINS } from '@backend/core/origins'
 
 // The brain's ONE network organ (ADR 0018 step 08): fetch a missing-from-disk
 // dependency's PUBLISHED docs — npm / PyPI JSON endpoints only, the pinned
-// version only, HTTPS only (loopback HTTP allowed solely through the explicit
-// registry-override seam the offline smokes use), no redirects followed,
+// version only, HTTPS only (loopback HTTP allowed solely when a CALLER injected
+// the base, which is how the offline smokes reach a fixture), no redirects followed,
 // byte-capped read. Consent is checked by the CALLER (per workspace, default
 // OFF) before this module is ever reached; this module enforces everything a
 // URL can lie about. Nothing here executes package code — the answer is JSON
@@ -25,11 +26,17 @@ export interface LibFetchRefusal {
   detail: string
 }
 
-/** The registry bases — overridable ONLY via the smoke seam envs. */
-const npmBase = (): string => process.env.MOGGING_BRAIN_REGISTRY_NPM || 'https://registry.npmjs.org'
-const pypiBase = (): string => process.env.MOGGING_BRAIN_REGISTRY_PY || 'https://pypi.org'
+/** The registry bases a fetch may use. Omitted -> the pinned origins (ADR 0016); a smoke
+ *  passes its fixture server here as a PARAMETER, which is the seam the origin table's own
+ *  comment prescribes. Nothing reads the environment: an env-chosen origin in a signed
+ *  build is the bypass ADR 0016 §6 forbids, and README text fetched from it is distilled
+ *  into the brain and handed to agents as context. */
+export interface LibFetchRegistries {
+  npm?: string
+  py?: string
+}
 
-/** HTTPS, or loopback HTTP when (and only when) the override seam is in use. */
+/** HTTPS, or loopback HTTP when (and only when) a caller injected the base. */
 function allowedBase(base: string, overridden: boolean): boolean {
   let url: URL
   try {
@@ -95,13 +102,14 @@ const strField = (v: unknown): string => (typeof v === 'string' ? v : '')
 export async function fetchLibraryDocs(
   ecosystem: BrainLibEcosystem,
   name: string,
-  version: string
+  version: string,
+  registries: LibFetchRegistries = {}
 ): Promise<LibFetchResult | LibFetchRefusal> {
   if (!SAFE_VERSION.test(version)) return { ok: false, reason: 'invalid', detail: 'the pinned version is not a fetchable version string' }
   if (ecosystem === 'npm') {
     if (!SAFE_NPM_NAME.test(name)) return { ok: false, reason: 'invalid', detail: 'that name cannot be a registry package' }
-    const base = npmBase()
-    if (!allowedBase(base, !!process.env.MOGGING_BRAIN_REGISTRY_NPM)) {
+    const base = registries.npm ?? ORIGINS.npmRegistry
+    if (!allowedBase(base, registries.npm !== undefined)) {
       return { ok: false, reason: 'invalid', detail: 'the npm registry base is not an allowed origin' }
     }
     const encoded = name.startsWith('@') ? `@${encodeURIComponent(name.slice(1))}` : encodeURIComponent(name)
@@ -118,8 +126,8 @@ export async function fetchLibraryDocs(
   }
   if (ecosystem === 'py') {
     if (!SAFE_PY_NAME.test(name)) return { ok: false, reason: 'invalid', detail: 'that name cannot be a registry package' }
-    const base = pypiBase()
-    if (!allowedBase(base, !!process.env.MOGGING_BRAIN_REGISTRY_PY)) {
+    const base = registries.py ?? ORIGINS.pypi
+    if (!allowedBase(base, registries.py !== undefined)) {
       return { ok: false, reason: 'invalid', detail: 'the PyPI base is not an allowed origin' }
     }
     const doc = await getJson(`${base}/pypi/${encodeURIComponent(name)}/${encodeURIComponent(version)}/json`)

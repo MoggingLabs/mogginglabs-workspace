@@ -17,7 +17,16 @@
 // are on its banlist, so the override pattern cannot come back one import at a time).
 export const ORIGINS = Object.freeze({
   /** The official MCP registry — search + update FEED, never a trust source (8/07). */
-  registry: 'https://registry.modelcontextprotocol.io'
+  registry: 'https://registry.modelcontextprotocol.io',
+  /** The package registries the brain reads library READMEs from (docs/20 organ 2).
+   *  These sat in libfetch.ts as an environment read falling back to a literal — the
+   *  exact bypass this table exists to forbid, and invisible to the gate because its
+   *  pattern only caught names ending `_BASE` while those ended `_NPM` and `_PY`.
+   *  Fetched README text is distilled into the brain and served to agents as context,
+   *  so whoever picks the origin picks what the agents read. The smoke now injects a
+   *  baseUrl PARAMETER through brainDebug(), which is the seam described above. */
+  npmRegistry: 'https://registry.npmjs.org',
+  pypi: 'https://pypi.org'
   // Reserved rows (ADR 0016): `entitlements`, `idp`, `updates` land HERE when those
   // services exist — as literals in this table, never behind an env read. Their
   // would-be override names (the ENTITLE / IDP / UPDATE `_BASE` variants) are already
