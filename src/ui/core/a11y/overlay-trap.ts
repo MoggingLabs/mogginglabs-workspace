@@ -1,3 +1,5 @@
+import { FOCUSABLE_SELECTOR } from './focus'
+
 /**
  * What every overlay owes a keyboard: focus cannot leave it, and the app behind it cannot be
  * reached — not by Tab, not by a pointer, not by a screen reader's virtual cursor.
@@ -15,14 +17,13 @@
  * the inner release must not un-inert an app that the outer modal is still covering.
  */
 
-const FOCUSABLE = [
-  'a[href]',
-  'button:not([disabled])',
-  'input:not([disabled]):not([type="hidden"])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])'
-].join(',')
+// One selector, and EVERY branch excludes tabindex="-1". It was excluded on the generic
+// [tabindex] branch alone, so a <button tabindex="-1"> still matched button:not([disabled])
+// — and the palette builds exactly that: its options are tabIndex -1 on purpose, because
+// the input is the ONE tab stop and the options are reached with the arrows. The trap
+// counted every option as a tab stop, so Tab walked the result list instead of cycling the
+// dialog, and the "one tab stop" contract the palette documents was not what it had.
+const FOCUSABLE = FOCUSABLE_SELECTOR
 
 /** How many live traps are holding each background inert. */
 const held = new Map<HTMLElement, number>()
