@@ -8,7 +8,7 @@ import { handleUsageCall } from './usage'
 import { getSettingsStore } from './app-settings'
 import { onIntegrationsGrantChanged, resolveGrantedWriteTools, resolveWriteAllGranted, workspaceIdForPane } from './integrations'
 import { connectionUpstream, restBridgeUpstream } from './connections'
-import { handleRestBridgeRpc, mcpFetch, retryDelayMs, retrySpecFor, retryableStatus } from '@backend/features/integrations'
+import { connectionProxyRefusal, handleRestBridgeRpc, mcpFetch, retryDelayMs, retrySpecFor, retryableStatus } from '@backend/features/integrations'
 import { getDaemonClient } from './daemon-relay'
 import { runtimeDir as clientRuntimeDir } from './daemon-client'
 import { recordTrail } from './trail'
@@ -187,6 +187,11 @@ async function handleConnectionRpc(
     if (resp && typeof resp === 'object' && (resp.result as { isError?: boolean } | undefined)?.isError) restBridgeStats.refusals += 1
     return resp === null ? { ok: true } : { ok: true, payload: resp }
   }
+  // THE gate the REST branch above already has. Without it this forwarded arbitrary JSON-RPC
+  // upstream with the connection's DECRYPTED token attached, for any caller that could read
+  // the endpoint file — no pane, no workspace, no grant to answer to.
+  const refusal = connectionProxyRefusal({ pane: boundPane })
+  if (refusal) return { ok: false, reason: refusal }
   const upstream = await connectionUpstream(connection)
   if (!upstream) {
     return {

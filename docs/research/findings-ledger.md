@@ -18,8 +18,8 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | | count |
 | --- | --- |
 | rows | 497 |
-| open | 359 |
-| fixed | 131 |
+| open | 358 |
+| fixed | 132 |
 | invalid | 7 |
 | deferred | 0 |
 
@@ -94,7 +94,7 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | event-bridge/F1 | high | `open` | `src/pty-daemon/transport.ts:231` | transport/session changed only for gen-gating and remote cwd; event-bridge.ts is byte-identical to c026463. docs/14:470-471 still promises notify 'rings the flo |  |
 | explorer-files/F2 | high | `open` | `src/ui/features/explorer/index.ts:584` | Raised from the verifier's medium: it does NOT self-heal. lastFiles clears only in unwatchFiles (monitor.ts:131) and refreshFiles is change-only (:322), so reop |  |
 | local-endpoint-token-custody-and-lifecycle/F1 | high | `fixed` | `src/main/mcp-endpoint.ts:394` | mcp-endpoint.ts has zero diff vs c026463 — the 32-commit delta never touched this file. Severity unchanged: no-token local heap exhaustion of main (docs/05 heap |  |
-| local-endpoint-token-custody-and-lifecycle/F2 | high | `open` | `src/main/mcp-endpoint.ts:196` | Zero diff in the file; bin/mogging-connection.mjs:56 still says 'The MCP proxy path never reads it.' Blast radius grew — OAuth device flow landed (oauth.ts +262 |  |
+| local-endpoint-token-custody-and-lifecycle/F2 | high | `fixed` | `src/main/mcp-endpoint.ts:196` | FIXED handleConnectionRpc MCP-proxy branch now refuses a caller bound to no pane, via the new connectionProxyRefusal() in rest-bridge.ts - sibling of the REST write gate that already fails closed for exactly this caller. Before, that branch resolved nothing and checked nothing: it forwarded arbitrary JSON-RPC upstream with the connection DECRYPTED access token attached, so any same-user process able to read the 0600 endpoint file could call every tool on every connected service, as the user, with no workspace and therefore no grant to answer to. The gate runs BEFORE connectionUpstream, which is what decrypts the token. NOT closed by this: which TOOLS a pane-BOUND caller may invoke. The proxy has no catalog for an arbitrary upstream MCP server so it cannot tell a read from a write, and refusing every tools/call when Write tools is off would break read-only use of every connected service. That scoping is the workspace-tool-plan question - contracts/integrations/plan.ts calls the plan CONTEXT hygiene, not a security boundary, while ADR 0014 calls it the boundary - and naming it is a decision, not a refactor. tests/unit/connection-proxy-gate.test.ts (7); break proofs DZ-EC. |  |
 | mcp-registration/F1 | high | `open` | `src/main/tool-plan.ts:171` | Severity holds. Reinforced: the delta added a linked-worktree preflight feature (tests/unit/worktree-preflight.test.ts), so scoped launches inside .mogging/work |  |
 | per-pane-git-branch-dirty-chip-pipeline/F4 | high | `open` | `src/main/smokes/git-smoke.ts:250` | RAISED medium->high. Not a plain test gap: the leg is dead-on-arrival (rejected authority) AND unasserted, so GIT certifies green over a leg that cannot run — t |  |
 | perf-and-perception-budgets-vs-shipped-smokes/F1 | high | `fixed` | `src/main/smokes/perception-smoke.ts:167` | Checked if the delta worsened it: v11 gen-gates input but transport.ts:214 accepts genless and daemon-relay.ts:447 forwards undefined gen, so the raw write stil |  |

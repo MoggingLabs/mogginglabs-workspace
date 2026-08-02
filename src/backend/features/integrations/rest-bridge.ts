@@ -376,3 +376,31 @@ export async function handleRestBridgeRpc(payload: unknown, svc: RestBridgeServi
       return rpcError(id, -32601, `The ${svc.entry.label} bridge does not speak "${method}".`)
   }
 }
+
+/**
+ * May this caller reach an OAuth-connected upstream through the house proxy at all?
+ *
+ * The REST branch of the connection bridge resolves `writeGranted` from the caller's
+ * pane → workspace → grant, and `resolveWriteAllGranted` returns false for a paneless caller —
+ * fail-closed, as its own comment says. The MCP-proxy branch beside it resolved nothing and
+ * checked nothing: it forwarded arbitrary JSON-RPC upstream with the connection's DECRYPTED
+ * access token attached.
+ *
+ * So any same-user process that could read the 0600 endpoint file could call every tool on
+ * every connected service, as the user, with no workspace and therefore no grant to answer to.
+ *
+ * A caller with no pane has no workspace, so there is no grant to check it against. That is not
+ * "allow by default" — it is "we cannot ask", and the same-shaped hole this whole audit keeps
+ * turning up. Refused.
+ *
+ * NOT gated here: which TOOLS a pane-bound caller may invoke. The proxy has no catalog for an
+ * arbitrary upstream MCP server, so it cannot tell a read from a write — refusing every
+ * `tools/call` when Write tools is off would break read-only use of every connected service.
+ * That scoping is the workspace-tool-plan question, which the contracts still describe as
+ * "CONTEXT hygiene, not a security boundary" while ADR 0014 calls it the boundary. Naming it
+ * is a decision, not a refactor.
+ */
+export function connectionProxyRefusal(caller: { pane?: string }): string | null {
+  if (caller.pane) return null
+  return 'This connection is reachable only from a pane in a workspace that has connected it — the caller here is not bound to one.'
+}
