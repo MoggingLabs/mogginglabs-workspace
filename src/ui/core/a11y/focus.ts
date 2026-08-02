@@ -60,3 +60,38 @@ export function focusIndexAfterRebuild(previousIndex: number, nextCount: number)
   if (previousIndex < 0) return -1
   return Math.min(previousIndex, nextCount - 1)
 }
+
+/**
+ * Where focus goes after a KEYED list rebuilds in place.
+ *
+ * `focusIndexAfterRebuild` restores by position, which is right when the rows are anonymous.
+ * When they have identity — provider tiles, palette chips — position is the wrong thing to
+ * hold onto: a rebuild that inserts or removes a row moves everything after it, and the caret
+ * lands on a different tile than the one the user was on.
+ *
+ * The wizard grew two private answers to this instead. One keyed on a `data-chip` attribute
+ * that was set on the chip body but never on the ▾ button, so that path always fell through to
+ * <body>; the other passed no custody at all. Both are the same question, and it already has a
+ * home in this module.
+ *
+ * Falls back to the CLAMPED INDEX when the key is gone — the row the user was on was deleted,
+ * and its neighbour is the nearest honest answer. Returning -1 there is what "the ▾ button had
+ * no data-chip, so give up" did, and giving up is how focus reached <body>.
+ *
+ * Returns an index into `nextKeys`, or -1 to leave focus alone.
+ */
+export function focusKeyAfterRebuild(
+  previousKey: string | null,
+  previousIndex: number,
+  nextKeys: readonly string[]
+): number {
+  if (previousKey !== null) {
+    const found = nextKeys.indexOf(previousKey)
+    if (found !== -1) return found
+  }
+  // No empty-list guard here on purpose. focusIndexAfterRebuild already returns -1 for an
+  // empty list, and a second copy of that rule is a second thing to keep in agreement — the
+  // defect class this codebase keeps producing. (A break proof caught the duplicate: deleting
+  // the guard changed nothing, which is what dead code looks like from the outside.)
+  return focusIndexAfterRebuild(previousIndex, nextKeys.length)
+}

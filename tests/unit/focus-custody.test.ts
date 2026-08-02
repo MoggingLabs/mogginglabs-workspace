@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FOCUSABLE_SELECTOR, focusIndexAfterRebuild, isFocusCandidate } from '@ui/core/a11y/focus'
+import { FOCUSABLE_SELECTOR, focusIndexAfterRebuild, focusKeyAfterRebuild, isFocusCandidate } from '@ui/core/a11y/focus'
 
 // FOCUS CUSTODY, pinned.
 //
@@ -71,5 +71,42 @@ describe('focusIndexAfterRebuild', () => {
   it('gives up when nothing was focused before', () => {
     // -1 in means "focus was elsewhere" — restoring would STEAL it.
     expect(focusIndexAfterRebuild(-1, 10)).toBe(-1)
+  })
+})
+
+describe('focusKeyAfterRebuild', () => {
+  // Restoring by POSITION is right for anonymous rows. When rows have identity — provider
+  // tiles, palette chips — a rebuild that inserts or removes one moves everything after it,
+  // and the caret lands on a different tile than the user was on.
+  it('follows the key when it survives, wherever it moved to', () => {
+    expect(focusKeyAfterRebuild('claude', 0, ['shell', 'claude', 'codex'])).toBe(1)
+    expect(focusKeyAfterRebuild('claude', 2, ['claude', 'codex'])).toBe(0)
+  })
+
+  // THE regression the wizard shipped: its private restore keyed on a `data-chip` attribute
+  // that the ▾ button never carried, so a missing key meant "give up" — and giving up is how
+  // focus reached <body> mid-keyboard-navigation.
+  it('falls back to the clamped index when the key is gone', () => {
+    expect(focusKeyAfterRebuild('aider', 4, ['shell', 'claude'])).toBe(1)
+    expect(focusKeyAfterRebuild('aider', 0, ['shell', 'claude'])).toBe(0)
+  })
+
+  it('leaves focus alone when there is nothing to focus', () => {
+    expect(focusKeyAfterRebuild('claude', 0, [])).toBe(-1)
+    expect(focusKeyAfterRebuild(null, -1, ['a'])).toBe(-1)
+  })
+
+  it('restores by index when there was never a key', () => {
+    expect(focusKeyAfterRebuild(null, 2, ['a', 'b', 'c', 'd'])).toBe(2)
+    expect(focusKeyAfterRebuild(null, 9, ['a', 'b'])).toBe(1)
+  })
+
+  it('prefers the key over the index when they disagree', () => {
+    // The whole point: the row moved, and position would silently land elsewhere.
+    expect(focusKeyAfterRebuild('codex', 0, ['shell', 'claude', 'codex'])).toBe(2)
+  })
+
+  it('takes the first occurrence of a repeated key', () => {
+    expect(focusKeyAfterRebuild('shell', 3, ['shell', 'shell', 'shell'])).toBe(0)
   })
 })
