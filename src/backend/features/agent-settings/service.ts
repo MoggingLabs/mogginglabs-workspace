@@ -34,6 +34,7 @@ import {
 } from './sources'
 import { agentConfigValueContainsSecretKey, validateAgentConfigMutation } from './validation'
 import { managedKeys, resolveDefault } from './account-defaults'
+import { mergeValues } from './merge'
 import { redactSecrets } from '../review/redact'
 import { prepareAgentSessionOverlay, type PreparedAgentSessionOverlay } from './session-overlay'
 import type { CodexConfigObservation, CodexConfigResolverPort, CodexConfigSettingObservation } from './codex-app-server'
@@ -109,26 +110,6 @@ const sameValue = (left: AgentConfigValue | undefined, right: AgentConfigValue |
 const safeError = (error: unknown): string => {
   if (error instanceof ConfigMutationError) return error.message
   return error instanceof Error && error.message ? error.message.slice(0, 240) : 'The provider config could not be updated.'
-}
-
-function mergeValues(base: AgentConfigValue | undefined, next: AgentConfigValue, concatArrays: boolean): AgentConfigValue {
-  if (base === undefined) return next
-  if (Array.isArray(base) && Array.isArray(next)) {
-    if (!concatArrays) return next
-    const out = [...base]
-    for (const item of next) if (!out.some((existing) => sameValue(existing, item))) out.push(item)
-    return out
-  }
-  if (
-    base !== null && next !== null &&
-    !Array.isArray(base) && !Array.isArray(next) &&
-    typeof base === 'object' && typeof next === 'object'
-  ) {
-    const out: Record<string, AgentConfigValue> = { ...base }
-    for (const [key, value] of Object.entries(next)) out[key] = mergeValues(out[key], value, concatArrays)
-    return out
-  }
-  return next
 }
 
 /** The drift/shadow verdict for one setting, shared by the codex and generic branches
@@ -921,7 +902,7 @@ export class AgentSettingsService {
       try {
         const read = codecFor(loaded.source.format).read(loaded.snapshot.text, setting.path)
         if (!read.present) continue
-        effectiveValue = mergeValues(effectiveValue, read.value as AgentConfigValue, loaded.source.merge === 'deep-concat-arrays')
+        effectiveValue = mergeValues(effectiveValue, read.value as AgentConfigValue, loaded.source.merge)
         effectiveSource = loaded.source
         effectiveKnown = true
       } catch {
