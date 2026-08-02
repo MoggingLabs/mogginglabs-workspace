@@ -127,6 +127,12 @@ export function clearGrant(kv: GrantKv, workspaceId: string): void {
   if (!id) return
   if (kv.del) {
     kv.del(kvGrant(id))
+    // The LEGACY row too. Deleting only the grant leaves readGrant with nothing to read, so
+    // it falls through to the 6/05b consent key and migrates `web:'public'` straight back —
+    // handing a brand-new workspace on a reused id the deleted one's browsing consent. The
+    // comment above already claims this is prevented; it was only true of the `kv.set`
+    // fallback below, which writes the closed fist over the row instead of removing it.
+    kv.del(kvLegacyConsent(id))
     return
   }
   kv.set(kvGrant(id), JSON.stringify(defaultIntegrationsGrant(id)))
