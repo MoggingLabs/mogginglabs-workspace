@@ -16,7 +16,7 @@ import { sweepDeadRunDirs } from './daemon-sweep'
 import { getSettingsStore } from './app-settings'
 import { notePaneAgent, notePaneGone } from './agent-presence'
 import { resolveServiceKeyEnv } from './service-keys'
-import { onPaneStateForBridge } from './event-bridge'
+import { onPaneGoneForBridge, onPaneStateForBridge } from './event-bridge'
 import { setDaemonHealth, setDaemonHealthRetry } from './runtime-health'
 import { sanitizeRemote } from './remotes'
 
@@ -152,6 +152,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
         livePaneIds.delete(id)
         cwdRevisions.delete(id)
         notePaneGone(Number(id)) // no process, no agent — the needs-you gate must agree
+        onPaneGoneForBridge(Number(id)) // ...and the bridge forgets it, so a reused id has no history
         getWebContents()?.send(TerminalChannels.exit, { id: Number(id), exitCode })
       },
       onState: (id, state, gen) => {
