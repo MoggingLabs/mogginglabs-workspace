@@ -47,3 +47,25 @@ export const REMOTE_INSERT_TOAST = {
   title: 'This pane is remote',
   body: 'The inserted path points at a file on THIS machine — the remote host cannot see it unless a mount shares it.'
 } as const
+
+/**
+ * The DEGRADED drop path: a marker with no raw payload, where the only thing left is the
+ * already-quoted `text/plain` half the explorer wrote.
+ *
+ * It cannot be re-quoted — the raw path is gone — so the choice is type it as-is or refuse.
+ * `planPaneInsert` above never faces this: `quotePathsForShell` strips control characters on
+ * the way through, which is why its own comment can say the payload "cannot press Enter".
+ * This branch skipped that quoter entirely and wrote the fallback verbatim into the PTY, so a
+ * CR in a filename forges an Enter and the shell runs whatever preceded it.
+ *
+ * REFUSES rather than sanitizing. Silently stripping bytes here would type a DIFFERENT path
+ * than the one the user dropped — and at this point we cannot tell whether the control
+ * character came from a hostile name or a corrupted marker. Returning null lets the caller say
+ * nothing happened, which is true.
+ */
+const CONTROL_CHARS = new RegExp('[\u0000-\u001f\u007f]') // from a STRING: no raw control byte in this source
+
+export function planFallbackInsert(quoted: string): PaneInsert | null {
+  if (!quoted || CONTROL_CHARS.test(quoted)) return null
+  return { text: quoted, data: ' ' + quoted + ' ', remote: false }
+}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { planPaneInsert, REMOTE_INSERT_TOAST } from '@ui/core/terminal/pane-insert'
+import { sourceOf } from './source-body'
+import { planFallbackInsert, planPaneInsert, REMOTE_INSERT_TOAST } from '@ui/core/terminal/pane-insert'
 
 // The ONE decision behind "type a path into a pane" — shared by the explorer drag's
 // drop, the OS-file drop, and send-to-pane. The cases that matter most are the two
@@ -60,5 +61,58 @@ describe('planPaneInsert', () => {
     expect(REMOTE_INSERT_TOAST.title).toBe('This pane is remote')
     expect(REMOTE_INSERT_TOAST.tone).toBe('info')
     expect(REMOTE_INSERT_TOAST.body).toContain('THIS machine')
+  })
+})
+
+describe('planFallbackInsert — the degraded drop path', () => {
+  // A marker with no raw payload leaves only the already-quoted `text/plain` half. It cannot
+  // be re-quoted, because the raw path is gone.
+  //
+  // pane-drop wrote it into the PTY VERBATIM, skipping the only control-character strip in the
+  // insert path. planPaneInsert's own comment says the payload "cannot press Enter" — true of
+  // that function, because quotePathsForShell strips on the way through, and false of this
+  // branch, which never called it. A CR in the payload forges an Enter and the shell runs
+  // whatever preceded it.
+  it('passes a clean payload through with the same padding as a normal insert', () => {
+    expect(planFallbackInsert('/srv/app/file.txt')).toEqual({
+      text: '/srv/app/file.txt',
+      data: ' /srv/app/file.txt ',
+      remote: false
+    })
+  })
+
+  it('REFUSES a payload carrying a carriage return', () => {
+    expect(planFallbackInsert('safe.txt\rrm -rf /')).toBeNull()
+  })
+
+  it('refuses every control character, not just CR', () => {
+    for (const ch of ['\n', '\r', '\u0000', '\u001b', '\u007f', '\u0007']) {
+      expect(planFallbackInsert(`a${ch}b`), JSON.stringify(ch)).toBeNull()
+    }
+  })
+
+  it('refuses an empty payload — there is nothing to type', () => {
+    expect(planFallbackInsert('')).toBeNull()
+  })
+
+  // Refusing rather than stripping is the deliberate choice: silently removing bytes would
+  // type a DIFFERENT path than the one dropped, and at this point we cannot tell a hostile
+  // name from a corrupted marker. Typing nothing is the honest outcome.
+  it('refuses rather than sanitizing — a stripped path is a different path', () => {
+    const out = planFallbackInsert('safe\rmalicious')
+    expect(out, 'a sanitized " safemalicious " would name a file the user never dropped').toBeNull()
+  })
+})
+
+describe('the drop path uses the planner', () => {
+  const src = sourceOf('src/ui/features/terminal/pane-drop.ts')
+
+  it('no longer writes the fallback verbatim', () => {
+    expect(src).toContain('planFallbackInsert(quotedFallback)')
+    expect(src, 'the verbatim write is the defect').not.toMatch(/data:\s*' '\s*\+\s*quotedFallback/)
+  })
+
+  it('types nothing when the planner refuses', () => {
+    expect(src).toMatch(/const fallback = planFallbackInsert\(quotedFallback\)\s*\n\s*if \(fallback\)/)
   })
 })
