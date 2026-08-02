@@ -84,8 +84,14 @@ dual-arch where the toolchain works.
 
 Packaged builds check the signed GitHub Releases feed
 (`electron-builder.yml` `publish`) on launch and every 6 hours via
-`electron-updater`, which verifies each update's signature — an
-unsigned/tampered build is rejected. A newer build downloads in the
+`electron-updater`. Every update is integrity-checked against the sha512 the
+feed publishes, over HTTPS. **Signature** verification is per-platform and is
+not fully on yet: Squirrel.Mac refuses an unsigned update on its own, while
+`NsisUpdater` verifies Authenticode **only when `win.publisherName` is set** —
+it is not, because builds are still unsigned (setting it now would make the
+updater reject the very updates we ship). Pinning it is part of enabling
+signing, and `scripts/verify-signing-readiness.mjs` says so on every run.
+A newer build downloads in the
 background; `src/main/updater.ts` pushes the lifecycle
 (`checking → available → downloading(%) → ready → error`) to the renderer over
 `UpdateChannels.state`.

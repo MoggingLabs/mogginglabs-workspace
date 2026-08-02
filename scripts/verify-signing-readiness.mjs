@@ -41,6 +41,28 @@ check(
   'release.yml has the identity-discovery switch (flip when certs land)'
 )
 
+// The Windows half of "a signed release is a secrets-only change" is NOT secrets-only,
+// and that is the point of checking it here.
+//
+// electron-updater's NsisUpdater verifies an update's Authenticode signature only when
+// `win.publisherName` is configured — it compares the downloaded installer's signing
+// subject against that string. With no publisherName it does not verify a signature at
+// all; the only thing standing behind a Windows update is the sha512 in the feed, over
+// HTTPS. macOS diverges here: Squirrel.Mac refuses an unsigned update on its own.
+//
+// So this cannot be a blocker today (builds are deliberately unsigned — release.yml:214
+// says so, and adding publisherName now would make the updater REJECT the very updates
+// it ships). It is a NOTE, worded so the day the cert lands nobody has to rediscover that
+// signing the artifact does not, by itself, make the updater check the signature.
+const hasPublisherName = /^\s*publisherName:/m.test(builderYml)
+notes.push(
+  hasPublisherName
+    ? 'win.publisherName is pinned — NsisUpdater will verify Authenticode on update'
+    : 'win.publisherName NOT set: Windows updates are sha512-integrity-checked only. ' +
+        'Pin it to the certificate subject IN THE SAME CHANGE that enables signing, or signed ' +
+        'builds will still ship an updater that verifies no signature.'
+)
+
 if (mac) {
   // ── macOS: entitlements + hardened runtime + notarization config ───────────
   const plistPath = 'build/entitlements.mac.plist'
