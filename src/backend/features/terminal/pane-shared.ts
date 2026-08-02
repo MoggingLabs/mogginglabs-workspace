@@ -1,3 +1,4 @@
+import { mergeEnvFolding } from '@backend/platform/env-path'
 import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 
@@ -60,6 +61,43 @@ export function trimTornStart(s: string): string {
  */
 export const RESTORE_MODE_RESET =
   '\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[r\x1b[m'
+
+/**
+ * Compose a pane's environment. THE composer — both backends call this, or they drift.
+ *
+ * Windows environment variable names are case-INSENSITIVE to look up but case-SENSITIVE
+ * as object keys, and `process.env` on Windows spells it `Path`. So layering an overlay
+ * that spells it `PATH` with a plain object spread leaves BOTH keys present, and node-pty
+ * emits its pairs in insertion order with no folding (terminal.js `_parseEnv`), so the
+ * process receives two PATH definitions and Windows takes the first — the inherited,
+ * stale one. Every live-PATH repair the app performs was landing in the losing key: the
+ * newly installed agent stayed invisible to its own pane.
+ *
+ * mergeEnv (backend/platform/env-path.ts) has always known how to do this — it deletes a
+ * base key whose name differs from an overlay key only by case. It was simply applied to
+ * the LAST overlay only, while everything above it was spread in by hand, in two separate
+ * backends. macOS has a single `PATH` key, so nothing there ever failed and no gate saw it.
+ *
+ * Routing the whole composition through mergeEnv is the fix: an overlay carrying `PATH`
+ * now folds away the inherited `Path` on its way in.
+ */
+export function paneProcessEnv(
+  base: NodeJS.ProcessEnv,
+  ...overlays: (Record<string, string | undefined> | undefined)[]
+): NodeJS.ProcessEnv {
+  return composePaneEnv(process.platform === 'win32', base, ...overlays)
+}
+
+/** paneProcessEnv with the fold decided by the caller, so the Windows-only behavior can be
+ *  asserted on every runner. Without this the one platform that exhibits the bug is the
+ *  only one whose CI could catch it — which is how it survived to ship. */
+export function composePaneEnv(
+  foldCase: boolean,
+  base: NodeJS.ProcessEnv,
+  ...overlays: (Record<string, string | undefined> | undefined)[]
+): NodeJS.ProcessEnv {
+  return mergeEnvFolding(foldCase, base, ...overlays)
+}
 
 /** The directory a pane's shell starts in: the requested one when it is a real directory,
  *  the home directory otherwise. `''` means "none asked for" (never the process's own

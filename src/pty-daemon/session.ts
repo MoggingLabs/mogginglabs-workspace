@@ -10,7 +10,7 @@ import { spawnPty, type IPty } from '@backend/platform/pty-host'
 import { mergeEnv } from '@backend/platform/env-path'
 import { killPtyTree } from '@backend/platform/process-tree'
 import { paneShellLaunch } from '@backend/platform/shell'
-import { RESTORE_MODE_RESET, SCROLLBACK_CHARS, pickCwd, trimTornStart } from '@backend/features/terminal/pane-shared'
+import { RESTORE_MODE_RESET, SCROLLBACK_CHARS, pickCwd, trimTornStart , paneProcessEnv} from '@backend/features/terminal/pane-shared'
 import { aiderLogPath } from '@backend/features/context'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { PANE_CWD_MAX, normalizeRemoteConnection, notifyEventToState } from '@contracts'
@@ -530,14 +530,13 @@ class PaneSession {
     // Remote SSH needs the user's ordinary process environment for PATH, HOME and
     // SSH_AUTH_SOCK, but none of the per-pane local env (service keys, profile pointers,
     // local analytics paths, or daemon routing). Direct daemon clients cannot bypass this.
+    // paneProcessEnv, not a spread: spec.env carries `PATH` (daemon-relay ships the app's
+    // live PATH with every spawn) while process.env on Windows spells it `Path`. Spread,
+    // both keys survive and node-pty emits them in order with no folding, so the pane got
+    // the STALE inherited one and every live-PATH repair landed in the losing key.
     const inheritedEnv: NodeJS.ProcessEnv = spec.remote
       ? { ...process.env }
-      : {
-          ...process.env,
-          AIDER_ANALYTICS_LOG: aiderLogPath(this.id),
-          ...extraEnv,
-          ...(spec.env ?? {})
-        }
+      : paneProcessEnv(process.env, { AIDER_ANALYTICS_LOG: aiderLogPath(this.id) }, extraEnv, spec.env)
     const shellLaunch = spec.remote
       ? { args, env: {} }
       : paneShellLaunch(shell, inheritedEnv, `${process.pid}-${this.id}-${this.gen}`)

@@ -321,8 +321,21 @@ export function mergeEnv(
   base: NodeJS.ProcessEnv,
   ...overlays: (Record<string, string | undefined> | undefined)[]
 ): NodeJS.ProcessEnv {
+  return mergeEnvFolding(process.platform === 'win32', base, ...overlays)
+}
+
+/** mergeEnv with the case-folding decision made by the CALLER rather than read from the
+ *  ambient platform — the same treatment wellKnownBinDirs and resolveOnPath already give
+ *  `home` and `env`. Windows-only behavior that cannot be driven from a test is behavior
+ *  no non-Windows runner can defend, and this fold is exactly that: the bug it prevents
+ *  (an inherited `Path` stacked beside a repaired `PATH`) is invisible on macOS and Linux. */
+export function mergeEnvFolding(
+  foldCase: boolean,
+  base: NodeJS.ProcessEnv,
+  ...overlays: (Record<string, string | undefined> | undefined)[]
+): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = { ...base }
-  const insensitive = process.platform === 'win32'
+  const insensitive = foldCase
   for (const overlay of overlays) {
     if (!overlay) continue
     for (const [key, value] of Object.entries(overlay)) {
