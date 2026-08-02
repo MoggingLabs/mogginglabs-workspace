@@ -108,6 +108,12 @@ function toVerb(name: string, args: Record<string, unknown>): BrowserAgentVerb |
 // it at startup so the two can never drift silently.
 export const MCP_TOOL_NAMES: string[] = [...MCP_BROWSER_TOOL_NAMES]
 
+/** One frame is one line. Matches the cap the Codex app-server transport already uses
+ *  (agent-settings/codex-app-server.ts MAX_LINE_BYTES) — no control frame comes close. */
+const MAX_FRAME_BYTES = 1024 * 1024
+/** docs/06 and ADR 0006: an unauthenticated connection is dropped in ~3s. */
+const AUTH_DEADLINE_MS = 3000
+
 let server: net.Server | null = null
 let token = ''
 const authedSocks = new Set<net.Socket>()
@@ -390,8 +396,31 @@ export function startMcpEndpoint(): void {
     // One bridge process = one agent's MCP session. Scoped to the socket so it
     // dies with the agent, and so two agents never share a server session id.
     const mcpSessions = new Map<string, string>()
+
+    // Drop-unauthenticated, the same posture the daemon transport already holds
+    // (pty-daemon/transport.ts:90) and the same ~3s docs/06 and ADR 0006 promise.
+    // Without it any local process could open this pipe and simply sit there.
+    // The pane-bound handshake verifies its token against the daemon, so a
+    // verification in flight gets ONE more window rather than being cut off —
+    // but never an unbounded one.
+    let authGrace = 0
+    const authTimer = setInterval(() => {
+      if (authed) return clearInterval(authTimer)
+      if (authPending && authGrace++ < 1) return
+      clearInterval(authTimer)
+      sock.destroy()
+    }, AUTH_DEADLINE_MS)
+
     sock.on('data', (chunk) => {
       buf += chunk
+      // A frame is one line, so bytes with no newline in them are not a frame —
+      // they are just growth. Main owns the app's whole heap (docs/05 budgets it),
+      // and this socket is reachable pre-auth by any process running as this user,
+      // so an unbounded accumulator here is an OOM anyone can trigger with no token.
+      if (buf.length > MAX_FRAME_BYTES) {
+        sock.destroy()
+        return
+      }
       let i
       while ((i = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, i)
@@ -412,6 +441,7 @@ export function startMcpEndpoint(): void {
           const wantsPane = typeof msg.pane === 'string' || typeof msg.paneToken === 'string'
           if (!wantsPane) {
             authed = true // human/read-only app client; pane-scoped verbs still fail closed
+            clearInterval(authTimer)
             authedSocks.add(sock)
             sock.write(JSON.stringify({ t: 'welcome', tools: MCP_TOOL_NAMES, paneBound: false }) + '\n')
             continue
@@ -434,6 +464,7 @@ export function startMcpEndpoint(): void {
             }
             boundPane = pane
             authed = true
+            clearInterval(authTimer)
             authedSocks.add(sock)
             sock.write(JSON.stringify({ t: 'welcome', tools: MCP_TOOL_NAMES, paneBound: true }) + '\n')
           })
@@ -573,7 +604,10 @@ export function startMcpEndpoint(): void {
       }
     })
     sock.on('error', () => sock.destroy())
-    sock.on('close', () => authedSocks.delete(sock))
+    sock.on('close', () => {
+      clearInterval(authTimer)
+      authedSocks.delete(sock)
+    })
   })
 
   // A grant flip anywhere -> every live server session re-resolves (and emits
