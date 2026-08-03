@@ -4,6 +4,7 @@ import { delimiter, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   expandWindowsVars,
+  foldWindows,
   loginRcFile,
   mergeEnv,
   parseRegPath,
@@ -11,8 +12,10 @@ import {
   addToProcessPath,
   planWindowsPathWrite,
   rcBlock,
+  windowsPathEntries,
   type RunOutcome
 } from '@backend/platform/env-path'
+import { bodyWithoutComments } from './source-body'
 
 // THE STALE-PATH BUG, pinned.
 //
@@ -115,6 +118,57 @@ describe('planWindowsPathWrite', () => {
   it('does nothing when a machine entry already covers the dir', () => {
     const machine = ran('    Path    REG_SZ    C:\\Users\\me\\.npm-global\r\n')
     expect(planWindowsPathWrite(parseRegPath(user), parseRegPath(machine), wanted).action).toBe('noop')
+  })
+
+  it('does nothing when the USER value already covers the dir', () => {
+    const covering = ran('    Path    REG_SZ    C:\\real;C:\\Users\\me\\.npm-global\r\n')
+    expect(planWindowsPathWrite(parseRegPath(covering), 'absent', wanted).action).toBe('noop')
+  })
+
+  it('compares the way Windows does — case-insensitively, trailing slash ignored', () => {
+    const machine = ran('    Path    REG_SZ    C:\\USERS\\ME\\.NPM-GLOBAL\\\r\n')
+    expect(planWindowsPathWrite(parseRegPath(user), parseRegPath(machine), wanted).action).toBe('noop')
+  })
+})
+
+// THE HOST-INDEPENDENCE OF A WINDOWS PLANNER, pinned.
+//
+// `planWindowsPathWrite` is pure, exported, and unit-tested on every runner — but it read
+// two HOST-shaped helpers to parse WINDOWS data. `pathEntries` splits on `path.delimiter`,
+// which is ':' off Windows, so a registry value was cut in half at its drive letter
+// ('C:\a;C:\b' -> ['C', '\a;C', '\b']); `fold` only lowercases when process.platform is
+// win32, so what survived was compared case-sensitively as well. The "a machine entry
+// already covers the dir" row therefore planned a duplicate WRITE on macOS and Linux and
+// a correct 'noop' on the author's Windows box — green locally, red on all three CI
+// runners (run 30780796906).
+//
+// The behavioural rows above now pass on every host. These two guard the CAUSE, because a
+// Windows-only-correct comparison is invisible to a Windows runner: the separator and the
+// case fold are properties of the DATA, and the planner must never reach for the ambient
+// process again.
+describe('the Windows planner does not read the host platform', () => {
+  it('splits and folds by Windows rules whatever the host is', () => {
+    // Host-independent by construction: no branch on process.platform, no path.delimiter.
+    expect(windowsPathEntries('C:\\a;C:\\b;;  C:\\c  ')).toEqual(['C:\\a', 'C:\\b', 'C:\\c'])
+    expect(windowsPathEntries(undefined)).toEqual([])
+    expect(foldWindows('C:\\Users\\Me\\Bin\\')).toBe('c:\\users\\me\\bin')
+    expect(foldWindows('C:\\Users\\Me\\Bin/')).toBe('c:\\users\\me\\bin')
+  })
+
+  it('reaches for the Windows helpers, never the host-shaped ones', () => {
+    // Asserted over the source: the wrong answer only appears on a host this suite cannot
+    // be run on, so behaviour alone cannot defend it from a Windows machine.
+    const body = bodyWithoutComments(
+      readFileSync(resolve(import.meta.dirname, '../../src/backend/platform/env-path.ts'), 'utf8'),
+      'export function planWindowsPathWrite('
+    )
+    expect(body, 'windowsPathEntries is the ;-splitter — re-anchor rather than delete').toContain(
+      'windowsPathEntries('
+    )
+    expect(body, 'foldWindows is the case-insensitive compare').toContain('foldWindows')
+    expect(body, 'pathEntries splits on the HOST delimiter — \x27:\x27 off Windows').not.toMatch(/\bpathEntries\b/)
+    expect(body, 'fold only lowercases when process.platform is win32').not.toMatch(/\bfold\b/)
+    expect(body, 'the planner must not branch on the host at all').not.toContain('process.platform')
   })
 })
 

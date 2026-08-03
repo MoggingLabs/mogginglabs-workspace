@@ -48,10 +48,41 @@ export interface LivePath {
 
 /** Windows compares path entries case-insensitively; POSIX does not. */
 const fold = (value: string): string =>
-  process.platform === 'win32' ? value.replace(/[\\/]+$/, '').toLocaleLowerCase('en-US') : value.replace(/\/+$/, '')
+  process.platform === 'win32' ? foldWindows(value) : value.replace(/\/+$/, '')
 
 export function pathEntries(value: string | undefined): string[] {
   return (value ?? '').split(delimiter).filter(Boolean)
+}
+
+// ── Windows PATH data, read on ANY host ──────────────────────────────────────────────
+//
+// `pathEntries` splits on `path.delimiter` and `fold` branches on `process.platform` —
+// both describe the host DOING the reading. A value out of the Windows registry is not
+// host data: it is always ';'-separated and always compared case-insensitively, whoever
+// happens to be parsing it. Using the host-shaped helpers on it is only accidentally
+// right, and only on Windows.
+//
+// On a macOS or Linux runner the host delimiter is ':', so `pathEntries` cuts every
+// Windows entry in half at its DRIVE LETTER — 'C:\a;C:\b' reads as ['C', '\a;C', '\b'] —
+// and nothing afterwards can match a real directory again. That is not hypothetical: it
+// made planWindowsPathWrite plan a duplicate WRITE over a dir the machine PATH already
+// carried, on every non-Windows CI runner, while passing on the author's Windows box.
+//
+// Same treatment `mergeEnvFolding` already gives its fold: the platform decision is a
+// property of the DATA, stated at the seam, not read from the ambient process. Windows-
+// only behaviour that cannot be driven from a test is behaviour no non-Windows runner
+// can defend.
+export function windowsPathEntries(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(';')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+}
+
+/** Compare two Windows path entries the way Windows itself does: case-insensitively, and
+ *  ignoring a trailing separator of either slash. */
+export function foldWindows(value: string): string {
+  return value.replace(/[\\/]+$/, '').toLocaleLowerCase('en-US')
 }
 
 /** Order-preserving de-dupe under the platform's own comparison rules. */
@@ -161,9 +192,12 @@ async function windowsRegistryPath(): Promise<string[] | null> {
   if (typeof parsedMachine === 'string' && typeof parsedUser === 'string') return null
   // Windows composes the effective PATH as system-then-user; keep that order so a user
   // override of a system tool keeps losing here exactly as it does in a real console.
+  // Registry values again — ';'-separated by definition. Identical to `pathEntries` here,
+  // because this function only ever runs on win32, but stated rather than relied upon: the
+  // same helper on the same data in planWindowsPathWrite WAS host-dependent and did break.
   return dedupe([
-    ...pathEntries(expandWindowsVars(regValue(parsedMachine))),
-    ...pathEntries(expandWindowsVars(regValue(parsedUser)))
+    ...windowsPathEntries(expandWindowsVars(regValue(parsedMachine))),
+    ...windowsPathEntries(expandWindowsVars(regValue(parsedUser)))
   ])
 }
 
@@ -494,10 +528,16 @@ export function planWindowsPathWrite(existing: RegRead, machine: RegRead, wanted
   // A machine entry already covers it — appending a duplicate to the user value would
   // only make every future PATH longer for no gain. (An unreadable MACHINE value is safe
   // to treat as empty: it only ever adds a dir we did not strictly need.)
+  // windowsPathEntries/foldWindows, NOT pathEntries/fold: these are registry values, and
+  // the host reading them may not be Windows (this planner is pure and unit-tested on
+  // every runner). See the note on windowsPathEntries.
   const covered = new Set(
-    [...pathEntries(expandWindowsVars(regValue(existing))), ...pathEntries(expandWindowsVars(regValue(machine)))].map(fold)
+    [
+      ...windowsPathEntries(expandWindowsVars(regValue(existing))),
+      ...windowsPathEntries(expandWindowsVars(regValue(machine)))
+    ].map(foldWindows)
   )
-  const added = wanted.filter((dir) => !covered.has(fold(dir)))
+  const added = wanted.filter((dir) => !covered.has(foldWindows(dir)))
   if (!added.length) return { action: 'noop', added: [] }
 
   const raw = regValue(existing) // '' only when the value is PROVEN absent — a real fresh write
