@@ -374,6 +374,26 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
       clients.push(cA)
       await cA.rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {} })
 
+      // THE WRITE DOOR IS A QUEUE, AND THE CLIENT HAS A WATCHDOG. Every brain/memory
+      // write runs INSIDE the project's exclusive queue (BrainService.landSymbolWrite ->
+      // runExclusive, "so it never interleaves with a drain or a rebuild"). A write that
+      // arrives while a tick's drain — or the board launch's fourth-worktree reconcile —
+      // holds that queue does not fail: it WAITS for the whole pass. The pane client's
+      // per-RPC watchdog (pane-mcp-smoke-client.ts, a flat 15s) is shorter than that
+      // legitimate wait on a loaded runner, and when it fires the call comes back as a
+      // TRANSPORT error — ok:false, isError:false, text ''. Read as a tool answer that is
+      // a FALSE assertion failure, and it cascades exactly three arms: writeOk false,
+      // staleOk false with a BLANK staleMsg, and create_memory's landing missing when
+      // `git add` runs, so the merge finds nothing and burns its whole budget.
+      // So every ONE-SHOT write below enters the queue from a SETTLED world — the same
+      // precaution (d) takes before it starts its clock, for the same reason. Bounded and
+      // reported, never masking: an unsettled world still runs the assertion.
+      const settle = async (capMs = 60000): Promise<{ ok: boolean; ms: number }> =>
+        until(async () => {
+          const s = await call(cA, 'brain_status')
+          return s.ok && s.data.dirty === false && (s.data.status as { indexing?: boolean } | undefined)?.indexing !== true
+        }, capMs, 500)
+
       // ── (k-first) custody: no grant → write verbs absent, forced calls
       //    refuse, zero bytes move ─────────────────────────────────────────────
       const served = (((await cA.rpc('tools/list')).result as { tools?: { name: string }[] })?.tools ?? []).map((t) => t.name)
@@ -481,10 +501,7 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
       // The board launch just minted a worktree whose partition may reconcile
       // in the background — start the freshness clock from a SETTLED world, or
       // the measurement charges the tick with someone else's work.
-      await until(async () => {
-        const s = await call(cA, 'brain_status')
-        return s.ok && s.data.dirty === false && (s.data.status as { indexing?: boolean } | undefined)?.indexing !== true
-      }, 60000, 500)
+      await settle()
       const st0 = await call(cA, 'brain_status')
       const gen0 = st0.data.generation as number
       const sent = await cli(['send', paneOps, 'node ../ops.mjs append'])
@@ -510,10 +527,17 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
       // disk. Arm (d) above just drove a mutation through the same index, and on a loaded
       // windows runner `find_symbol` can still be serving the previous generation — the
       // symbol missing, or its node carrying the PRE-mutation fileHash. A one-shot read
-      // there hands `replace_symbol_body` a hash the file no longer has: the write is
-      // refused, and staleOk/mergeOk cascade off it (windows run 30725736363 — writeOk
-      // false, staleMsg empty, merge burning its whole 25s budget on a landing that never
-      // happened). Wait for the index to agree with the disk, THEN handshake.
+      // there hands `replace_symbol_body` a hash the file no longer has.
+      //
+      // …but the hash agreeing is only HALF of "ready to write", and the half that costs
+      // nothing: windows run 30725736363 came back with alphaIndexedMs 12 and the same
+      // three arms red anyway. The other half is the QUEUE (see `settle` above). The gap
+      // is real and this arm opens it itself: `grantVisible` may poll for up to 15s
+      // between (d)'s settled world and this write, and every 2.5s tick in that window
+      // can put a drain — or the board launch's freshly minted fourth partition — back
+      // into the exclusive queue the write must pass through. So: settle, THEN hash,
+      // THEN handshake.
+      const writeSettled = await settle()
       let alpha: NodeHit | undefined
       let hash0 = ''
       const alphaIndexed = await until(async () => {
@@ -527,7 +551,9 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
         hash0 = h
         return true
       }, 20000, 250)
+      const writeT0 = Date.now()
       const replaced = await call(cA, 'replace_symbol_body', { id: alpha?.id ?? '', expectedFileHash: hash0, body: ALPHA_BODY })
+      const writeMs = Date.now() - writeT0
       const diskAfter = readFileSync(join(F.repo, 'src', 'target.ts'))
       const omegaNow = await call(cA, 'find_symbol', { name: 'mzOmega' }) // the NEXT query — no wait
       const writeOk =
@@ -554,6 +580,11 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
         JSON.stringify(docs.data).includes('acmeGreet')
 
       // ── (g) create_memory in A + REAL git merge → found from B ─────────────
+      // One-shot write, and the `git add` two lines down is its deadline: a create that
+      // is still queued when the commit runs is a memory the merge cannot carry, and the
+      // poll below then burns its whole budget on a landing that never happened. Settle
+      // first, exactly like the symbol write above.
+      const memSettled = await settle()
       const created = await call(cA, 'create_memory', {
         name: 'merge-carried-note',
         description: 'Carried home by git',
@@ -798,8 +829,19 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
         partitionsOk, projRoots,
         freshOk, freshMs: appeared.ms, freshBudgetMs,
         writeOk, alphaIndexedMs: alphaIndexed.ms, staleOk, staleMsg: staleRetry.text.slice(0, 200),
+        // The write arms' TESTIMONY (the house debugging law, as the arc pane has). A
+        // write can fail as a tool answer (isError + text: a stale CAS, a wrong checkout)
+        // or as TRANSPORT (rpcError, text ''): a grant that would not resolve, or the
+        // client's flat 15s watchdog firing on a write queued behind a drain. Those two
+        // read IDENTICALLY in `staleMsg` — both blank — and every windows red of these
+        // arms so far has been the blank one. The reason is right here; record it.
+        grantVisibleOk: grantVisible.ok, grantVisibleMs: grantVisible.ms,
+        writeSettledOk: writeSettled.ok, writeSettledMs: writeSettled.ms, writeMs,
+        writeRpc: replaced.rpcError, staleRpc: staleRetry.rpcError,
         docsOk, docsVersion: docs.data.version ?? null, docsSource: docs.data.source ?? null,
         mergeOk, mergeMs: merged.ms,
+        memSettledOk: memSettled.ok, memSettledMs: memSettled.ms,
+        createOk: created.ok, createRpc: created.rpcError,
         draftOk, draftSlug,
         promoteOk,
         recallOk, memFenceAt, slugInCap, stampInCap,
