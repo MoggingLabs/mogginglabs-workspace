@@ -427,7 +427,7 @@ export class TerminalPane {
           // No process, no agent: the context bar (and any future session-scoped
           // chrome) must not outlive the pane's process (agent-session port -> the
           // context feature drops every source).
-          clearPaneAgentSession(this.id)
+          clearPaneAgentSession(this.id, 'exited')
         }
       }),
       // Source-aware backend truth (shell/process/explicit agent report) becomes the one
@@ -581,7 +581,10 @@ export class TerminalPane {
         else if (agentArmed && (mark === 'D' || mark === 'A') && Date.now() - agentSetAt > 1500) {
           agentSetAt = 0
           agentArmed = false
-          clearPaneAgentSession(this.id)
+          // A GUESS, and labelled as one: this hides the context bar, and the
+          // deterministic interrupt refuses it as grounds to type (interrupt-core's
+          // endProvesAgentGone carries what that cost before it was labelled).
+          clearPaneAgentSession(this.id, 'prompt-guess')
         }
       }
       return false
@@ -2524,7 +2527,7 @@ export class TerminalPane {
     // never reaches the renderer (the relay tombstones it), so without these the NEXT
     // pane to take this id mounted wearing the dead one's agent session (provider chip +
     // context gauge), launch-profile note, and label.
-    clearPaneAgentSession(this.id)
+    clearPaneAgentSession(this.id, 'pane-gone') // the pty is killed below — nothing survives this
     setPaneProfile(this.id, undefined)
     setPaneLabel(this.id, '')
     setPaneUserTitle(this.id, '')

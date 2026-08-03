@@ -22,7 +22,10 @@ import {
 // The gone signal is fed by the agents feature's TerminalChannels.agent handler (the
 // one subscriber to the wire) — NOT read off the session port, whose adopted-session
 // stamp guard can legitimately keep a session after a null verdict. PTY exit reaches
-// us through the session port's clear instead (index.ts wires both).
+// us through the session port's clear instead (index.ts wires both) — but only the
+// clears that are PROOF: a session is also retired by the shell's own prompt mark, and
+// feeding that guess in here is what let a switch type into an agent nobody had said
+// was dead (interrupt-core's endProvesAgentGone carries the incident).
 
 interface GoneWaiter {
   (gone: boolean): void
@@ -31,7 +34,8 @@ interface GoneWaiter {
 const goneNow = new Set<number>()
 const waiters = new Map<number, Set<GoneWaiter>>()
 
-/** The pane's agent is GONE (process-table null verdict, or the PTY itself exited). */
+/** The pane's agent is GONE — a process-table null verdict, or a session end that proves
+ *  the same thing (endProvesAgentGone). Never a heuristic: this authorizes a keystroke. */
 export function noteAgentGone(paneId: number): void {
   goneNow.add(paneId)
   const set = waiters.get(paneId)
@@ -112,6 +116,13 @@ function answerBatchTrap(paneId: number): boolean {
  */
 export async function interruptAgent(paneId: number): Promise<boolean> {
   recordSwitchPhase(paneId, 'interrupt-start')
+  // Was a CLI CONFIRMED in this pane when we started? Read ONCE, here. The fallback below
+  // reasons from the session, and the session can be retired mid-interrupt by a heuristic
+  // (terminal-pane's prompt guess) — after which "no session" reads as "nothing was ever
+  // running here" and hands the guess the same power the gone signal just stopped giving
+  // it. What the fallback is actually about is a launch that never produced a process, and
+  // that is decided before the first ^C.
+  const confirmedAtStart = getPaneAgentSession(paneId as PaneId)?.running === true
   let gone = goneNow.has(paneId)
   for (let round = 0; !gone && round < INTERRUPT_ROUNDS; round++) {
     write(paneId, '\x03')
@@ -119,7 +130,7 @@ export async function interruptAgent(paneId: number): Promise<boolean> {
     write(paneId, '\x03')
     answerBatchTrap(paneId)
     gone = await whenAgentGone(paneId, GONE_WAIT_MS)
-    if (!gone && round >= 1) {
+    if (!gone && round >= 1 && !confirmedAtStart) {
       // Two full rounds (~7s) with no verdict AND no CONFIRMED agent: the session was
       // typed but the process table never saw a CLI behind it (not installed, launch
       // failed) — there is nothing to kill, and no verdict will ever come. Proceeding

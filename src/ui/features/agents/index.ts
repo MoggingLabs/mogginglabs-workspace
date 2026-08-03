@@ -2,6 +2,7 @@ import type { UiFeature } from '../../core/registry/feature-registry'
 import { AgentChannels, AgentHookChannels, IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentCliId, type AgentCommandResult, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type GlobalHooksMutationResult, type GlobalHooksStatus, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
 import { dismissSignInBanner, offerSignIn } from './signin-banner'
 import { interruptAgent, noteAgentGone, noteAgentPresent, recordSwitchPhase, resetSwitchTrace, switchTrace } from './interrupt'
+import { endProvesAgentGone } from './interrupt-core'
 import { NO_LAUNCH_COVER, beginLaunchCover, type LaunchCover } from './launch-readiness'
 import { autoTrustClaudeLaunch, isTrustSettled, markTrustPrepared, trustDialogLive } from './auto-trust'
 import { typeContinuation } from './continuation'
@@ -176,13 +177,17 @@ export const agentsFeature: UiFeature = {
     // object as a launched one: context gauge, provider mark, MCP chip, failover, resume.
     getBridge().on(TerminalChannels.agent, (payload) => void onAgentDetected(payload as AgentDetectedEvent))
 
-    // Belt and braces beside the process verdict: a PTY exit (terminal-pane clears the
-    // session) or the OSC-133 prompt guess also mean "nothing left to interrupt", and a
-    // WRITTEN session re-arms the gone signal — a switch started while the next CLI is
-    // already booting must wait for a real exit, not insta-succeed on stale state.
-    onPaneAgentSession((paneId, session) => {
+    // Belt and braces beside the process verdict: a PTY exit, or the pane being closed
+    // out from under the switch, also mean "nothing left to interrupt" — and a WRITTEN
+    // session re-arms the gone signal, so a switch started while the next CLI is already
+    // booting waits for a real exit instead of insta-succeeding on stale state.
+    //
+    // But only the ends that are PROOF (interrupt-core's endProvesAgentGone). This used
+    // to note EVERY clear as gone, which handed the interrupt the OSC-133 prompt guess as
+    // a verdict — the fail-closed hole the PROFSWITCH flake was.
+    onPaneAgentSession((paneId, session, end) => {
       if (session) noteAgentPresent(Number(paneId))
-      else noteAgentGone(Number(paneId))
+      else if (end && endProvesAgentGone(end)) noteAgentGone(Number(paneId))
     })
 
     async function onAgentDetected(ev: AgentDetectedEvent): Promise<void> {
@@ -206,7 +211,7 @@ export const agentsFeature: UiFeature = {
         // fired BEFORE the stamp guard below, which may legitimately keep an adopted
         // session while the process is nonetheless gone.
         noteAgentGone(paneId)
-        if ((detectedAt.get(paneId) ?? 0) >= (sessionSetAt.get(paneId) ?? 0)) clearPaneAgentSession(paneId as PaneId)
+        if ((detectedAt.get(paneId) ?? 0) >= (sessionSetAt.get(paneId) ?? 0)) clearPaneAgentSession(paneId as PaneId, 'verdict')
         // The offer belonged to the agent that just died. Leaving it up would ask the user
         // to sign a CLI in that is no longer running, into a shell that would reject the
         // slash command it was built for.

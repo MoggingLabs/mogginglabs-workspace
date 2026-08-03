@@ -39,25 +39,46 @@ export interface PaneAgentSession {
   since?: number
 }
 
+/**
+ * WHY a pane's agent session ended. Every clear retires the same session and every
+ * cosmetic reader (context bar, chip, label) treats them alike — but they are NOT the
+ * same claim about the world, and the deterministic interrupt (F2) is allowed to type a
+ * launch command only on the ones that are PROOF (see interrupt-core's
+ * `endProvesAgentGone`). Required at the call site, so a new clear has to say which kind
+ * it is instead of silently inheriting "the agent is gone".
+ *
+ *  - `exited`       the pane's PTY process exited. Nothing runs in there.
+ *  - `verdict`      the process table walked the pane's subtree and found no agent.
+ *  - `pane-gone`    the pane was closed and its PTY killed with it.
+ *  - `prompt-guess` the SHELL announced a prompt after a command mark (OSC 133;D/A).
+ *                   A guess, and the backend says so in as many words: agent-proc.ts's
+ *                   `promptSeen` treats a prompt as a TRIGGER for a listing and never as
+ *                   a verdict, "a backgrounded agent still shows up in the subtree".
+ */
+export type AgentSessionEnd = 'exited' | 'verdict' | 'pane-gone' | 'prompt-guess'
+
 const sessions = new Map<PaneId, PaneAgentSession>()
-const subscribers = new Set<(paneId: PaneId, session: PaneAgentSession | null) => void>()
+const subscribers = new Set<(paneId: PaneId, session: PaneAgentSession | null, end?: AgentSessionEnd) => void>()
 
 export function setPaneAgentSession(paneId: PaneId, session: PaneAgentSession): void {
   sessions.set(paneId, session)
   for (const cb of subscribers) cb(paneId, session)
 }
 
-export function clearPaneAgentSession(paneId: PaneId): void {
+export function clearPaneAgentSession(paneId: PaneId, end: AgentSessionEnd): void {
   if (!sessions.delete(paneId)) return
-  for (const cb of subscribers) cb(paneId, null)
+  for (const cb of subscribers) cb(paneId, null, end)
 }
 
 export function getPaneAgentSession(paneId: PaneId): PaneAgentSession | undefined {
   return sessions.get(paneId)
 }
 
-/** Subscribe to session changes. Current values are replayed immediately. */
-export function onPaneAgentSession(cb: (paneId: PaneId, session: PaneAgentSession | null) => void): () => void {
+/** Subscribe to session changes. Current values are replayed immediately (a replay is a
+ *  session, never an end, so `end` is present exactly when `session` is null). */
+export function onPaneAgentSession(
+  cb: (paneId: PaneId, session: PaneAgentSession | null, end?: AgentSessionEnd) => void
+): () => void {
   subscribers.add(cb)
   for (const [id, s] of sessions) cb(id, s)
   return () => subscribers.delete(cb)

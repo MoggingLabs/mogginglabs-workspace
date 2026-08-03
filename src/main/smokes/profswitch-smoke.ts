@@ -17,7 +17,12 @@ import { AgentChannels, type AgentInfo, type AgentInstallState } from '@contract
 //      for the running provider's OTHER profile and switches the pane back.
 //   4. The interrupt fails CLOSED (F2): with a CONFIRMED-running agent that never
 //      dies (detection shim; no process verdict will ever come), the switch ends in
-//      the overlay's 'failed' state and types NO launch command.
+//      the overlay's 'failed' state and types NO launch command — AND it holds while
+//      the pane's shell claims otherwise. The shim only ever silenced the process
+//      table, so "no verdict will ever come" left the heuristics that ALSO retire a
+//      pane's agent session free to answer in its place; step 4 now fires the loudest
+//      of them (a real OSC 133;D prompt mark) straight at the interrupt instead of
+//      hoping the run is fast enough that it never lands.
 // Assertions ride __mogging.ptyWrites (the DEV write spy) + the switch trace —
 // phases and command presence only, never buffer content.
 //
@@ -451,6 +456,7 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       const writesFor2 = (): Promise<number> =>
         ES<number>(`(window.__mogging.ptyWrites || []).filter((w) => w.id === ${pane2} && String(w.data).includes('gemini')).length`)
       await ES(`window.__mogging.agents.detected({ id: ${pane2}, agentId: 'gemini', cwd: ${JSON.stringify(anchor)}, sinceMs: Date.now() })`)
+      const sessionWrittenAt = Date.now()
       const claimed2 = (await ES(`window.__mogging.agents.capped({ providerId: 'gemini', profileId: ${JSON.stringify(failProfile)} })`)) as boolean
       let offered2 = false
       for (let i = 0; i < 20 && !offered2; i++) {
@@ -459,6 +465,37 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       }
       const launchesBefore2 = await writesFor2()
       await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Continue on')); if (b) b.click(); return 1 })()`)
+      // THE GUESSES, fired AT the interrupt — what made this gate flaky instead of
+      // deterministic. "No process verdict will ever come" was only ever true of the
+      // process table; the pane's agent session can ALSO be retired by heuristics the
+      // shim above does not control, and each of those used to read as "the agent is
+      // gone". The loudest is the shell's own OSC 133;D — a real mark that any zsh/bash
+      // with third-party shell integration emits at every prompt (ours is 633, which is
+      // why Windows and Linux sweeps never saw it), fired here through the pane's xterm
+      // exactly as blocks-smoke does, so no shell emitter is needed. It is armed by a
+      // 133;C and only bites once terminal-pane's 1500ms post-session grace has expired
+      // — which is the load dependence: unloaded, the offer polls once and the ^C lands
+      // inside the grace; loaded, the poll takes seconds and the guess is live by the
+      // time the interrupt starts. A fixture that leaves that to luck is not a fixture.
+      let guessFired = false
+      for (let i = 0; i < 80 && !guessFired; i++) {
+        const started = (await ES(
+          `(window.__mogging.agents.switchTrace(${pane2}) || []).some((t) => t.phase === 'interrupt-start')`
+        )) as boolean
+        if (started && Date.now() - sessionWrittenAt > 1600) {
+          guessFired = (await ES(
+            `(() => {
+              const p = (window.__mogging.panes || []).find((x) => x.id === ${pane2})
+              if (!p || !p.term) return false
+              const E = String.fromCharCode(27), B = String.fromCharCode(7)
+              p.term.write(E + ']133;C' + B)   // a command started (arms the exit guess)
+              p.term.write(E + ']133;D;0' + B) // ...and the shell is back at its prompt
+              return true
+            })()`
+          )) as boolean
+        }
+        if (!guessFired) await sleep(200)
+      }
       let failedOk = false
       for (let i = 0; i < 60 && !failedOk; i++) {
         await sleep(500)
@@ -478,11 +515,11 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
 
       const pass =
         savedA && savedB && confirmed && claimed && offered && switched && typedOk && orderOk &&
-        menuEntryOk && manualOk && claimed2 && offered2 && failedOk && nothingTypedOk
+        menuEntryOk && manualOk && claimed2 && offered2 && guessFired && failedOk && nothingTypedOk
       result = {
         pass, mode: live ? 'claude-live' : 'gemini-hermetic', savedA, savedB, confirmed,
         initialProfile, switchedTo, claimed, offered, switched, typedOk, orderOk, phases1: p1,
-        menuEntryOk, menuDiag, manualOk, claimed2, offered2, failedOk, failDiag, nothingTypedOk
+        menuEntryOk, menuDiag, manualOk, claimed2, offered2, guessFired, failedOk, failDiag, nothingTypedOk
       }
     } catch (e) {
       result = { pass: false, error: String(e) }
