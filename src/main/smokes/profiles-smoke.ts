@@ -9,9 +9,12 @@ import { settleToShell, sh } from './smoke-shell'
 //   1. two pointer profiles save; a secret-shaped env value CANNOT even be saved
 //   2. a launch under the default profile really changes the pane's environment
 //      (env prefix -> sh.echoVar expands to profile A's marker, per-platform)
-//   3. `mogging notify --event usage-limit` in-pane -> the manual failover TOAST
-//   4. auto-failover ON -> a second limit relaunches on profile B in the SAME pane
-//      (same PTY — scrollback survives), environment now shows B's marker
+//   3. `mogging notify --event usage-limit` in-pane -> the pane's blurred OFFER
+//      overlay (failover-offer port; names the next profile, "Not now" dismisses)
+//   4. auto-failover ON (persisted — F6, read back through agents:failoverGet) -> a
+//      second limit switches to profile B in the SAME pane, DETERMINISTICALLY (F2):
+//      the switch trace proves interrupt-start -> agent-gone -> typed -> done, the
+//      environment then shows B's marker, and scrollback survives (same PTY)
 // Provider 'gemini' is a REAL launch, and on a machine that HAS the CLI it behaves like one:
 // it owns the keyboard and the alternate screen, so a shell probe typed at it goes into the
 // AGENT. The claim under test is unchanged — the pane's environment carries the chosen
@@ -93,23 +96,52 @@ export function runProfilesSmoke(win: BrowserWindow): void {
       const launchCtxA = (await ES(`window.__mogging.agents.lastLaunch(${pane})`)) as { profileId?: string }
       const defaultOk = launchCtxA.profileId === 'p-a'
 
-      // ── 3. usage-limit -> the manual failover toast appears ──────────────────
+      // ── 3. usage-limit -> the pane's blurred OFFER overlay (not a toast) ─────
+      // The offer card names the NEXT profile and dismisses on "Not now".
       await cli(['send', String(pane), `node "${cliPath}" notify --event usage-limit`])
-      let toastOk = false
-      for (let i = 0; i < 30 && !toastOk; i++) {
-        toastOk = (await ES(
+      let offerOk = false
+      for (let i = 0; i < 30 && !offerOk; i++) {
+        offerOk = (await ES(
           `(() => {
-            const t = [...document.querySelectorAll('.toast')].find((x) => (x.textContent || '').includes('Usage limit'))
-            return !!(t && t.querySelector('.toast-action'))
+            const o = document.querySelector('.pane-offer.is-active .pane-offer-card')
+            const s = window.__mogging.agents.offer(${pane})
+            return !!(o && (o.textContent || '').includes('Personal') && s && s.state === 'offered')
           })()`
         )) as boolean
-        if (!toastOk) await sleep(500)
+        if (!offerOk) await sleep(500)
+      }
+      await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Not now')); if (b) b.click(); return 1 })()`)
+      let offerDismissOk = false
+      for (let i = 0; i < 12 && !offerDismissOk; i++) {
+        await sleep(300)
+        offerDismissOk = ((await ES(`window.__mogging.agents.offer(${pane})`)) as unknown) === null
       }
 
-      // ── 4. auto-failover -> second limit relaunches on B, same pane ──────────
-      await ES(`window.__mogging.agents.setAutoFailover(true)`)
+      // ── 4. auto-failover (persisted, F6) -> second limit switches to B, same pane ──
+      const autoWsId = (await ES(`window.__mogging.agents.setAutoFailover(true)`)) as string | null
+      const autoPersistOk = autoWsId !== null && ((await ES(`window.__mogging.agents.getAutoFailover()`)) as boolean) === true
       await cli(['send', String(pane), `node "${cliPath}" notify --event usage-limit`])
-      await sleep(4000) // the failover's own interrupt + relaunch
+      // The switch is DETERMINISTIC now (F2): interrupt -> agent-gone verdict -> typed.
+      // Poll for its completion (offer cleared + context on B) instead of a fixed sleep.
+      let switchedOk = false
+      for (let i = 0; i < 60 && !switchedOk; i++) {
+        await sleep(500)
+        switchedOk = (await ES(
+          `(() => {
+            const ctx = window.__mogging.agents.lastLaunch(${pane})
+            return window.__mogging.agents.offer(${pane}) === null && ctx.profileId === 'p-b'
+          })()`
+        )) as boolean
+      }
+      // THE F2 ORDER WITNESS: the resume command may be typed only AFTER the agent-gone
+      // fact. Phases only — the trace carries no content.
+      const trace = (await ES(`window.__mogging.agents.switchTrace(${pane})`)) as { phase: string }[]
+      const phases = trace.map((t) => t.phase)
+      const orderOk =
+        phases.indexOf('interrupt-start') !== -1 &&
+        phases.indexOf('agent-gone') > phases.indexOf('interrupt-start') &&
+        phases.indexOf('typed') > phases.indexOf('agent-gone') &&
+        phases.includes('done')
       // The failover relaunched gemini on profile B — a NEW agent, holding the keyboard and
       // the alt screen again. The app's interrupt killed the CAPPED one, not this one, so the
       // pane has to be handed back to its shell before it can be asked about its environment.
@@ -205,13 +237,14 @@ export function runProfilesSmoke(win: BrowserWindow): void {
         !!seamMeta.paneCwds?.[0]
 
       const pass =
-        saveOk && envAOk && defaultOk && toastOk && envBOk && failoverOk && scrollbackSurvived && paneCount === 1 &&
+        saveOk && envAOk && defaultOk && offerOk && offerDismissOk && autoPersistOk && switchedOk && orderOk &&
+        envBOk && failoverOk && scrollbackSurvived && paneCount === 1 &&
         pageOpenOk && formDenyOk && formSaveOk && returnOk && seamOk
       // settledA/settledB and the buffer tail are DIAGNOSTICS, not claims: an env probe that
       // fails is one question deep ("did the pane ever come back to a shell?"), and answering
       // it in the verdict file is the difference between a bug and an afternoon.
       const paneTail = (await bufferText()).trim().split('\n').slice(-12).join('\n')
-      result = { pass, saveOk, envAOk, defaultOk, toastOk, envBOk, failoverOk, scrollbackSurvived, paneCount, pageOpenOk, formDenyOk, formSaveOk, returnOk, seamOk, seamMeta, launchCtxA, launchCtxB, settledA, settledB, paneTail }
+      result = { pass, saveOk, envAOk, defaultOk, offerOk, offerDismissOk, autoPersistOk, switchedOk, orderOk, phases, envBOk, failoverOk, scrollbackSurvived, paneCount, pageOpenOk, formDenyOk, formSaveOk, returnOk, seamOk, seamMeta, launchCtxA, launchCtxB, settledA, settledB, paneTail }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }

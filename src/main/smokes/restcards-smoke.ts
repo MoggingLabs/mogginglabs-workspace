@@ -5,6 +5,7 @@ import { AddressInfo } from 'node:net'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { isConnectionBridgeEntry } from '@contracts'
 import type { McpPreset, ProviderEntry } from '@contracts'
 import { MCP_PRESETS, handleRestBridgeRpc, injectProviderEntryForSmoke } from '@backend/features/integrations'
 import { listConnections, restBridgeUpstream, submitFamilyKey, sweepConnections, verifyConnection } from '../connections'
@@ -269,7 +270,10 @@ export function runRestCardsSmoke(win: BrowserWindow): void {
       const cs = listConnections()
       const famBothOk = ['restfam-a', 'restfam-b'].every((id) => cs.find((c) => c.id === id)?.state === 'connected')
       const famOneVerifyOk = hits.verify === verifyBeforeFam + 1
-      const bridgeRows = listServers().filter((s) => Array.isArray(s.args) && s.args[0] === '--connection')
+      // The shared predicate, never a positional read: the marker moved off index 0 when
+      // both CLI entries learned to carry the launcher first, and every hand-rolled
+      // `args[0] === '--connection'` silently stopped matching (2026-08-02).
+      const bridgeRows = listServers().filter(isConnectionBridgeEntry)
       const famRowsOk = ['restfam-a', 'restfam-b', 'restsolo'].every((id) => bridgeRows.some((s) => s.id === id))
 
       // (d) tools/list through the real bridge upstream: the curated names, verbatim.

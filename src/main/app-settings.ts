@@ -12,7 +12,7 @@ import {
 } from '@contracts'
 import { maybeFault, persistFault } from './fault-port'
 import { exportPathOverride } from './fixture-port'
-import { noteWorkspaceSave } from './session-restore'
+import { armBootResumeIntentsOnce, noteWorkspaceSave } from './session-restore'
 
 // App-wiring: persist app-level workspace state and non-secret feature desired state via the
 // 03 store mechanism (better-sqlite3), in a main-owned db separate from daemon sessions.
@@ -85,7 +85,13 @@ export function registerAppSettings(): void {
     const loadFault = persistFault('load')
     if (loadFault) throw new Error(loadFault)
     if (!store) throw new Error(storeOpenReason || 'The workspace store is unavailable.')
-    return store.load()
+    const state = store.load()
+    // The boot restore relaunches every lineup with `resume: true` — arm its
+    // exact-session intents (once per run, intersection-guarded) so a cold-daemon
+    // restart resumes each pane's OWN session instead of the CLI's picker
+    // (session-restore.ts, audit 2026-08-02).
+    armBootResumeIntentsOnce(state)
+    return state
   })
   ipcMain.handle(WorkspaceChannels.saveState, (_e, state: WorkspaceState) => {
     debugCounters.saves++

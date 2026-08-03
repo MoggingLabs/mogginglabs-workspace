@@ -146,9 +146,11 @@ export function runUsageGlanceSmoke(win: BrowserWindow): void {
       const openBudget = softGapMs(100)
       const openFast = openMs < openBudget
 
-      // ── (c) pace under EVERY window (both limits forecast themselves): the
-      //    plan-level verdict (worst window) appears VERBATIM among them, every
-      //    paceable window carries a signed delta, resets render. ──
+      // ── (c) pace, post-declutter: ONE plan-level verdict line per provider
+      //    section (the sentence is said once, VERBATIM from the backend
+      //    formatter); every paceable WINDOW still forecasts itself via the
+      //    signed delta chip on its stats line (full verdict in the chip's
+      //    tooltip); resets render. ──
       stage = 'c-pace'
       const paceText = await ES<string>(
         `window.bridge.invoke('usage:list').then((plans) => plans.find((p) => p.providerId === 'claude' && p.profileId === 'main')?.pace?.text ?? '')`
@@ -168,18 +170,20 @@ export function runUsageGlanceSmoke(win: BrowserWindow): void {
       const cOk =
         !!paceText &&
         cInfo.verdicts.map(maskClock).includes(maskClock(paceText)) &&
-        cInfo.verdicts.length >= 2 && // session AND weekly each pace themselves
-        cInfo.deltas.length === cInfo.verdicts.length &&
+        cInfo.verdicts.length >= 2 && // one verdict line per provider section (claude + codex)
+        cInfo.deltas.length >= 4 && // every paceable window keeps its chip (2 windows × 2 providers)
         cInfo.deltas.every((d) => /[+\-−]?\d+%/.test(d)) &&
         cInfo.reset.startsWith('resets in')
 
       // ── (g) Status Page → browser:openExternal (captured at shell.openExternal) ──
       stage = 'g-status'
+      // The action row is icon-only since the declutter pass — the words moved
+      // to title/aria-label (the house icon-only contract), so find it there.
       const gClick = await ES<{ found: boolean; count: number; texts: string[] }>(`(() => {
         const acts = [...document.querySelectorAll('.usage-popover .usage-action')]
-        const b = acts.find((x) => (x.textContent || '').includes('Status Page'))
+        const b = acts.find((x) => (x.getAttribute('aria-label') || '').includes('Status Page'))
         if (b) b.click()
-        return { found: !!b, count: acts.length, texts: acts.map((x) => (x.textContent || '').trim()) }
+        return { found: !!b, count: acts.length, texts: acts.map((x) => (x.getAttribute('aria-label') || '').trim()) }
       })()`)
       await sleep(300) // the click's IPC round-trip to the openExternal handler
       shellRef.openExternal = origOpen // restore before anything else opens a link
@@ -211,6 +215,15 @@ export function runUsageGlanceSmoke(win: BrowserWindow): void {
 
       // ── (d) Enter on the sibling flips order-0 + the switch hint ──
       stage = 'd-switch'
+      // The lane list folds behind the header's ACCOUNT SWITCHER now (the
+      // declutter pass — the name-with-an-arrow that actually switches
+      // accounts). Unfold claude's before driving the tiles; the unfold state
+      // is mount-scoped, so the repaints below must NOT fold it back.
+      await ES(`(document.querySelector('.usage-sec[data-provider="claude"] .usage-glance-acct')?.click(), 1)`)
+      await sleep(150)
+      const lanesUnfolded = await ES<boolean>(
+        `(() => { const s = document.querySelector('.usage-sec[data-provider="claude"] .usage-switch'); return !!s && !s.hidden })()`
+      )
       // First, the bug this used to die on. A background snapshot repaints the popover, which
       // DESTROYS the focused tile — so a keyboard user's Enter went nowhere, and this gate flaked
       // on the same race. Mark the focused node, drive a REAL refresh through the push path, and
@@ -258,7 +271,7 @@ export function runUsageGlanceSmoke(win: BrowserWindow): void {
       }
       await sleep(200)
       const hintOk = (await ES<string>(`document.querySelector('.usage-popover .usage-switch-hint')?.textContent ?? ''`)).includes('running panes keep')
-      const dOk = flipped && hintOk && focusSurvivesRefresh
+      const dOk = lanesUnfolded && flipped && hintOk && focusSurvivesRefresh
 
       // ── (e) Esc + click-away both close ──
       stage = 'e-dismiss'
@@ -426,6 +439,7 @@ export function runUsageGlanceSmoke(win: BrowserWindow): void {
         paceText,
         cInfo,
         dOk,
+        lanesUnfolded,
         flipped,
         sent,
         hintOk,

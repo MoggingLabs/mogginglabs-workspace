@@ -18,7 +18,7 @@ import {
 
 const INV = 'node "C:\\Users\\p\\AppData\\Roaming\\app\\notify-hook\\notify.mjs"'
 const STALE_INV = 'node "C:\\old-install\\userData\\notify-hook\\notify.mjs"'
-const EVENTS = ['Notification', 'Stop', 'StopFailure', 'PostToolBatch', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit']
+const EVENTS = ['Notification', 'Stop', 'StopFailure', 'PostToolBatch', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit', 'SessionStart']
 
 describe('isOurHookCommand', () => {
   it('matches the generated invocation at any install path, and nothing else', () => {
@@ -32,7 +32,7 @@ describe('isOurHookCommand', () => {
 })
 
 describe('applyGlobalHooks', () => {
-  it('wires all seven events into an absent file', () => {
+  it('wires all eight events into an absent file', () => {
     const next = JSON.parse(applyGlobalHooks(null, INV)) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
     for (const event of EVENTS) {
       expect(next.hooks[event]).toHaveLength(1)
@@ -93,6 +93,14 @@ describe('globalHooksState', () => {
     const applied = JSON.parse(applyGlobalHooks(null, INV)) as { hooks: Record<string, unknown> }
     delete applied.hooks.Stop
     expect(globalHooksState(JSON.stringify(applied), INV)).toBe('partial')
+  })
+
+  it('reads a previous vintage (before SessionStart) as partial, and re-apply heals it to one entry per event', () => {
+    const applied = JSON.parse(applyGlobalHooks(null, INV)) as { hooks: Record<string, unknown> }
+    delete applied.hooks.SessionStart // exactly what a pre-SessionStart install wrote
+    expect(globalHooksState(JSON.stringify(applied), INV)).toBe('partial') // auto-wire re-applies on next detection
+    const healed = JSON.parse(applyGlobalHooks(JSON.stringify(applied), INV)) as { hooks: Record<string, Array<unknown>> }
+    for (const event of EVENTS) expect(healed.hooks[event]).toHaveLength(1)
   })
 })
 

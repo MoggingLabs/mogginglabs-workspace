@@ -750,6 +750,27 @@ export class AgentSettingsService {
     // flicker for the whole run. One document write is one thing that changed.
     const touched = new Map<string, { provider: AgentConfigProviderId; target: AgentConfigTarget }>()
     let failure: string | undefined
+    // One context resolution per distinct TARGET per batch. Rows in a batch overwhelmingly
+    // share (provider, scope, targetId) — a launch reconcile is "this provider, this
+    // workspace, N settings" — while each resolution is a full store fan-out on the host
+    // side. Batch-scoped by construction: a later reconcile resolves afresh, so nothing
+    // can go stale between transactions. A rejected resolution is shared too, and that is
+    // correct: same target, same truth, and every sharing row takes its own error path.
+    const contexts = new Map<string, Promise<AgentConfigResolvedContext>>()
+    const resolveContextOnce = (
+      provider: AgentConfigProviderId,
+      target: AgentConfigTarget
+    ): Promise<AgentConfigResolvedContext> => {
+      const key = `${provider} ${target.scope} ${target.targetId} ${target.execution.kind} ${
+        target.execution.kind === 'ssh' ? target.execution.hostId : ''
+      }`
+      let pending = contexts.get(key)
+      if (!pending) {
+        pending = this.options.resolveContext(provider, target)
+        contexts.set(key, pending)
+      }
+      return pending
+    }
 
     for (const row of rows) {
       const target: AgentConfigTarget = { scope: row.scope, targetId: row.targetId, execution: { kind: 'local' } }
@@ -769,7 +790,7 @@ export class AgentSettingsService {
         continue
       }
       try {
-        const context = await this.options.resolveContext(row.provider, target)
+        const context = await resolveContextOnce(row.provider, target)
         const source = selectAgentConfigSource(row.provider, target, row.surface, context.paths)
         if (!source?.file || !source.writable) {
           const reason = source?.reason || 'The selected layer is unavailable.'

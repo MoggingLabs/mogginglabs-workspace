@@ -197,7 +197,16 @@ export function runBoardSmoke(win: BrowserWindow): void {
       // is prose in a chat box: it never runs, no approval is ever recorded, and the ✓-chip that
       // depends on it never appears. Exactly the trap settleToShell exists for (smoke-shell.ts),
       // and exactly the sequence the product asks of a person: leave the agent, then type.
-      const settled = await settleToShell({ es: ES, sleep, paneId })
+      // MORE TRIES THAN THE DEFAULT, because the card's task now actually LANDS. The
+      // hand-off used to type its prompt a fixed beat after the agent process appeared,
+      // which on a real claude is mid-boot — measured, the CLI still discards keystrokes
+      // there (scripts/measure-agent-readiness.mjs). The prompt was swallowed, the agent
+      // sat idle at an empty input box, and two ^C put the shell back instantly. Now the
+      // hand-off waits for the launch cover to lift, so the agent RECEIVES its task and
+      // starts working — and stopping a working agent legitimately takes more than one
+      // interrupt round. The gate's claim is "the shell can be got back", not "it comes
+      // back on the first try".
+      const settled = await settleToShell({ es: ES, sleep, paneId, tries: 10 })
       // The USER names the reviewer. `mogging role` writes only the DAEMON's map, which every
       // pane can write and which no longer confers sign-off authority (daemon-relay: appRoles)
       // — a reviewer named that way would produce an approval the app correctly ignores.

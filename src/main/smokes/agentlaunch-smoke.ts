@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, type BrowserWindow } from 'electron'
+import { ALT_SCREEN_ENTER_RE, SGR_RE } from '@contracts'
 
 // Env-gated agent-LAUNCHER smoke (MOGGING_AGENTLAUNCH): drives the PICKER path end-to-end —
 // detect installed CLIs, then launch `claude` into the focused pane via the launcher
@@ -75,7 +76,15 @@ export function runAgentLaunchSmoke(win: BrowserWindow): void {
             '(function(){var p=window.__mogging&&window.__mogging.panes&&window.__mogging.panes[0];return p?p.term.buffer.active.type:"?";})()'
           )
         )
-        if (bufType === 'alternate' || /\x1b\[\?(?:1049|1047|47)h/.test(cap) || /\x1b\[>\d*[uq]|\x1b\[\?2026h/.test(cap)) break
+        // Wait for exactly the pair the LAUNCH COVER waits for: the alternate screen
+        // taken, and a frame painted into it (ui/core/terminal/liveness-port.ts). This
+        // loop used to break on whichever protocol marker arrived first, and the earlier
+        // ones lose by a wide margin — scripts/measure-agent-readiness.mjs puts the
+        // cursor-shape query at 1.4-1.9s and alt-screen at 2.0-2.6s — so it captured a
+        // pane that had negotiated but not yet drawn, and then failed its own `anyColor`
+        // assertion. Waiting on both makes this gate the standing proof that the signal
+        // the product ships on is really emitted by a real CLI.
+        if ((bufType === 'alternate' || ALT_SCREEN_ENTER_RE.test(cap)) && SGR_RE.test(cap)) break
         // Cursor-positioning sequences swallow the spaces — match de-spaced text.
         const plain = stripAnsi(cap).replace(/\s+/g, '')
         if (!answeredTheme && /Choosethetextstyle|Let'sgetstarted/i.test(plain)) {
@@ -88,12 +97,14 @@ export function runAgentLaunchSmoke(win: BrowserWindow): void {
       }
       const labeled = Boolean(await ES("!!document.querySelector('.pane-label.has-label')"))
 
-      const altEnter = /\x1b\[\?(?:1049|1047|47)h/.test(cap)
+      const altEnter = ALT_SCREEN_ENTER_RE.test(cap)
       const altScreen = bufType === 'alternate' || altEnter
-      // Claude Code 2.1.19x renders IN PLACE on the normal buffer (no alt screen) —
-      // a real TUI is detected by protocol signals, not screen choice: alt screen,
-      // kitty keyboard enable (ESC[>1u), cursor-shape negotiation (ESC[>0q),
-      // or synchronized output (ESC[?2026h).
+      // A real TUI is detected by protocol signals, not screen choice: alt screen, kitty
+      // keyboard enable (ESC[>1u), cursor-shape negotiation (ESC[>0q), or synchronized
+      // output (ESC[?2026h). Claude Code 2.1.19x could render IN PLACE on the normal
+      // buffer, which is why the broader set is still what `pass` rests on; current
+      // builds are fullscreen with no opt-out, so the loop above waits for the alt
+      // screen and the wider net only matters if that ever changes back.
       const tuiProtocol = altScreen || /\x1b\[>\d*[uq]/.test(cap) || /\x1b\[\?2026h/.test(cap)
       const anyColor = /\x1b\[[0-9;]*m/.test(cap)
       const content = /claude/i.test(stripAnsi(cap)) || cap.length > 800

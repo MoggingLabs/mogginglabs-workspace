@@ -73,7 +73,7 @@ export function runGlobalHooksSmoke(win: BrowserWindow): void {
   }
   const oursIn = (list: HookEntry[]): HookEntry[] =>
     list.filter((e) => e.hooks?.some((h) => typeof h.command === 'string' && /notify-hook[\\/]notify\.mjs/.test(h.command) && h.command.includes('--event')))
-  const EVENTS = ['Notification', 'Stop', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit']
+  const EVENTS = ['Notification', 'Stop', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit', 'SessionStart']
 
   type Row = { provider: string; state: string; files: string[]; reason?: string }
   const status = async (): Promise<Record<string, Row>> => {

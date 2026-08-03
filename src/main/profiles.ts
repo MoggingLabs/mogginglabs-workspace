@@ -1,130 +1,29 @@
 import { ipcMain } from 'electron'
-import { mkdirSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { isAbsolute, join, resolve } from 'node:path'
 import { getSettingsStore } from './app-settings'
 import { scheduleAccountDefaultsApply } from './agent-settings'
 import { maybeFault, maybeMutationFault } from './fault-port'
 import { auditDelay, wizardAuditFaults } from './wizard-audit-faults'
+import { deriveProfileDefaults, sanitizeProfile } from './profile-rules'
 import type { SettingsStore } from '@backend/features/workspace'
 import { discoverLogins, probeLogin } from '@backend/features/agents'
-import { redactSecrets } from '@backend/features/review'
-import { HOME_POINTER } from '@backend/features/usage/homes'
 import {
   ProfileChannels,
-  type AgentProfile,
   type ProfileActivateResult,
   type ProfileRemoveResult
 } from '@contracts'
 
 // App-wiring: provider profiles (Phase-4/04, simplified). The user supplies a NAME
-// and the SUBSCRIPTION EMAIL — everything else is derived HERE at save time: the
-// failover order appends, and the env pointer set comes from the HOME_POINTER
-// table (first profile per provider keeps the CLI's default home — the account
-// already signed in; later ones get their own config home, where the CLI asks to
-// sign in on first launch). THE ADR-0002 BOUNDARY still holds: env names on a
-// strict allowlist shape, values deny-listed against the SAME secret patterns the
-// review redactor uses — a secret-shaped value cannot even be SAVED. The email is
-// a label, never an auth input. Profile names/env keys may appear in telemetry as
-// COUNTS only; values never leave main except inside a launch command string.
+// and the SUBSCRIPTION EMAIL — everything else is derived at save time by the pure
+// rules in profile-rules.ts (lifted there so the unit tier can test them without
+// Electron): the failover order appends, and the env pointer set comes from the
+// HOME_POINTER table (first profile per provider keeps the CLI's default home — the
+// account already signed in; later ones get their own config home, where the CLI
+// asks to sign in on first launch). THE ADR-0002 BOUNDARY holds in sanitizeProfile:
+// a secret-shaped value cannot even be SAVED. The email is a label, never an auth
+// input. Profile names/env keys may appear in telemetry as COUNTS only; values
+// never leave main except inside a launch command string.
 
-const ENV_NAME = /^[A-Z][A-Z0-9_]{2,40}$/
-const ID_SHAPE = /^[\w.-]{1,64}$/
-const EMAIL_SHAPE = /^[\w.+-]+@[\w-]+(\.[\w-]+)+$/
-
-const slugify = (name: string): string =>
-  name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 24) || 'profile'
-
-function absoluteProfileHome(value: string): string {
-  if (value === '~') return homedir()
-  if (value.startsWith('~/') || value.startsWith('~\\')) return join(homedir(), value.slice(2))
-  return isAbsolute(value) ? value : resolve(homedir(), value)
-}
-
-/** Normalize legacy tilde pointers and ensure provider homes exist before a CLI
- * launch. Only the provider's canonical home pointer is touched. */
-export function materializeProfileEnv(provider: string, env: Record<string, string> | undefined): Record<string, string> {
-  if (!env) return {}
-  const pointer = HOME_POINTER[provider]
-  if (!pointer || !env[pointer]) return { ...env }
-  const home = absoluteProfileHome(env[pointer])
-  mkdirSync(home, { recursive: true })
-  return { ...env, [pointer]: home }
-}
-
-/** Fill in what the simplified form no longer asks for. An EDIT keeps the stored
- *  env/order (a profile's config home is an identity — it must never move under a
- *  rename); a NEW profile appends to the failover order and derives its pointer.
- *  Explicit env/order in the payload (failover switch, smokes) are honored as-is. */
-export function deriveProfileDefaults(raw: unknown, existing: AgentProfile[]): unknown {
-  const p = raw as Record<string, unknown> | null
-  if (!p || typeof p !== 'object') return raw
-  const out: Record<string, unknown> = { ...p }
-  const prior = existing.find((x) => x.id === p.id)
-  if (out.email === undefined && prior?.email) out.email = prior.email
-  if (out.order === undefined) {
-    const siblings = existing.filter((x) => x.provider === p.provider && x.id !== p.id)
-    out.order = prior?.order ?? (siblings.length ? Math.max(...siblings.map((s) => s.order)) + 1 : 0)
-  }
-  if (out.env === undefined) {
-    if (prior) {
-      out.env = prior.env
-    } else {
-      const provider = typeof p.provider === 'string' ? p.provider : ''
-      const pointer = HOME_POINTER[provider]
-      const siblings = existing.filter((x) => x.provider === provider)
-      if (!pointer || !siblings.length) {
-        out.env = {} // first profile = the CLI's default home (the login you already have)
-      } else {
-        const taken = new Set(siblings.map((s) => s.env[pointer]).filter(Boolean).map(absoluteProfileHome))
-        const base = join(homedir(), `.${provider}-${slugify(String(p.name ?? ''))}`)
-        let home = base
-        for (let n = 2; taken.has(home); n++) home = `${base}-${n}`
-        out.env = { [pointer]: home }
-      }
-    }
-  }
-  return out
-}
-
-export function sanitizeProfile(raw: unknown): AgentProfile | null {
-  const p = raw as Record<string, unknown> | null
-  if (!p || typeof p !== 'object') return null
-  if (typeof p.id !== 'string' || !ID_SHAPE.test(p.id)) return null
-  if (typeof p.name !== 'string' || !p.name.trim() || p.name.length > 60) return null
-  if (typeof p.provider !== 'string' || !ID_SHAPE.test(p.provider)) return null
-  let email: string | undefined
-  if (p.email !== undefined) {
-    if (typeof p.email !== 'string') return null
-    email = p.email.trim()
-    if (email && (email.length > 254 || !EMAIL_SHAPE.test(email))) return null
-    if (!email) email = undefined
-  }
-  const order = Number(p.order)
-  if (!Number.isInteger(order) || order < 0 || order > 99) return null
-  const env: Record<string, string> = {}
-  const rawEnv = p.env
-  if (!rawEnv || typeof rawEnv !== 'object') return null
-  const entries = Object.entries(rawEnv as Record<string, unknown>)
-  if (entries.length > 10) return null
-  for (const [k, v] of entries) {
-    if (!ENV_NAME.test(k)) return null
-    if (typeof v !== 'string' || !v || v.length > 512) return null
-    if (/["`\r\n$]/.test(v)) return null // keeps shell quoting trivial + injection-free
-    // THE deny-list: secret-shaped -> refused. Scanned as the PAIR, not the value alone.
-    // Half the scrub's power is in the key: `ANTHROPIC_API_KEY=<40 ordinary chars>` matches
-    // no token shape on its own, so scanning `v` by itself let exactly the credentials this
-    // is here to stop walk into plaintext SQLite. settings-store.ts:52 already feeds the
-    // pair for the same reason.
-    if (redactSecrets(`${k}=${v}`).redactions > 0) return null
-    env[k] = v
-  }
-  return { id: p.id, name: p.name.trim(), provider: p.provider, email, env, order }
-}
+export { deriveProfileDefaults, materializeProfileEnv, sanitizeProfile } from './profile-rules'
 
 /** ALL logins must appear in profiles — a signed-in account the list doesn't
  *  show is an account the user can't launch under. Reconcile on every list:

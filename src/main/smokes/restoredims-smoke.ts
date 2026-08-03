@@ -159,7 +159,9 @@ export async function runRestoreDimsSmoke(): Promise<void> {
     // 5. the restored replay GROUNDS terminal modes after its history: the dead process
     // may have held alt-screen/mouse/bracketed-paste; the fresh shell holds none
     // (RESTORE_MODE_RESET rides the ring between history and the shell's first byte).
-    const modeGrounded = capB.includes('\x1b[?1049l') && capB.includes('\x1b[?2004l')
+    // ?1047l, not ?1049l: the reset deliberately leaves alt-screen WITHOUT homing the
+    // cursor over the history it follows (pane-shared.ts's RESTORE_MODE_RESET note).
+    const modeGrounded = capB.includes('\x1b[?1047l') && capB.includes('\x1b[?2004l')
     if (!modeGrounded) return fail('restored replay carries no mode reset (RESTORE_MODE_RESET missing)')
 
     // 6. gen-gated resize (protocol `gen`, additive): a STALE generation's resize is

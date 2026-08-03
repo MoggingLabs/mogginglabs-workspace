@@ -9,7 +9,7 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 212 gates: 37 static (AUDIT · LEDGER · VERDICT · SATELLITE · CLIGRAM · DOCSCITE · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 175 app-boot
+# 214 gates: 37 static (AUDIT · LEDGER · VERDICT · SATELLITE · CLIGRAM · DOCSCITE · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 177 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -392,6 +392,9 @@ run_smoke MILESTONE   MOGGING_MILESTONE 1 300 milestone
 run_smoke FLICKER     MOGGING_FLICKER   1 240 flicker
 run_smoke PANESCROLL  MOGGING_PANESCROLL 1 300 panescroll
 run_smoke PANEFIT     MOGGING_PANEFIT   1 240 panefit
+# The drift incident's two missing heal moments: a covered pane's reveal and a daemon
+# reconnect must each re-assert xterm/PTY grid agreement (neither has a box change coming).
+run_smoke GRIDHEAL    MOGGING_GRIDHEAL  1 240 gridheal
 run_smoke REATTACHFIT MOGGING_REATTACHFIT 1 120 reattachfit
 # The dims invariant (smeared-restore root cause): restore respawns at the persisted
 # grid; a typed resume waits for a MEASURED attach (dims-less spawns neither resize nor
@@ -450,6 +453,7 @@ run_smoke SWARM       MOGGING_SWARM     1 240 swarm
 run_smoke LEDGER      MOGGING_LEDGER    1 240 ledger
 run_smoke GATE        MOGGING_GATE      1 240 gate
 run_smoke PROFILES    MOGGING_PROFILES  1 240 profiles
+run_smoke PROFSWITCH  MOGGING_PROFSWITCH 1 240 profswitch
 run_smoke LOGINTRUTH  MOGGING_LOGINTRUTH 1 240 logintruth
 run_smoke REMOTE      MOGGING_REMOTE    1 300 remote
 run_smoke SWARMMILESTONE MOGGING_SWARMMILESTONE 1 300 swarmmilestone
@@ -491,6 +495,11 @@ run_smoke PERWS        MOGGING_PERWS     1 240 perws
 run_smoke PERWSAGENT   MOGGING_PERWSAGENT 1 240 perwsagent
 run_smoke VAULTKEYS    MOGGING_VAULTKEYS 1 240 vaultkeys
 run_smoke WSCLOSE      MOGGING_WSCLOSE   1 240 wsclose
+# PANECLOSE: pane close now soft-closes with the same undo grace a workspace gets — the
+# pane parks ALIVE (echo-proven) under its own slots-port source for exactly the toast's
+# lifetime; Undo re-adopts it (exact arrangement, or beside the focused pane if the
+# layout changed meanwhile); the grace lapsing is the only thing that kills the PTY.
+run_smoke PANECLOSE    MOGGING_PANECLOSE 1 240 paneclose
 # KILLFLASH: pane teardown stays windowless (2026-07-18) — the console-less daemon
 # (detached: libuv job-escape, measured survival-load-bearing) must force windowsHide on
 # every child it spawns, or node-pty's per-pane kill fork flashes one visible terminal
