@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { removeTempDirs } from './temp-dir'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -130,6 +130,112 @@ describe('context monitor lock arbitration', () => {
     await sleep(150)
     expect(monitor.sessionFor(P1)?.file).toBe(fileA)
     expect(seen.get(P1)?.usedTokens).toBe(120_000) // the sink's own numbers, for the pinned session
+  })
+
+  it('birth gate: a fresh pane never locks a neighbour session that BEGAN before its watch', async () => {
+    // Found live 2026-08-02: an empty pane (no prompt yet, so no log of its own) showed
+    // a concurrent session's 82%. The neighbour's log is written every few seconds, so
+    // its mtime passes any floor forever — only its creation time tells it apart.
+    const f = fixture()
+    const { monitor, seen, spec } = rig(f)
+    active = monitor
+    const foreign = writeLog(f.project, 'foreign.jsonl', 165_000, Date.now())
+    const birth = statSync(foreign).birthtimeMs
+    if (!(birth > 0)) return // this fs reports no creation time — the gate is waived there by design
+    utimesSync(foreign, (birth + 60_000) / 1000, (birth + 60_000) / 1000) // "actively written"
+    monitor.setPane(P1, spec({ since: birth + 1 })) // this pane's agent started AFTER that session
+    await sleep(150)
+    expect(monitor.sessionFor(P1)).toBeUndefined()
+    expect(seen.has(P1)).toBe(false) // never emitted — the renderer keeps its honest pending "–"
+  })
+
+  it('pin decides identity before the transcript exists: no heuristic lock while the named file is unborn', async () => {
+    const f = fixture()
+    const { monitor, seen, spec } = rig(f)
+    active = monitor
+    const now = Date.now()
+    // A concurrent same-cwd session born INSIDE the watch — the one case the birth
+    // gate cannot tell apart, and exactly what the heuristics would lock.
+    writeLog(f.project, 'concurrent.jsonl', 165_000, now)
+    const own = join(f.project, 'own.jsonl') // named by the relay, not yet written
+    const sink = contextSinkPath(P1)
+    mkdirSync(dirname(sink), { recursive: true })
+    writeFileSync(sink, JSON.stringify({ usedPct: null, windowTokens: 1_000_000, model: 'claude-fable-5', transcriptPath: own }))
+    monitor.setPane(P1, spec({ since: now - 5_000 }))
+    await sleep(150)
+    expect(monitor.sessionFor(P1)).toBeUndefined() // named-but-unborn beats the heuristics
+    expect(seen.has(P1)).toBe(false)
+    // The first prompt lands the named transcript — the pane pins it and reads it.
+    writeLog(f.project, 'own.jsonl', 40_000, Date.now())
+    await sleep(150)
+    expect(monitor.sessionFor(P1)?.file).toBe(own)
+    expect(seen.get(P1)?.usedTokens).toBe(40_000)
+  })
+
+  it('a session-start sink pins an OLD-BORN transcript: the typed-resume case no heuristic may guess', async () => {
+    const f = fixture()
+    const { monitor, seen, spec } = rig(f)
+    active = monitor
+    const now = Date.now()
+    // A typed `claude -r`: the resumed transcript was created (and last written) long
+    // before this watch — both heuristic gates refuse it, and only the SessionStart
+    // hook's sink write (identity, no numbers) can name it.
+    const resumed = writeLog(f.project, 'resumed.jsonl', 140_000, now - 3_600_000)
+    const sink = contextSinkPath(P1)
+    mkdirSync(dirname(sink), { recursive: true })
+    writeFileSync(sink, JSON.stringify({ at: now, usedPct: null, transcriptPath: resumed }))
+    monitor.setPane(P1, spec({ since: now - 2_000 }))
+    await sleep(150)
+    expect(monitor.sessionFor(P1)?.file).toBe(resumed)
+    expect(seen.get(P1)?.usedTokens).toBe(140_000) // numbers come from the transcript tail
+  })
+
+  it('declared resume: the watch starts pinned to the named old-born file — no heuristic could reach it, no sibling steals it', async () => {
+    const f = fixture()
+    const { monitor, seen, spec } = rig(f)
+    active = monitor
+    const now = Date.now()
+    // The resumed transcript: created long before this watch (any real resume is), idle
+    // since — the birth gate and the mtime floor both refuse it as a heuristic guess.
+    const resumed = writeLog(f.project, 'resumed.jsonl', 130_000, now - 3_600_000)
+    // A neighbour's live session the heuristics WOULD have taken instead.
+    writeLog(f.project, 'neighbour.jsonl', 165_000, now)
+    monitor.setPane(P1, spec({ since: now - 2_000, expectedFile: resumed }))
+    expect(monitor.sessionFor(P1)?.file).toBe(resumed)
+    expect(seen.get(P1)?.usedTokens).toBe(130_000)
+    await sleep(150)
+    expect(monitor.sessionFor(P1)?.file).toBe(resumed) // pinned: the fresher neighbour never migrates in
+  })
+
+  // The declaration now HOLDS when the named file is not on disk, where it used to be
+  // ignored. That inversion is the point of assigned session ids: the app names the
+  // session BEFORE the CLI starts, and a fresh session has no transcript until the user
+  // first speaks. Guessing in that window is exactly how an empty pane came to wear a
+  // concurrent neighbour's 82% (found live 2026-08-02).
+  it('a declared-but-unwritten session holds identity — the heuristics stand down', () => {
+    const f = fixture()
+    const { monitor, seen, spec } = rig(f)
+    active = monitor
+    const now = Date.now()
+    writeLog(f.project, 'neighbour.jsonl', 50_000, now) // a stranger's live session, right there
+    monitor.setPane(P1, spec({ since: now - 2_000, expectedFile: join(f.project, 'assigned.jsonl') }))
+    expect(monitor.sessionFor(P1)?.file, 'no session yet is the honest answer').toBeUndefined()
+    expect(seen.get(P1)?.usedTokens).toBeUndefined()
+  })
+
+  it('...and locks the declared file the moment the CLI writes it', async () => {
+    const f = fixture()
+    const { monitor, seen, spec } = rig(f)
+    active = monitor
+    const now = Date.now()
+    writeLog(f.project, 'neighbour.jsonl', 50_000, now)
+    const assigned = join(f.project, 'assigned.jsonl')
+    monitor.setPane(P1, spec({ since: now - 2_000, expectedFile: assigned }))
+    expect(monitor.sessionFor(P1)?.file).toBeUndefined()
+    writeLog(f.project, 'assigned.jsonl', 7_000, Date.now()) // the session speaks for the first time
+    await sleep(150)
+    expect(monitor.sessionFor(P1)?.file).toBe(assigned)
+    expect(seen.get(P1)?.usedTokens).toBe(7_000)
   })
 
   it('a true process-start floor lets a long-idle adopted session lock past the 30-minute guess', () => {
