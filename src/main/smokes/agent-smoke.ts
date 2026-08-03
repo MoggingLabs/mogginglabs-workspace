@@ -72,10 +72,32 @@ export function runAgentSmoke(win: BrowserWindow, command: string): void {
       // (the app was itself launched from a Claude Code session).
       const cwd = app.getAppPath()
       await send(sh.clearEnvRun(cwd, ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'], command) + '\r')
-      await delay(9000)
-
-      const capA = String(await ES('window.__cap'))
-      const typeA = await bufType()
+      // SHAPE 1 + SHAPE 4 (a fixed sleep standing in for "the thing happened", on a dependency
+      // that got slower): 9000ms stood in for a REAL claude cold boot taking the alternate screen
+      // and painting. Every assertion below (`altScreen`, `anyColor`, `content`) reads the single
+      // frame captured at that instant, so a boot that is one second slower than the guess reds
+      // three arms at once. Poll for the pair the product's own launch cover waits for — the
+      // alternate screen taken AND a frame painted into it (ui/core/terminal/liveness-port.ts) —
+      // exactly as the sibling agentlaunch gate already does. The assertions are unchanged; only
+      // the moment they are read is now a fact instead of a guess. 45s is a ceiling for a cold
+      // CLI boot under CI load: measured at 2.0-2.6s idle, seconds more on a loaded runner.
+      let capA = ''
+      let typeA = '?'
+      for (let i = 0; i < 45; i++) {
+        await delay(1000)
+        capA = String(await ES('window.__cap'))
+        typeA = await bufType()
+        if ((typeA === 'alternate' || /\x1b\[\?(?:1049|1047|47)h/.test(capA)) && /\x1b\[[0-9;]*m/.test(capA)) break
+      }
+      // Let the first paint QUIESCE before taking the baseline. `rawKeyOk` below claims that OUR
+      // keystroke caused a redraw, and it proves it by byte growth against `lenA` — a baseline
+      // snatched the instant the TUI appeared would be beaten by the CLI's own remaining boot
+      // paint, which is not the claim. The old fixed 9s happened to give this for free; the poll
+      // exits early, so the settling beat has to be explicit. (Capture is cumulative, so nothing
+      // observed before this point is lost.)
+      await delay(1200)
+      capA = String(await ES('window.__cap'))
+      typeA = await bufType()
       const lenA = capA.length
 
       // Raw-mode input: a down-arrow then a character; the TUI should redraw.

@@ -189,7 +189,28 @@ export function runBrainMapSmoke(win: BrowserWindow): void {
       // session, so the board — fail-closed by design — would never type the
       // task. Replay the daemon's own typed-launch verdict (the orchestration
       // smoke's shim, same event, same shape) so the REAL handoff path runs.
+      //
+      // SHAPE 4 (a wait whose dependency got slower), fixed at the CAUSE rather than the
+      // budget. The REAL verdict cannot precede the pane's PTY — the daemon only reports an
+      // agent it FOUND in that pane's process subtree, so by the time it speaks there is a
+      // process there. Replayed the instant the card binds a paneId, it can and does: the
+      // board then hands the prompt a fixed 800ms later (launch.ts's `settle`), and "a write
+      // raced into a still-spawning PTY is silently dropped by the daemon"
+      // (core/terminal/liveness-port.ts, found by an earlier CI sweep). The prompt is not
+      // LATE in that case, it is GONE — which is why no capture budget could have saved it,
+      // and why this gate passes every time on an idle machine where 800ms is plenty.
+      // So the replay now waits for the same fact the product waits for: the pane is LIVE.
+      const paneLiveness: { pane: number; live: boolean; ms: number }[] = []
       const confirmAgentUp = async (paneId: number): Promise<void> => {
+        // A safety net for a PTY spawn under load, never a schedule — the real signal
+        // resolves in milliseconds on a quiet box. 30s because this pane's workspace was
+        // opened alongside a git worktree create and a repomap render, so its spawn is
+        // queued behind them; the product's own `whenPaneLive` bound is 15s for a spawn
+        // with nothing else in front of it. Bounded and REPORTED, never masking: an
+        // unproven pane still gets the verdict, and `paneLiveness` says so.
+        const t0 = Date.now()
+        const live = await until(() => ES<boolean>(`window.__mogging.agents.paneLive(${paneId}) === true`), 30000, 200)
+        paneLiveness.push({ pane: paneId, live, ms: Date.now() - t0 })
         await ES(
           `window.__mogging.agents.detected({ id: ${paneId}, agentId: 'claude', cwd: ${JSON.stringify(F.repo)}, sinceMs: Date.now() })`
         )
@@ -267,7 +288,16 @@ export function runBrainMapSmoke(win: BrowserWindow): void {
 
       setOrientAtLaunch(anchor.id, false) // the workspace opts out — zero injection bytes
       await ES(`window.__mogging.workspace.switchByIndex(0)`) // launches anchor from OUR workspace again
-      await sleep(800)
+      // SHAPE 1 (a fixed sleep standing in for "the thing happened"): the 800ms stood in for
+      // "the switch landed". It is not decoration — `startOnCard` reads the ACTIVE workspace
+      // to decide the launch cwd and the anchor whose opt-out arm (e)-OFF is about to assert,
+      // so a switch still in flight silently launches the OFF card from the task workspace
+      // and tests the wrong toggle. Poll the fact instead; bounded and reported.
+      const switchedBack = await until(
+        async () => ((await ES('window.__mogging.workspace.active()')) as { id: string })?.id === anchor.id,
+        15000,
+        150
+      )
       const offCard = (await ES(
         `window.__mogging.board.createCard('BRAINMAP_TASK_OFF_4242', 'the plain task 4242')`
       )) as string
@@ -289,6 +319,9 @@ export function runBrainMapSmoke(win: BrowserWindow): void {
         cliCodes: { ok: cliOk.code, noBrain: cliNoBrain.code, appDown: cliAppDown.code, badBudget: cliBadBudget.code },
         onOk, fenceAt, hubAt, taskAt,
         offOk,
+        // Testimony for the one failure mode a capture budget cannot describe: a prompt the
+        // daemon dropped because the pane had no PTY yet reads EXACTLY like a slow one.
+        paneLiveness, switchedBack,
         mapHead: fullMap.split('\n').slice(0, 4),
         platform: process.platform
       }

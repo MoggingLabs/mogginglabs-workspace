@@ -415,7 +415,17 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
       // takes the alternate screen and wipes the composed prompt. The step
       // gates replay later by accident of their polling; the milestone waits
       // on purpose. (Recorded as a platform find in the pack freeze.)
+      // SHAPE 4 (a wait whose dependency got slower), the same cause BRAINMAP's macOS red had.
+      // The 1600ms below outwaits the lineup TIMER and must stay. It does not, however, prove
+      // the pane has a PTY, and the REAL verdict always does — the daemon reports an agent it
+      // FOUND in that pane's process subtree. Handed 800ms after a premature replay
+      // (launch.ts's `settle`), the prompt is dropped outright: "a write raced into a
+      // still-spawning PTY is silently dropped by the daemon"
+      // (core/terminal/liveness-port.ts). Wait for LIVE first, then outwait the timer.
+      const paneLiveness: { pane: number; live: boolean; ms: number }[] = []
       const confirmAgentUp = async (paneId: number): Promise<void> => {
+        const live = await until(() => ES<boolean>(`window.__mogging.agents.paneLive(${paneId}) === true`), 30000, 200)
+        paneLiveness.push({ pane: paneId, live: live.ok, ms: live.ms })
         await sleep(1600)
         await ES(`window.__mogging.agents.detected({ id: ${paneId}, agentId: 'claude', cwd: ${JSON.stringify(F.repo)}, sinceMs: Date.now() })`)
       }
@@ -824,6 +834,8 @@ export function runBrainMilestoneSmoke(win: BrowserWindow): void {
         indexOnceOk, filesPerCheckout, wt1Rate: Math.round(wt1Rate * 1000) / 10, wt2Rate: Math.round(wt2Rate * 1000) / 10,
         coldIndexMs,
         launchOk, mapFenceAt, mapStampAt, taskAt,
+        // A prompt the daemon dropped (pane not spawned yet) reads exactly like a slow one.
+        paneLiveness,
         grantWallOk,
         graphTruthOk, pathDepth: path3.data.depth ?? null,
         partitionsOk, projRoots,

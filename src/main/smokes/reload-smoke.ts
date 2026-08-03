@@ -90,9 +90,27 @@ export function runReloadSmoke(win: BrowserWindow): void {
       // the dev shim mirrors that. The gate's unhide then runs syncState — "appear
       // with the truth, not the mount default" — which is half the contract under test.
       await ES('window.__mogging.agents.adopt(1,"claude","");1')
-      await delay(3200) // let the still-running loop stream new output into the new pane
-      const capAfter = String(await ES('window.__cap'))
-      const after = marks(capAfter)
+      // SHAPE 1 (a fixed sleep standing in for "the thing happened"): 3200ms stood in for "the
+      // surviving loop streamed new output into the remounted pane". That IS the fact `survived`
+      // asserts, so poll for it — the remount, the resubscribe and the daemon's replay all take
+      // real time on a loaded runner, and a sleep that is a beat short reds `survived` on a loop
+      // that never stopped running. 15s ceiling (every poll here must fit this gate's own 70s
+      // watchdog), and the assertion is unchanged.
+      let capAfter = ''
+      let after: number[] = []
+      for (let i = 0; i < 60; i++) {
+        capAfter = String(await ES('window.__cap'))
+        after = marks(capAfter)
+        if (after.length > 0 && Math.max(...after) > beforeMax) break
+        await delay(250)
+      }
+      // …then a settle beat, and re-read. `noDuplicate` is a NEGATIVE claim — no second loop
+      // restarted at MARK_0 — and a negative needs an OBSERVATION WINDOW, not the first frame
+      // that satisfies the positive one next to it. 1200ms is three of the loop's 400ms ticks,
+      // so a duplicate prints into this read or it does not exist. (boardfail's settle idiom.)
+      await delay(1200)
+      capAfter = String(await ES('window.__cap'))
+      after = marks(capAfter)
       const afterMax = after.length ? Math.max(...after) : -1
       const afterMin = after.length ? Math.min(...after) : -1
       // The latch assertion — read BEFORE the Ctrl-C below (real typing, rightly clears
@@ -103,7 +121,16 @@ export function runReloadSmoke(win: BrowserWindow): void {
       // the latch" (isTerminalReply failed) from "the pane painted it wrong" (pull
       // path failed).
       const syncAnswer = String(await ES('window.bridge.invoke("terminal:stateSync",{id:1})'))
-      const stateAfter = String(await chipState())
+      // SHAPE 2 (a consequence of the line above, read with NO budget of its own). The backend's
+      // answer and the chip are the SAME latch at two ends, and the chip is strictly the later —
+      // the pull has to cross IPC and repaint. Read in the same tick, a loaded runner reds
+      // `latchHeld` on a latch the backend just confirmed. Cause first, then its paint, with a
+      // budget for the one repaint that separates them.
+      let stateAfter = String(await chipState())
+      for (let i = 0; i < 20 && stateAfter !== 'attention'; i++) {
+        await delay(250)
+        stateAfter = String(await chipState())
+      }
 
       await send('\x03') // stop the loop
       await delay(400)
@@ -154,7 +181,16 @@ export function runReloadSmoke(win: BrowserWindow): void {
           'if(m&&m.workspace&&m.workspace.count()===0)m.workspace.create({name:"Workspace 1"});' +
           'if(m&&m.agents&&m.agents.adopt)m.agents.adopt(1,"claude","");return 1;})()'
       )
-      await delay(2500)
+      // SHAPE 1 (a fixed sleep standing in for "the thing happened"): 2500ms stood in for pane 1's
+      // shell being up. `send(LOOP)` is ONE SHOT and the whole gate — survived, noDuplicate,
+      // latchHeld — is downstream of it; "a write raced into a still-spawning PTY is silently
+      // dropped by the daemon" (ui/core/terminal/liveness-port.ts), so a slow spawn does not
+      // delay the loop, it means there is no loop. Wait for the app's own liveness signal.
+      let paneLive = false
+      for (let i = 0; i < 40 && !paneLive; i++) {
+        paneLive = Boolean(await ES('window.__mogging.agents.paneLive(1) === true'))
+        if (!paneLive) await delay(200)
+      }
       await ES(HOOK)
       await send(LOOP)
       // WAIT for the latch rather than guessing at a deadline. An OSC 9 is a low-confidence

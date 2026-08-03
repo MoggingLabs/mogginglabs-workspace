@@ -42,6 +42,30 @@ export function runTemplateSmoke(win: BrowserWindow, phase: string): void {
    *  gate's INTENT is deterministic anyway: the claude SLOT launched and claude is
    *  the process talking in that pane. Accept-enter is still tried (reaches the
    *  real TUI when auth exists); otherwise claude's own onboarding output counts. */
+  /**
+   * SHAPE 4 (a wait sized before the dependency got slower). Both phases waited a FIXED 11000ms
+   * for a real claude to render before reading the pane — a number chosen when the lineup typed
+   * the launch command on a fixed beat. It no longer does: the lineup types on pane READINESS
+   * (the launch cover, ui/features/agents/launch-readiness.ts), so the CLI now starts later by
+   * however long the pane took to become usable, and the board gate measured that at 6.4s on the
+   * windows runner and 13.5s on macos against 2.0s on a quiet desktop. A fixed 11s that used to
+   * have seconds of headroom can now be spent before the command has even been typed.
+   *
+   * So: poll for the EVIDENCE the assertion is about to read, and stop as soon as it is there.
+   * 25s is a ceiling for a launch-cover lift plus a cold CLI boot under load, not a schedule —
+   * `claudeUiOk` below is unchanged and remains the assertion.
+   */
+  const awaitClaudeVisible = async (id: number): Promise<boolean> => {
+    for (let i = 0; i < 50; i++) {
+      const seen = (await ES(
+        `(function(){var ps=(window.__mogging&&window.__mogging.panes)||[];var p=ps.find(function(x){return x.id===${id}});` +
+          `return !!(p&&(p.term.buffer.active.type==='alternate'||/claude/i.test(p.text())));})()`
+      )) as boolean
+      if (seen) return true
+      await delay(500)
+    }
+    return false
+  }
   const claudeUiOk = async (id: number): Promise<{ alt: boolean; ui: boolean; tail: string }> => {
     let alt = await paneAlt(id)
     for (let i = 0; i < 2 && !alt; i++) {
@@ -78,7 +102,7 @@ export function runTemplateSmoke(win: BrowserWindow, phase: string): void {
       )) as { paneCount: number; assignments: string[] }
       await delay(1200)
       const count = Number(await ES('window.__mogging.workspace.count()'))
-      await delay(11000) // claude render (lineup types on pane readiness — no fixed delay)
+      const claudeSeenA = await awaitClaudeVisible(CLAUDE_PANE) // SHAPE 4 — see awaitClaudeVisible
       const ui = await claudeUiOk(CLAUDE_PANE)
       const launch = (await ES(`window.__mogging.agents.lastLaunch(${CLAUDE_PANE})`)) as {
         provider?: string
@@ -106,7 +130,7 @@ export function runTemplateSmoke(win: BrowserWindow, phase: string): void {
             `hasClaudeAnywhere:/claude/i.test(t),paneIds:((window.__mogging&&window.__mogging.panes)||[]).map(function(x){return x.id})};})()`
         )
       }
-      const resultA = { phase: 'A', pass, resolved, count, launchedOk, claudeAlt: ui.alt, uiOk: ui.ui, paneTail: pass ? undefined : ui.tail, probe }
+      const resultA = { phase: 'A', pass, resolved, count, launchedOk, claudeSeen: claudeSeenA, claudeAlt: ui.alt, uiOk: ui.ui, paneTail: pass ? undefined : ui.tail, probe }
       emit(resultA)
       // Phase B overwrites template-result.json — keep A's verdict for artifacts.
       try {
@@ -132,10 +156,10 @@ export function runTemplateSmoke(win: BrowserWindow, phase: string): void {
         paneCount: number
       }>
       const template = Array.isArray(list) ? list.find((w) => w.assignments && w.assignments.includes('claude')) : undefined
-      await delay(11000) // wait for the resumed claude to render
+      const claudeSeenB = await awaitClaudeVisible(CLAUDE_PANE) // SHAPE 4 — see awaitClaudeVisible
       const ui = await claudeUiOk(CLAUDE_PANE)
       const pass = count === 2 && !!template && template.paneCount === 4 && ui.ui
-      emit({ phase: 'B', pass, count, restoredAssignments: template?.assignments, claudeAlt: ui.alt, uiOk: ui.ui, paneTail: pass ? undefined : ui.tail })
+      emit({ phase: 'B', pass, count, restoredAssignments: template?.assignments, claudeSeen: claudeSeenB, claudeAlt: ui.alt, uiOk: ui.ui, paneTail: pass ? undefined : ui.tail })
       app.exit(pass ? 0 : 1)
     } catch (e) {
       emit({ phase: 'B', pass: false, error: String(e) })

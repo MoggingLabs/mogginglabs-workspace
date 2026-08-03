@@ -193,5 +193,11 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
     }
   }
 
-  wc.once('did-finish-load', () => setTimeout(() => void run(), 3000))
+  // SHAPE 1, at the gate's front door: `did-finish-load` is an EVENT, not a fact, and this was
+  // the one gate in the sweep without the `isLoading()` guard every other one has. Whether the
+  // renderer finishes loading before or after main dispatches this gate is a boot-order race that
+  // load decides — lose it and the listener is armed for something that already happened, `run`
+  // never fires, and the gate spends its whole safety net producing no result file at all.
+  if (wc.isLoading()) wc.once('did-finish-load', () => setTimeout(() => void run(), 3000))
+  else setTimeout(() => void run(), 3000)
 }

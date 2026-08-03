@@ -74,11 +74,24 @@ export function runBoardFailSmoke(win: BrowserWindow): void {
       // misattributed to the pane must never collect another card's prose).
       const slowCardId = String(await ES(`window.__mogging.board.createCard(${JSON.stringify(`${SLOW_MARKER} hand off`)}, '')`))
       const slowStarted = Boolean(await ES(`window.__mogging.board.startOnCard(${JSON.stringify(slowCardId)}, 'claude')`))
-      await sleep(8500)
+      // The 9s fail-closed timer is armed by `startOnCard` itself, so the clock starts HERE —
+      // and this arm's whole point is a verdict that lands just inside it. Everything that is
+      // not the wait comes out of the window: the card binds its pane before `startOnCard`
+      // returns, so read the binding NOW and sleep only the REMAINDER of 8500ms.
+      //
+      // SHAPE 2 (work inside a window that only the first step can overrun): the `board.list()`
+      // round trip used to sit BETWEEN the 8500ms sleep and the detection, spending renderer
+      // IPC time out of the 500ms of slack left before the deadline. On a loaded runner that
+      // is the difference between a handed task and the fallback firing, and the failure looks
+      // exactly like the product regression this arm exists to catch (slowWrites 0).
+      const slowArmedAt = Date.now()
       const slowBefore = ((await ES(`window.__mogging.board.list()`)) as { id: string; paneId?: number }[])
         .find((c) => c.id === slowCardId)
       const slowPane = slowBefore?.paneId ?? 0
+      const slowDetectAfterMs = Math.max(0, 8500 - (Date.now() - slowArmedAt))
+      await sleep(slowDetectAfterMs)
       await ES(`window.__mogging.agents.detected({ id: ${slowPane}, agentId: 'claude', cwd: '', sinceMs: Date.now() })`)
+      const slowDetectedAtMs = Date.now() - slowArmedAt // testimony: must be < the 9s deadline
       // POLL for the hand-off rather than sleeping a fixed beat past it. The board no longer
       // types a set delay after the agent process appears — it waits for the agent to be
       // USABLE, which under CI load is seconds, not the 800ms this 1300ms window was sized
@@ -126,6 +139,9 @@ export function runBoardFailSmoke(win: BrowserWindow): void {
         slowReadyHandedOff,
         slowPane,
         slowWrites,
+        // Where in the 9s fail-closed window the verdict actually landed. A red here with
+        // slowDetectedAtMs ≥ 9000 is the gate overrunning, not the board misbehaving.
+        slowDetectedAtMs,
         boundForDiagnosis,
         honestToast,
         actionOpenedGrid,

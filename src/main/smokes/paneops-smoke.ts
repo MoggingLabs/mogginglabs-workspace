@@ -23,7 +23,14 @@ const SCRIPT = `(async () => {
   m.layout.apply(4)
   for (let i = 0; i < 100 && (m.panes || []).length < 4; i++) await sleep(200)
   if ((m.panes || []).length < 4) return { pass: false, error: 'expected 4 panes' }
-  await sleep(2200)
+  // SHAPE 1 (a fixed sleep standing in for "the thing happened"): 2200ms stood in for "the four
+  // shells are prompting". The write below is ONE SHOT and contentIntact far below is its only
+  // reader — and "a write raced into a still-spawning PTY is silently dropped by the daemon"
+  // (ui/core/terminal/liveness-port.ts), so a slow spawn does not delay the marker, it deletes
+  // it. Wait for the app's own liveness signal: a pane is LIVE once its PTY produced output.
+  const allLive = () => (m.panes || []).every((p) => m.agents.paneLive(p.id) === true)
+  for (let i = 0; i < 150 && !allLive(); i++) await sleep(200)
+  const shellsLive = allLive()
   for (const p of m.panes) p.write('echo OPS_' + p.id + '_END' + CR)
   await sleep(1500)
 
@@ -93,7 +100,14 @@ const SCRIPT = `(async () => {
   m.layout.apply(4)
   for (let i = 0; i < 50 && (m.panes || []).length < 4; i++) await sleep(200)
   const reborn = (m.panes || []).find((x) => x.id === 2)
-  await sleep(2500)
+  // SHAPE 1, same cause: 2500ms stood in for the REBORN pane's PTY being up, and its marker
+  // write is likewise one-shot — a deaf pane and a pane written to too early are indistinguishable
+  // in rebornEchoes, which is the very thing this arm exists to tell apart.
+  let rebornLive = false
+  for (let i = 0; i < 150 && !rebornLive; i++) {
+    rebornLive = !!reborn && m.agents.paneLive(reborn.id) === true
+    if (!rebornLive) await sleep(200)
+  }
   let rebornEchoes = false
   let rebornFresh = false
   if (reborn) {
@@ -113,7 +127,9 @@ const SCRIPT = `(async () => {
     colOk, colState, colSpan, colRestored,
     rowOk, rowState, rowSpan, rowRestored,
     closedGone, contentIntact, reflow, idsAfter, paneObjs,
-    genOk, rebornFound: !!reborn, rebornEchoes, rebornFresh
+    genOk, rebornFound: !!reborn, rebornEchoes, rebornFresh,
+    // A marker the daemon dropped (PTY not up yet) reads exactly like a deaf pane. Say which.
+    shellsLive, rebornLive
   }
 })()`
 

@@ -95,7 +95,18 @@ export function runAgentLaunchSmoke(win: BrowserWindow): void {
           await ES('window.bridge.send("terminal:write",{id:1,data:"\\r"});')
         }
       }
-      const labeled = Boolean(await ES("!!document.querySelector('.pane-label.has-label')"))
+      // SHAPE 2 (a consequence of the event above, read with NO budget of its own). The loop
+      // exits the instant the TUI takes the screen and paints; the pane LABEL comes from the
+      // daemon's process-table detection, which is a different, strictly later event — it walks
+      // the pane's PTY subtree on its own cadence. Read in the same tick as the alt screen, this
+      // is a coin flip on a loaded runner, and `labeled` is load-bearing in `pass`. Give the
+      // consequence its own poll. 6s at 300ms: bounded so the run still fits inside this gate's
+      // 60s net even when the alt-screen loop above spends its full 45s.
+      let labeled = false
+      for (let i = 0; i < 20 && !labeled; i++) {
+        labeled = Boolean(await ES("!!document.querySelector('.pane-label.has-label')"))
+        if (!labeled) await delay(300)
+      }
 
       const altEnter = ALT_SCREEN_ENTER_RE.test(cap)
       const altScreen = bufType === 'alternate' || altEnter

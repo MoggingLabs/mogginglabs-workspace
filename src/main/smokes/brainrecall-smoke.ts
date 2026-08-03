@@ -225,7 +225,22 @@ export function runBrainRecallSmoke(win: BrowserWindow): void {
       // A 'shell' launch is a launch NO-OP (launch-port): replay the daemon's
       // typed-launch verdict so the REAL handoff path runs (the board is
       // fail-closed by design).
+      //
+      // SHAPE 4 (a wait whose dependency got slower), fixed at the cause — BRAINMAP's macOS
+      // red, same code shape here. The REAL verdict cannot precede the pane's PTY: the daemon
+      // reports an agent it FOUND in that pane's process subtree. Replayed the instant the
+      // card binds a paneId it can, and the board then hands the prompt a fixed 800ms later
+      // (launch.ts's `settle`) into a pane that may still be spawning — where "a write raced
+      // into a still-spawning PTY is silently dropped by the daemon"
+      // (core/terminal/liveness-port.ts). The prompt is then GONE, not late, so no capture
+      // budget can save it. Wait for the fact the product waits for: the pane is LIVE.
+      const paneLiveness: { pane: number; live: boolean; ms: number }[] = []
       const confirmAgentUp = async (paneId: number): Promise<void> => {
+        // Safety net for a PTY spawn under load, not a schedule — milliseconds on a quiet
+        // box. Bounded and REPORTED, never masking: an unproven pane still gets the verdict.
+        const t0 = Date.now()
+        const live = await until(() => ES<boolean>(`window.__mogging.agents.paneLive(${paneId}) === true`), 30000, 200)
+        paneLiveness.push({ pane: paneId, live, ms: Date.now() - t0 })
         await ES(
           `window.__mogging.agents.detected({ id: ${paneId}, agentId: 'claude', cwd: ${JSON.stringify(F.repo)}, sinceMs: Date.now() })`
         )
@@ -407,6 +422,8 @@ export function runBrainRecallSmoke(win: BrowserWindow): void {
         tagOnlyOk,
         junkOk,
         launchOk, mapFenceAt, memFenceAt, attributionAt, taskAt,
+        // A prompt the daemon dropped (pane not spawned yet) reads exactly like a slow one.
+        paneLiveness,
         budgetOk, mapLen, memLen, combined: mapLen + memLen, budget: REPOMAP_DEFAULT_BUDGET,
         noBodyOk,
         recallOffOk,

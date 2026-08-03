@@ -65,9 +65,20 @@ export function runRoleRaceSmoke(win: BrowserWindow): void {
         await sleep(250)
       }
       const reconnectBound = replacementPid > 0 && (await waitForRole(paneId, 'reviewer', 20000))
-      const chipStillReviewer = await ES<boolean>(
-        `document.querySelector('.layout-slot[data-pane-id="${paneId}"] .pane-role')?.textContent === 'reviewer'`
-      )
+      // SHAPE 2 (a consequence of the event above, read with NO budget of its own — PANERESTART's
+      // shape). Both arms assert the ONE rebind, but they read it at different ends: the daemon's
+      // own pane list, and the chip the renderer paints after the push crosses IPC. The daemon
+      // side is the cause and rightly holds a 20s poll; the chip is strictly later and had zero.
+      // On a loaded runner `reconnectBound` returns on the poll tick the role lands and the chip
+      // has not repainted yet — a red that says the role was lost when it was not. The cause
+      // stays asserted first; the consequence now gets its own (small — it is one repaint away).
+      let chipStillReviewer = false
+      for (let i = 0; i < 40 && !chipStillReviewer; i++) {
+        chipStillReviewer = await ES<boolean>(
+          `document.querySelector('.layout-slot[data-pane-id="${paneId}"] .pane-role')?.textContent === 'reviewer'`
+        )
+        if (!chipStillReviewer) await sleep(250)
+      }
       const pass = slowSpawnBound && reconnectBound && chipStillReviewer
       result = {
         pass,

@@ -60,7 +60,17 @@ const SCRIPT = `(async () => {
   for (let i = 0; i < 300 && (m.panes || []).filter((p) => p.id <= 16).length < 16; i++) await sleep(200)
   const panes = (m.panes || []).filter((p) => p.id <= 16)
   if (panes.length < 16) return { pass: false, error: 'expected 16 panes, got ' + panes.length }
-  await sleep(2500) // let all 16 shells reach a prompt
+  // SHAPE 1 (a fixed sleep standing in for "the thing happened"). 2500ms stood in for "all 16
+  // shells reached a prompt", and the OSC-9 write below is ONE SHOT into four of them: "a write
+  // raced into a still-spawning PTY is silently dropped by the daemon"
+  // (ui/core/terminal/liveness-port.ts). A dropped keystroke is not late, it never arrives, so
+  // the 15s badge poll further down cannot recover it — the gate simply reds on attention4.
+  // Wait for the app's own liveness signal instead: a pane is LIVE once its PTY produced
+  // output, which is exactly "the shell reached a prompt". 30s is a ceiling for 16 spawns
+  // under load, not a schedule.
+  const allLive = () => panes.every((p) => m.agents.paneLive(p.id) === true)
+  for (let i = 0; i < 150 && !allLive(); i++) await sleep(200)
+  const shellsLive = allLive()
 
   // Frame sampler: collect rAF gaps for a window.
   const sample = (ms) => new Promise((res) => {
@@ -190,7 +200,7 @@ const SCRIPT = `(async () => {
   return {
     pass, budget: B,
     mounted: panes.length, ticks, stress, idle, heapMB, heapMeasured,
-    attention4, flipped, controlState, webglVisible,
+    attention4, flipped, controlState, webglVisible, shellsLive,
     tabRing, warmKept, domHidden, ringAfterFocus, webglBack
   }
 })()`

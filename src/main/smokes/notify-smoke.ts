@@ -29,7 +29,17 @@ export function runNotifySmoke(win: BrowserWindow): void {
         `window.__nstates=window.__nstates||[];if(!window.__nhook){window.__nhook=1;` +
           `window.bridge.on('terminal:state',function(e){if(e&&e.id===1)window.__nstates.push(e.state);});}1`
       )
-      await sleep(3500) // let pane 1 spawn + its shell reach a prompt
+      // SHAPE 1 (a fixed sleep standing in for "the thing happened"): 3500ms stood in for "pane 1
+      // spawned and its shell reached a prompt". Every arm below writes a command into that pane
+      // ONE SHOT, and "a write raced into a still-spawning PTY is silently dropped by the daemon"
+      // (ui/core/terminal/liveness-port.ts) — so a slow spawn does not delay `sawAttention`, it
+      // guarantees the 20s poll below burns out on a command that was never delivered. Wait for
+      // the app's own liveness signal, which is precisely "the PTY has produced output".
+      let paneLive = false
+      for (let i = 0; i < 150 && !paneLive; i++) {
+        paneLive = await exec<boolean>(`window.__mogging.agents.paneLive(1) === true`)
+        if (!paneLive) await sleep(200)
+      }
 
       // Only count states AFTER we fire the notify (drop the idle replay from attach).
       await exec(`window.__nstates=[]`)
@@ -75,7 +85,9 @@ export function runNotifySmoke(win: BrowserWindow): void {
       )
       result = {
         pass: sawAttention && sawDone && doneNeverRang,
-        sawAttention, sawDone, doneNeverRang, states, doneStates, binPath, paneTail
+        // paneLive says whether the commands below were delivered at all — a dropped write
+        // and a mismapped state look identical in `states` otherwise.
+        sawAttention, sawDone, doneNeverRang, paneLive, states, doneStates, binPath, paneTail
       }
     } catch (e) {
       result = { pass: false, error: String(e) }

@@ -172,22 +172,47 @@ export function runLibraryUxSmoke(win: BrowserWindow): void {
       const slotMissing = await waitTrue(
         `[...document.querySelectorAll('#view-settings .mgr-keyslot.is-missing')].some((c) => (c.textContent || '').includes('LIBX_KEY'))`
       )
-      await ES(`(() => {
-        const c = [...document.querySelectorAll('#view-settings .mgr-keyslot.is-missing')].find((x) => (x.textContent || '').includes('LIBX_KEY'))
-        c?.click()
-      })()`)
-      const slotFormUp = await waitTrue(`!!document.querySelector('#view-settings .mgr-keyslot-form-host input')`)
-      await ES(`(() => {
-        const i = document.querySelector('#view-settings .mgr-keyslot-form-host input')
-        if (i) i.value = 'libx-secret-9f3'
-        const save = [...document.querySelectorAll('#view-settings .mgr-keyslot-form-host button')].find((b) => /Save to vault/.test(b.textContent || ''))
-        save?.click()
-      })()`)
+      // SHAPE 2 (one gesture split across a shared async event — PANERESTART's shape, in the
+      // DOM). The key-slot form lives INSIDE the servers list, and `refresh()` rebuilds that
+      // list from scratch: `clear(list)`, then an `await bridge.invoke(mgrStatus, …)` PER
+      // SERVER, so the list stands EMPTY across several IPC round trips. Entering the tab
+      // fires a status poll and a connections verify sweep, and each answer comes back later
+      // as a `statusChanged` push that repaints again (settings/integrations.ts). Those
+      // pushes ride real work — every CLI's config read, verifiers spawned — so on a loaded
+      // runner they land seconds after the tab looked settled: squarely between this gate's
+      // click on the slot and its paste into the form. The form is destroyed with the list,
+      // the paste lands in a detached input, Save is never clicked, and `vaulted` then burns
+      // its whole budget on a key that was never sent (windows sweep: vaulted false,
+      // slotSaved false, every other arm green). So the gesture — open the slot, type, save —
+      // is now ONE synchronous evaluation no repaint can split, and it is DRIVEN until the
+      // vault holds the key instead of attempted once.
+      const pasteIntoSlot = (): Promise<boolean> =>
+        ES<boolean>(`(() => {
+          const slot = [...document.querySelectorAll('#view-settings .mgr-keyslot.is-missing')].find((x) => (x.textContent || '').includes('LIBX_KEY'))
+          if (!slot) return false
+          slot.click() // its handler builds the paste form synchronously, into this row's host
+          const i = document.querySelector('#view-settings .mgr-keyslot-form-host input')
+          if (!i) return false
+          i.value = 'libx-secret-9f3'
+          const save = [...document.querySelectorAll('#view-settings .mgr-keyslot-form-host button')].find((b) => /Save to vault/.test(b.textContent || ''))
+          if (!save) return false
+          save.click()
+          return true
+        })()`)
+      // The assertion is unchanged and slightly stronger: clicking the row's missing slot
+      // must OPEN a paste form with a Save button — `pasteIntoSlot` is false unless all
+      // three are there. It is now the outcome of the gesture rather than a separate poll.
+      let slotFormUp = false
       let vaulted = false
-      for (let i = 0; i < 24 && !vaulted; i++) {
+      // 40 x 400ms. The budget is for REPAINTS, not for the vault: `serviceKeySet` is a
+      // synchronous safeStorage write in main and answers in milliseconds. An attempt is only
+      // ever lost to a push landing under it, and the sweep behind those pushes is bounded by
+      // real CLI-config work, so the gate has to outlast one — 24 x 250ms did not.
+      for (let i = 0; i < 40 && !vaulted; i++) {
+        if (await pasteIntoSlot()) slotFormUp = true
         const names = (await invoke<string[]>(IntegrationsChannels.serviceKeyList)) ?? []
         vaulted = names.includes('LIBX_KEY')
-        if (!vaulted) await sleep(250)
+        if (!vaulted) await sleep(400)
       }
       const slotSaved = await waitTrue(
         `[...document.querySelectorAll('#view-settings .mgr-keyslot.is-saved')].some((c) => (c.textContent || '').includes('LIBX_KEY'))`

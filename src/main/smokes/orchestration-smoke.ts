@@ -78,9 +78,17 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
       await sleep(2000)
       const cardId = String(await ES(`window.__mogging.board.createCard(${JSON.stringify(TASK)}, 'Append the change line, then commit.')`))
       const started = (await ES(`window.__mogging.board.startOnCard(${JSON.stringify(cardId)}, 'shell')`)) as boolean
-      await sleep(1500)
-      const cards = (await ES(`window.__mogging.board.list()`)) as Card[]
-      const card = cards.find((c) => c.id === cardId)
+      // SHAPE 1 (a fixed sleep standing in for "the thing happened"): 1500ms stood in for
+      // "the card bound its pane". The binding is what A2 and A3 are then addressed to — a
+      // paneId of 0 sends the whole phase to a pane that does not exist — so poll the fact.
+      let cards: Card[] = []
+      let card: Card | undefined
+      for (let i = 0; i < 60; i++) {
+        cards = (await ES(`window.__mogging.board.list()`)) as Card[]
+        card = cards.find((c) => c.id === cardId)
+        if (card?.paneId != null) break
+        await sleep(250)
+      }
       const paneId = card?.paneId ?? 0
       const bindOk = started && !!paneId && card?.lane === 'doing'
 
@@ -101,7 +109,21 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
       // type the task at all. Replay the daemon's own typed-launch verdict — the same event, the
       // same shape, the same shim boardfail-smoke uses — so the REAL hand-off path runs and A2
       // asserts the product, not a timer.
+      //
+      // SHAPE 4 (a wait whose dependency got slower), fixed at the cause — the same code
+      // shape that took BRAINMAP red on macos. The REAL verdict cannot precede the pane's
+      // PTY: the daemon only reports an agent it FOUND in that pane's process subtree.
+      // Replayed the instant the card binds a paneId it can, and the board hands the prompt
+      // a fixed 800ms later (launch.ts's `settle`) — where "a write raced into a
+      // still-spawning PTY is silently dropped by the daemon"
+      // (core/terminal/liveness-port.ts). A2 below then reads the pane's own xterm buffer,
+      // so a dropped prompt is not late, it never arrives. Wait for LIVE, as the app does.
+      let paneLive = false
       if (paneId) {
+        for (let i = 0; i < 150 && !paneLive; i++) {
+          paneLive = await ES<boolean>(`window.__mogging.agents.paneLive(${paneId}) === true`)
+          if (!paneLive) await sleep(200)
+        }
         await ES(
           `window.__mogging.agents.detected({ id: ${paneId}, agentId: 'claude', cwd: ${JSON.stringify(worktree)}, sinceMs: Date.now() })`
         )
@@ -305,6 +327,8 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
         pass,
         bindOk,
         worktreeOk,
+        // A prompt the daemon dropped (pane not spawned yet) reads exactly like a slow one.
+        paneLive,
         promptOk,
         sendExit: sendRes.code,
         workOk,
