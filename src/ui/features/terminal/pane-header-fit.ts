@@ -52,6 +52,8 @@
  *  clipped to "Review au…" tells you less than "4 uncommitted" does. */
 const TITLE_SOFT_FLOOR = 160
 
+import { onFontsLoadingDone } from '../../core/terminal/font-port'
+
 export interface PaneHeaderFitHandle {
   /** Re-fit before the next paint (coalesced). Call whenever a header fact changes. */
   schedule(): void
@@ -349,8 +351,19 @@ export function createPaneHeaderFit(
     schedule()
   })
   observer.observe(header)
-  // A late webfont swap changes every width in the bar and fires no resize.
-  void document.fonts?.ready.then(schedule).catch(() => undefined)
+  // A late webfont swap changes every width in the bar and fires no resize — and it
+  // changes the DECISIONS, not just the pixels: the title's hard floor is `6ch`, read
+  // here from computed style, so a fallback face makes this pass retire (or keep) the
+  // name at a width the real face would judge the other way.
+  //
+  // `loadingdone` and NOT `fonts.ready`: ready is one-shot and can resolve BEFORE a
+  // lazily-triggered face load has even started (CSS faces load on first use), after
+  // which it never fires again — so on any boot that won that race the bar stayed
+  // fitted to the fallback forever, with nothing to correct it but a manual resize.
+  // font-port.ts documented that trap for xterm's metrics and this hook was left on
+  // the broken side of it. It is a real user-visible fault (a name missing from a bar
+  // wide enough to hold it) that surfaced as a load-dependent macOS gate flake.
+  const unsubscribeFonts = onFontsLoadingDone(schedule)
   schedule()
 
   return {
@@ -360,6 +373,7 @@ export function createPaneHeaderFit(
       if (frame) cancelAnimationFrame(frame)
       frame = 0
       observer.disconnect()
+      unsubscribeFonts()
     }
   }
 }
