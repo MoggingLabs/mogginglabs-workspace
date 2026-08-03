@@ -21,7 +21,6 @@ const TAIL_LINES = 14
 
 const TRUST_PROMPT = /trust this folder/i
 const CONFIRM_HINT = /Enter to confirm/i
-const PAST_TRUST = /Welcome|\? for shortcuts|esc to interrupt/i
 
 /**
  * Is claude's folder-trust dialog LIVE in this tail? Both halves must show — the
@@ -31,11 +30,6 @@ const PAST_TRUST = /Welcome|\? for shortcuts|esc to interrupt/i
 export function trustDialogLive(tail: string | null): boolean {
   if (!tail) return false
   return TRUST_PROMPT.test(tail) && CONFIRM_HINT.test(tail)
-}
-
-/** Content that proves the pane is PAST any trust gate (welcome box, live prompt). */
-export function pastTrustDialog(tail: string | null): boolean {
-  return !!tail && PAST_TRUST.test(tail)
 }
 
 /** No dialog within this long of the watch starting = the folder is already trusted
@@ -78,10 +72,11 @@ export function isPaneTrustDialogLive(paneId: number): boolean {
   return trustDialogLive(readPaneBufferTail(paneId, TAIL_LINES))
 }
 
-/** Main PREPARED the trust (state-file carry, agents.ts `trustPrepared`): the dialog
- *  will not paint, so the gate is settled the moment the launch is typed — the switch's
- *  readiness wait collapses to the CLI's boot. Call AFTER autoTrustClaudeLaunch (the
- *  watcher's start clears the flag for a new launch). */
+/** Main PREPARED the trust — it wrote claude's OWN
+ *  `projects["<cwd>"].hasTrustDialogAccepted` (agents.ts `trustPrepared`). No dialog can
+ *  paint, so the gate is settled the moment the launch is typed and the watcher below
+ *  never starts. The two are mutually exclusive at the call site, so this no longer has
+ *  to be ordered after it. */
 export function markTrustPrepared(paneId: number): void {
   settledPanes.add(paneId)
 }

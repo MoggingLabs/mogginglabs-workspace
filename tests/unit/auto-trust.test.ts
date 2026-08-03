@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pastTrustDialog, trustDialogLive } from '@ui/features/agents/auto-trust'
+import { trustDialogLive } from '@ui/features/agents/auto-trust'
 
 // The auto-trust matcher (product decision 2026-08-02: an app-launched claude in the
 // workspace's own folder gets its trust dialog answered — opening the workspace there
@@ -32,14 +32,3 @@ describe('trustDialogLive', () => {
   })
 })
 
-describe('pastTrustDialog', () => {
-  it('recognizes the welcome box and a live prompt as past the gate', () => {
-    expect(pastTrustDialog('Welcome back VoxHorizon!')).toBe(true)
-    expect(pastTrustDialog('? for shortcuts')).toBe(true)
-    expect(pastTrustDialog('esc to interrupt')).toBe(true)
-  })
-
-  it('does not claim past-the-gate on the dialog itself', () => {
-    expect(pastTrustDialog('1. Yes, I trust this folder\nEnter to confirm')).toBe(false)
-  })
-})

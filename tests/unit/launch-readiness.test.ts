@@ -102,8 +102,12 @@ describe('which launches get covered', () => {
       sourceOf('src/ui/features/agents/launch-readiness.ts'),
       'export function beginLaunchCover('
     )
-    expect(body, 'the lift must ride the human-usable answer').toMatch(/settle: \(\) => void usable\.then\(drop\)/)
-    expect(body, 'only an auto-submitted prompt waits for the trust gate').toMatch(/ready: promptable/)
+    expect(body, 'the lift must ride the human-usable answer').toMatch(/void capped\(usable\)\.then\(drop\)/)
+    // The overlay's ceiling runs from the WRITE. Running it from the raise let the
+    // pre-write waits (liveness, the build) spend it, so the cover could lift at the very
+    // moment the command went out — or burn 15s on a pane whose spawn had failed.
+    expect(body, 'the overlay is bounded from the write, not the raise').toMatch(/bounded = capped\(promptable\)/)
+    expect(body, 'only an auto-submitted prompt waits for the trust gate').toMatch(/return bounded \?\? promptable/)
   })
 
   it('derives both answers from ONE readiness waiter', () => {
@@ -155,7 +159,10 @@ describe('EVERY surface that injects an agent raises the cover', () => {
     const body = bodyWithoutComments(src, 'function spawnDeliver(req: AgentLaunchRequest)')
     expect(body).toMatch(/cover\.settle\(\)/)
     // Both non-typing exits give the pane straight back.
-    expect(body.match(/cover\.cancel\(\)/g)?.length, 'the custom branch and the refused build both cancel').toBe(2)
+    expect(body.match(/cover\.cancel\(\)/g)?.length, 'custom branch, refused build, and the catch').toBe(3)
+    // A cover is removed only by settle/cancel, so a throw anywhere in this async body
+    // would strand a pane blurred and input-refusing with no button to escape it.
+    expect(body, 'a throw must give the pane back').toMatch(/\}\)\(\)\.catch\(\(\) => cover\.cancel\(\)\)/)
   })
 
   it('typed delivery covers at the COMMITMENT, not at the write', () => {
@@ -179,7 +186,10 @@ describe('EVERY surface that injects an agent raises the cover', () => {
   it('every path in launchInPane that types nothing gives the pane back', () => {
     const body = launchInPaneBody()
     // remote-readiness failure · adopt · custom · non-AgentCliId · build refused
-    expect(body.match(/cover\.cancel\(\)/g)?.length, 'a forgotten cancel strands a pane blurred to the ceiling').toBe(5)
+    expect(body.match(/cover\.cancel\(\)/g)?.length, 'a forgotten cancel strands a pane blurred to the ceiling').toBe(6)
+    // A pane id is a slot number, not an identity: closed mid-launch and re-minted by the
+    // next split, it would take a full `cd … && claude …` line meant for someone else.
+    expect(body, 'a recycled pane id must never be typed into').toMatch(/if \(!samePane\(\)\) \{/)
     expect(body).toMatch(/cover\.settle\(\)/)
   })
 })

@@ -1,5 +1,5 @@
 import type { PaneId } from '@contracts'
-import { getPaneFailoverOffer, setPaneFailoverOffer } from '../../core/agents/failover-offer-port'
+import { getPaneFailoverOffer, setPaneFailoverOffer, type PaneFailoverOffer } from '../../core/agents/failover-offer-port'
 import { whenPaneAgentReady } from '../../core/terminal/liveness-port'
 import { isPaneTrustDialogLive, isTrustSettled } from './auto-trust'
 
@@ -63,6 +63,21 @@ import { isPaneTrustDialogLive, isTrustSettled } from './auto-trust'
  * the pane stayed covered long after there was anything to wait for.
  */
 export const LAUNCH_COVER_CEILING_MS = 15_000
+
+/**
+ * How long the readiness PROMISES may stay outstanding. Deliberately much larger than the
+ * cover's ceiling, and not a UX number at all — it exists only so a waiter cannot leak.
+ *
+ * The two clocks measure different things and conflating them broke the cover. A cover is
+ * raised at the COMMITMENT, but the command is typed much later — behind `whenPaneLive`
+ * (bounded at 15s on its own) and the build. Running one 15s clock from the raise meant
+ * those waits spent the ceiling before the CLI had been asked to start: on a slow pane the
+ * cover lifted onto a still-booting agent, and on a pane whose spawn had failed it burned
+ * the full 15s and then uncovered at the exact instant the (lost) command went out. So the
+ * promise is bounded generously here, and the OVERLAY is bounded from the write instead
+ * (see `settle`).
+ */
+const READINESS_WAIT_CEILING_MS = 90_000
 
 /** How often the trust check is re-read once the TUI is up. Only ever runs in the rare
  *  case where the dialog is still on screen — the prepared path is true on the first look. */
@@ -158,23 +173,44 @@ export function beginLaunchCover(paneId: number, provider: string, remote: boole
   // raise a cover that could only ever end on a timeout.
   if (!coversLaunch(provider, remote)) return NO_LAUNCH_COVER
 
-  const { usable, promptable } = paneReadiness(paneId, LAUNCH_COVER_CEILING_MS)
+  const { usable, promptable } = paneReadiness(paneId, READINESS_WAIT_CEILING_MS)
   // A caller already running its own overlay (the profile switch narrates its interrupt)
   // keeps ownership: this neither replaces its copy nor clears it out from under it.
+  const mine: PaneFailoverOffer = { state: 'launching', title: '', nextName: label }
   const owned = !getPaneFailoverOffer(paneId as PaneId)
-  if (owned) setPaneFailoverOffer(paneId as PaneId, { state: 'launching', title: '', nextName: label })
+  if (owned) setPaneFailoverOffer(paneId as PaneId, mine)
 
   let done = false
   const drop = (): void => {
     if (done) return
     done = true
-    if (owned) setPaneFailoverOffer(paneId as PaneId, null)
+    // Clear only what THIS cover raised. `owned` is sampled once, at raise, but the drop
+    // fires seconds later — and in that window the port can be holding someone else's
+    // overlay. Clearing blind destroyed it: a usage-limit offer raised DURING a launch
+    // ("…hit its usage limit / Continue on <profile>") was superseded into the port, then
+    // wiped a beat later when the launch settled — the card appearing and vanishing with
+    // no action taken, and no fallback toast either, because the capped event had already
+    // been claimed. Identity, not a boolean, is what makes the clear safe.
+    if (owned && getPaneFailoverOffer(paneId as PaneId) === mine) setPaneFailoverOffer(paneId as PaneId, null)
   }
+  // The overlay's ceiling runs from the WRITE, which is when `settle` is called — not from
+  // the raise. Everything before the write is the app's own waiting, and spending the
+  // user-facing budget on it is what let a cover lift before its agent had started.
+  const capped = (p: Promise<boolean>): Promise<boolean> =>
+    Promise.race([p, new Promise<boolean>((r) => setTimeout(() => r(false), LAUNCH_COVER_CEILING_MS))])
+
+  let bounded: Promise<boolean> | null = null
   return {
-    // The cover comes down on `usable` — the moment the human could type. `ready` is the
-    // later, stricter answer, and only a caller auto-submitting a prompt should wait for it.
-    ready: promptable,
-    settle: () => void usable.then(drop),
+    // The stricter "may the app auto-submit into this?" answer, bounded once the command
+    // has actually gone out. Read AFTER settle() so the caller gets the bounded promise.
+    get ready() {
+      return bounded ?? promptable
+    },
+    // The cover comes down on `usable` — the moment the human could type.
+    settle: () => {
+      bounded = capped(promptable)
+      void capped(usable).then(drop)
+    },
     cancel: drop
   }
 }

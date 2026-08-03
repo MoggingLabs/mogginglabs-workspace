@@ -250,27 +250,31 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
     if (req.resume && typeof req.paneId === 'number') {
       const live = paneSessionLog(req.paneId)
       if (live && live.provider === req.agentId) resumeSessionId = resumeSessionIdFromFile(req.agentId, live.file) ?? undefined
-      // An ASSIGNED id is the app's own choice, so unlike a lock it can name a session that
-      // was never WRITTEN: `claude --session-id X` creates no transcript until the user
-      // actually sends something, and a pane launched and switched without a prompt would
-      // hand `--resume X` an id claude has never heard of — it prints "no conversation
-      // found" and EXITS, killing the pane instead of continuing it. The old chain could
-      // not produce this (its ids came from files that by definition existed), so the
-      // existence check belongs exactly here, after pooling has had its chance to bring the
-      // transcript into the launch home. No transcript means there is genuinely nothing to
-      // continue, and a fresh session is the honest answer. (Found live, 2026-08-03.)
-      if (!resumeSessionId && req.agentId === 'claude') {
-        const assigned = assignedSessionFor(req.paneId)
-        if (assigned) {
-          if (claudeTranscriptExists(assigned, profile ?? null, req.cwd)) resumeSessionId = assigned
-          else unwritten = true
-        }
-      }
+      if (!resumeSessionId && req.agentId === 'claude') resumeSessionId = assignedSessionFor(req.paneId)
       if (!resumeSessionId) {
         resumeSessionId = consumeNow
           ? consumeRestoreResumeSessionId(req.paneId, req.agentId)
           : peekRestoreResumeSessionId(req.paneId, req.agentId)
         usedRestoreIntent = !!resumeSessionId
+      }
+      // ONE existence check, on whichever tier won — because ASSIGNMENT is what made an
+      // unwritten id possible, and assignment now feeds more than one tier.
+      //
+      // `claude --session-id X` creates no transcript until the user actually sends
+      // something. Hand `--resume X` to claude for a session it never wrote and it prints
+      // "no conversation found" and EXITS, killing the pane instead of continuing it. The
+      // old chain could not produce that: every id came from a file that existed by
+      // definition. Checking only the in-memory assigned tier left the hole open on the
+      // path that matters most — the restore shelf is populated FROM assigned ids and
+      // records them WITHOUT a file precisely when the monitor had no lock, and after a
+      // restart the in-memory map is empty so the shelf is the only tier left. A pane
+      // launched, never prompted, then restored came back to a dead shell.
+      //
+      // Placed after pooling, which has had its chance to bring the transcript into the
+      // launch home. No transcript means there is genuinely nothing to continue.
+      if (resumeSessionId && req.agentId === 'claude' && !claudeTranscriptExists(resumeSessionId, profile ?? null, req.cwd)) {
+        resumeSessionId = undefined
+        unwritten = true
       }
     }
     // The pane's session was named but never written, and nothing else knows an id either:

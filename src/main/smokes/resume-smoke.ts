@@ -1,5 +1,5 @@
 import { app, type BrowserWindow } from 'electron'
-import { writeFileSync, mkdtempSync } from 'node:fs'
+import { writeFileSync, mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -7,6 +7,7 @@ import {
   resumeIntentsForSmoke,
   setPaneSessionLogOverrideForSmoke
 } from '../session-restore'
+import { claudeProjectDirName } from '@backend/features/context'
 import { appSettingsDebug } from '../app-settings'
 
 // Env-gated last-session RESUME smoke (MOGGING_RESUME). Fresh userData, real daemon.
@@ -70,13 +71,35 @@ export function runResumeSmoke(win: BrowserWindow): void {
       for (let i = 0; i < 40 && appSettingsDebug().saves < 1; i++) await sleep(250)
       await sleep(700) // a second queued debounce collapses into the save we just saw
 
-      // The one seam: pane 101 (workspace ordinal 1, slot 1) "has" a locked claude
-      // session log. The file's NAME is the identity — it never needs to exist.
-      const sessionFile = join(tmpdir(), 'mog-resume-home', 'projects', 'x', `${UUID_A}.jsonl`)
-      setPaneSessionLogOverrideForSmoke(101, { provider: 'claude', file: sessionFile })
-
       const cwdA = mkdtempSync(join(tmpdir(), 'mog-resume-a-'))
       const cwdB = mkdtempSync(join(tmpdir(), 'mog-resume-b-'))
+
+      // The one seam: pane 101 (workspace ordinal 1, slot 1) has a locked claude session
+      // log. Its NAME is the identity — but the file must also EXIST, and exist where a
+      // launch under this profile would look for it, because the launch path now refuses
+      // to resume a session claude never wrote (an assigned `--session-id` names a
+      // conversation before there is one, and `--resume` on an unwritten id makes claude
+      // print "no conversation found" and exit). A restore whose transcript is gone is a
+      // fresh session, not a picker.
+      //
+      // Hermetic by giving the restored slot a PROFILE whose config home is this temp
+      // tree — which is also the ordinary case in the product, where a restored pane comes
+      // back under the profile it launched with.
+      const home = join(tmpdir(), 'mog-resume-home')
+      const projectDir = join(home, 'projects', claudeProjectDirName(cwdA))
+      mkdirSync(projectDir, { recursive: true })
+      const sessionFile = join(projectDir, `${UUID_A}.jsonl`)
+      writeFileSync(sessionFile, `{"type":"user","sessionId":"${UUID_A}"}\n`)
+      await ES(
+        `window.bridge.invoke('profiles:save', ${JSON.stringify({
+          id: 'p-resume',
+          name: 'Resume',
+          provider: 'claude',
+          env: { CLAUDE_CONFIG_DIR: home },
+          order: 0
+        })})`
+      )
+      setPaneSessionLogOverrideForSmoke(101, { provider: 'claude', file: sessionFile })
       const save = (workspaces: unknown[], activeId: string | null): Promise<unknown> =>
         ES(
           `window.bridge.invoke('workspace:saveState', ${JSON.stringify({
@@ -92,7 +115,8 @@ export function runResumeSmoke(win: BrowserWindow): void {
         cwd: cwdA,
         ordinal: 1,
         paneCount: 2,
-        assignments: ['claude', 'shell']
+        assignments: ['claude', 'shell'],
+        profileIds: ['p-resume', null]
       }
       const wsB = { id: 'resume-b', name: 'Bravo', color: '#3b9eff', cwd: cwdB, ordinal: 2, paneCount: 1 }
       const wsC = { id: 'resume-c', name: 'Casual', color: '#b98aff', cwd: cwdB, ordinal: 3, paneCount: 1 }

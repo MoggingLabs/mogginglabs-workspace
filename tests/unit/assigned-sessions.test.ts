@@ -94,7 +94,7 @@ describe('the launch path spends the id it assigned', () => {
   it('resumes by assigned id where the live lock is already gone', () => {
     // The interrupt kills the capped CLI before this build runs, so the failover has no
     // live lock — the assigned id is what keeps "Continue" out of the CLI's picker.
-    expect(body).toMatch(/const assigned = assignedSessionFor\(req\.paneId\)/)
+    expect(body).toMatch(/if \(!resumeSessionId && req\.agentId === 'claude'\) resumeSessionId = assignedSessionFor\(/)
   })
 
   it('never resumes an id claude never WROTE', () => {
@@ -102,7 +102,10 @@ describe('the launch path spends the id it assigned', () => {
     // prints "no conversation found" and EXITS — killing the pane instead of continuing
     // it. The old chain could not do this: its ids came from files that existed by
     // definition. Found live, 2026-08-03.
-    expect(body).toMatch(/claudeTranscriptExists\(assigned, profile \?\? null, req\.cwd\)/)
+    // ONE check, on whichever tier won. Assignment feeds more than one tier, and the
+    // restore shelf — the tier that survives a restart — carries fileless ids by design,
+    // so guarding only the in-memory tier left the hole open exactly where it mattered.
+    expect(body).toMatch(/resumeSessionId && req\.agentId === 'claude' && !claudeTranscriptExists\(resumeSessionId,/)
   })
 
   it('launches FRESH rather than dropping into the picker when there is nothing to continue', () => {

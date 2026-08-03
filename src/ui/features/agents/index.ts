@@ -19,6 +19,7 @@ import { getPaneCwd, getPaneCwdProjection, onPaneCwdProjection, setPaneCwd } fro
 import { getPaneRemote, setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover, type AgentLaunchRequest } from '../../core/agents/launch-port'
 import { armSpawnRun, whenSpawnRunOutcome } from '../../core/terminal/spawn-run-port'
+import { paneInstance } from '../../core/terminal/pane-instance-port'
 import { clearPaneAgentSession, getPaneAgentSession, onPaneAgentSession, setPaneAgentSession, type PaneAgentSession } from '../../core/agents/agent-session-port'
 import { allCommands, setCommands } from '../../core/commands/command-port'
 import { setActiveView } from '../../core/shell/view-port'
@@ -615,6 +616,16 @@ export const agentsFeature: UiFeature = {
       // agent below, and covering that pane would block input to a LIVING conversation for
       // the length of the spawn-settled wait. Its cover goes up once the adopt branch has
       // been passed and typing is certain.
+      // THE PANE THIS LAUNCH IS FOR. A pane id is a slot number, not an identity: close a
+      // pane mid-launch and the next split can re-mint the id, so a command already in
+      // flight would be typed into a stranger — a full `cd … && claude …` line landing in
+      // whatever that pane was doing, which would then wear the dead launch's agent chip
+      // and have its own cover torn down. Every wait below (liveness, spawn-settled, the
+      // build) is a window for that. Same guard, and the same reason, as the board's
+      // card hand-off. An `undefined` capture means the pane has not mounted its xterm
+      // yet — a workspace opening behind the board view — and must still proceed.
+      const bornAs = paneInstance(paneId as PaneId)
+      const samePane = (): boolean => bornAs === undefined || paneInstance(paneId as PaneId) === bornAs
       let cover: LaunchCover = NO_LAUNCH_COVER
       const raiseCover = (): void => {
         cover = beginLaunchCover(paneId, provider, remote, nameById.get(provider) ?? provider)
@@ -719,13 +730,19 @@ export const agentsFeature: UiFeature = {
         })
         return
       }
+      // Last check before the bytes go out: the pane that asked for this launch is still
+      // the pane sitting on this id.
+      if (!samePane()) {
+        cover.cancel()
+        return
+      }
       agentsClient.launchInto(paneId, result.command)
       recordCliLaunch(paneId, provider, cwd, resume, { mine, effectiveProfile, workspaceId, result })
       // Hold the cover until the agent is genuinely usable, then lift it — on the agent's
       // word OR on the ceiling, because a cover that can outlive its own failure mode is a
       // trap rather than a cover.
-      if (cover.ready) opts?.onReady?.(cover.ready)
       cover.settle()
+      if (cover.ready) opts?.onReady?.(cover.ready)
     }
 
     /** Everything a successful CLI launch records — shared by typed delivery (right after
@@ -790,20 +807,33 @@ export const agentsFeature: UiFeature = {
       // Context bar: LAUNCH cwd + profile ID (the id names the config home main-side;
       // env values never ride the port — ADR 0002).
       writeSession(paneId, { provider, cwd, profileId: effectiveProfile })
-      // The app launched claude into the workspace's own folder — answer its
-      // folder-trust dialog for it (auto-trust.ts: opening a workspace there IS the
-      // trust declaration; hand-typed agents keep their own dialog). AFTER the session
-      // write: the watcher's launch-died check reads the session port, and on a
-      // relaunch the OLD session is already cleared — called earlier, the watcher died
-      // on its first look and marked the gate settled with the dialog still coming
-      // (found live: the switch overlay sat on an unanswered dialog for its whole hold).
-      // When main already declared the folder trusted (trustPrepared — the state-file
-      // carry), the gate is settled the moment the launch is typed: no dialog will
-      // paint, and the switch's readiness wait collapses to the CLI's boot time. The
-      // watcher still runs as the belt for the day the carry misses.
+      // FOLDER TRUST, the way claude itself records it. Opening a workspace at a folder
+      // IS the trust declaration (product decision), and claude's own mechanism for
+      // saying so is `projects["<cwd>"].hasTrustDialogAccepted` in its state file — which
+      // main already writes on every local launch and reports back as `trustPrepared`.
+      // Where that succeeded there is no dialog to answer: the gate is settled the moment
+      // the launch is typed.
+      //
+      // So the buffer WATCHER is now a belt, not the mechanism — and it only runs where
+      // the carry could not reach. It used to run unconditionally, scraping the pane's
+      // text every 400ms for 45 seconds and holding an auto-submitted prompt behind a
+      // nine-second dialog-free settle, on launches where the state file already proved
+      // the dialog could not paint. That is a poll standing in for a fact the app had
+      // written itself.
+      //
+      // The belt still earns its place in the three cases the carry cannot cover: a
+      // REMOTE claude (the state file resolves against the local home, so another
+      // machine's is unreachable), a first launch whose new entry is keyed in a different
+      // path form than claude's own process uses, and a carry that failed and honestly
+      // said so. All three arrive here as `trustPrepared` falsy.
+      //
+      // Ordering note for the belt path: it must come AFTER the session write, because the
+      // watcher's launch-died check reads the session port — called earlier it died on its
+      // first look and marked the gate settled with the dialog still coming (found live:
+      // the switch overlay sat on an unanswered dialog for its whole hold).
       if (provider === 'claude') {
-        void autoTrustClaudeLaunch(paneId)
         if (result.trustPrepared) markTrustPrepared(paneId)
+        else void autoTrustClaudeLaunch(paneId)
       }
       setPaneLabel(paneId as PaneId, nameById.get(provider) ?? provider)
       // Booleans/ids only — never env values or command text (ADR 0005).
@@ -863,6 +893,12 @@ export const agentsFeature: UiFeature = {
       // injected command line included, played out in the open.
       const cover = beginLaunchCover(paneId, provider, false, nameById.get(provider) ?? provider)
       armSpawnRun(paneId, build)
+      // The whole delivery runs under a catch that GIVES THE PANE BACK. A cover is removed
+      // only by settle/cancel, so anything that throws between the raise and them — a
+      // subscriber blowing up inside recordCliLaunch's fan-out, a rejected build — would
+      // strand a pane blurred and refusing input, with no button on the overlay and no way
+      // out but closing it. The ceiling bounds the promise, not the overlay; this is what
+      // bounds the overlay against a throw.
       void (async () => {
         const outcome = await whenSpawnRunOutcome(paneId, 20000)
         if (custom) {
@@ -893,7 +929,7 @@ export const agentsFeature: UiFeature = {
         recordCliLaunch(paneId, provider, cwd, false, p)
         // Both arms end here: the daemon typed it at spawn, or the fallback just did.
         cover.settle()
-      })()
+      })().catch(() => cover.cancel())
     }
 
     /**
@@ -985,6 +1021,15 @@ export const agentsFeature: UiFeature = {
         getTelemetry().captureEvent({ name: 'agent.profileSwitch', props: { provider, trigger, ok: true } })
       } finally {
         failingOver.delete(paneId)
+        // AND THE BLUR COMES DOWN, whatever happened. The clear above sits on the success
+        // path; the `switching` overlay carries no button by contract (there is nothing
+        // useful to offer mid-interrupt), so a throw anywhere between raising it and that
+        // line left a pane permanently blurred and refusing input, escapable only by
+        // closing it. Clearing here is safe because it only ever removes an overlay this
+        // flow still owns — an offer raised by something newer is a different object and
+        // the success path already cleared ours.
+        const still = getPaneFailoverOffer(paneId as PaneId)
+        if (still?.state === 'switching') setPaneFailoverOffer(paneId as PaneId, null)
       }
     }
 
