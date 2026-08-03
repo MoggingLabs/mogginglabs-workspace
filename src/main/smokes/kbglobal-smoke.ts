@@ -38,6 +38,15 @@ import { MOD_KEY_CDP_BIT } from './kit'
 //             which never protected it (the app listens in CAPTURE), so `isEditableTarget` is the
 //             only thing standing there. Deleting the guard to "fix" the terminal re-breaks this, and
 //             re-adding a tagName test to fix THIS re-breaks the terminal. The gate refuses both.
+//             That sentence was true of the pane verbs and FALSE of the Board, which listened in the
+//             BUBBLE phase: there the input's stopPropagation() ended the event first, so this half
+//             of the gate passed on Windows without the guard ever being asked, while on macOS the
+//             Board opened mid-rename. Both are fixed at the source — the Board, Brain and dock
+//             toggles capture like everything else, and `shortcutsBlocked` reads the FOCUSED element
+//             as well as the event's target, since a bubble listener only ever sees events whose
+//             target is something other than the field holding the caret. The premise is therefore
+//             re-asserted BETWEEN the chords below: a negative that runs after the caret has left
+//             the field is not the negative this section claims to be.
 // The positive runs FIRST and through the same dispatch, so a gate that passes because the app went
 // deaf — or because the keys never arrived — is impossible.
 
@@ -285,9 +294,23 @@ export function runKbGlobalSmoke(win: BrowserWindow): void {
         before: n0.panes,
         after: n1.panes
       })
+      // The premise, re-asserted BETWEEN the two chords. Each negative below means "a chord
+      // pressed while the user is typing did nothing"; if the caret has quietly left the
+      // rename field by now — its own blur handler commits and REMOVES the input — then the
+      // chord that follows is no longer being pressed while renaming and the negative would
+      // pass, or fail, for a reason that has nothing to do with the guard. Asserted rather
+      // than assumed, exactly as section 0 does for the terminal.
+      check('8 …and the rename field still holds the caret after the first chord', n1.activeTag === 'INPUT' && n1.activeCls.includes('ws-rename'), {
+        tag: n1.activeTag,
+        cls: n1.activeCls
+      })
       await press('Ctrl+Shift+G')
       const n2 = await snap()
       check('8 Ctrl+Shift+G while renaming must NOT open the Board', !n2.view.includes('view-board'), n2.view)
+      check('8 …with the rename field still holding the caret throughout', n2.activeTag === 'INPUT' && n2.activeCls.includes('ws-rename'), {
+        tag: n2.activeTag,
+        cls: n2.activeCls
+      })
       await press('Escape')
       await sleep(300)
 

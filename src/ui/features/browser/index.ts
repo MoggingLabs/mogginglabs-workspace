@@ -1084,19 +1084,27 @@ export const browserFeature: UiFeature = {
       getTelemetry().captureEvent({ name: 'browser.dock', props: { open } }) // boolean only — never URLs (ADR 0005)
     }
 
-    document.addEventListener('keydown', (e) => {
-      // Finding 28: this read `e.ctrlKey` alone, so the dock's ONE shortcut was dead on
-      // every Mac. isModKey is the single correct way to ask (Ctrl or ⌘).
-      if (!isModKey(e) || !e.shiftKey || e.altKey || e.code !== 'KeyU') return
-      // Finding 29: a raw global listener owes the user this question BEFORE it acts.
-      // The app's shortcuts are CAPTURE-phase, so the stopPropagation() calls sprinkled
-      // through its text fields never blocked them — nothing had begun to bubble yet.
-      // Sliding a dock out from under an open modal, or eating a keystroke mid-sentence,
-      // is not a shortcut; it is a surprise.
-      if (shortcutsBlocked(e.target)) return
-      e.preventDefault()
-      toggle(!open)
-    })
+    // CAPTURE — the comment below says the app's shortcuts are capture-phase, and this one
+    // was not, which made its guard decorative: a text field that stops propagation ended
+    // the event first, so the only events reaching here were ones whose target was not the
+    // focused field. Same defect as the Board's Ctrl+Shift+G (features/board/index.ts).
+    document.addEventListener(
+      'keydown',
+      (e) => {
+        // Finding 28: this read `e.ctrlKey` alone, so the dock's ONE shortcut was dead on
+        // every Mac. isModKey is the single correct way to ask (Ctrl or ⌘).
+        if (!isModKey(e) || !e.shiftKey || e.altKey || e.code !== 'KeyU') return
+        // Finding 29: a raw global listener owes the user this question BEFORE it acts.
+        // The app's shortcuts are CAPTURE-phase, so the stopPropagation() calls sprinkled
+        // through its text fields never blocked them — nothing had begun to bubble yet.
+        // Sliding a dock out from under an open modal, or eating a keystroke mid-sentence,
+        // is not a shortcut; it is a surprise.
+        if (shortcutsBlocked(e.target)) return
+        e.preventDefault()
+        toggle(!open)
+      },
+      true
+    )
     // Find + zoom, active when the dock is open and its OWN chrome holds focus (the
     // in-page-focus case is relayed from main — see the guest-chord handler). Ctrl+F,
     // Ctrl+= / Ctrl+- / Ctrl+0. Ctrl+L focuses the address bar (F13 / U-item).

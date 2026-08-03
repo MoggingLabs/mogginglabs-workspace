@@ -79,7 +79,15 @@ export function runBoardFailSmoke(win: BrowserWindow): void {
         .find((c) => c.id === slowCardId)
       const slowPane = slowBefore?.paneId ?? 0
       await ES(`window.__mogging.agents.detected({ id: ${slowPane}, agentId: 'claude', cwd: '', sinceMs: Date.now() })`)
-      await sleep(1300)
+      // POLL for the hand-off rather than sleeping a fixed beat past it. The board no longer
+      // types a set delay after the agent process appears — it waits for the agent to be
+      // USABLE, which under CI load is seconds, not the 800ms this 1300ms window was sized
+      // against. Waiting for the write itself keeps the assertion (exactly one, carrying the
+      // slow card's marker) while letting a slow-but-correct runner be slow.
+      for (let i = 0; i < 90 && writes.filter((w) => w.data.includes(SLOW_MARKER)).length === 0; i++) {
+        await sleep(250)
+      }
+      await sleep(500) // settle: a second (wrong) write would land here
 
       const cards = (await ES(`window.__mogging.board.list()`)) as { id: string; lane: string; paneId?: number; workspaceId?: string }[]
       const card = cards.find((c) => c.id === cardId)
