@@ -13,6 +13,57 @@ import { homedir } from 'node:os'
  *  on purpose — see PERSISTED_SCROLLBACK_CHARS in workspace/session-store.ts. */
 export const SCROLLBACK_CHARS = 200_000
 
+/**
+ * The most characters ONE write may hand a pty.
+ *
+ * A pty's input queue is a fixed kernel buffer, and the SMALLEST of them is what is safe
+ * everywhere: Darwin caps it at TTYHOG = 1024 bytes (xnu `bsd/sys/tty.h`) where Linux's
+ * n_tty line discipline holds 4096, and Windows' ConPTY has no such queue at all. A write
+ * larger than that queue is NOT flow-controlled the way a pipe is — once the queue fills,
+ * the line discipline DROPS the excess (BSD `ttyinput`, Linux `n_tty_receive_buf`). No
+ * error surfaces anywhere: the reader simply receives a silently truncated line.
+ *
+ * That is not theoretical. The app types a whole composed first prompt into a pane in ONE
+ * write (board launch hand-off), and REPOMAP_DEFAULT_BUDGET budgets its fenced blocks to
+ * 4000 characters before the fences and the task are added — FOUR TIMES Darwin's queue,
+ * and inside Linux's by a couple of dozen characters. The prompt is a fenced
+ * ```repomap block, so losing any part of its closing fence unbalances the backticks and
+ * leaves the pane's shell at a PS2 continuation prompt, where every later command typed
+ * into that pane is swallowed as more of the unfinished one — a pane that echoes input and
+ * runs nothing, with no error to read anywhere. (BRAINMILESTONE's macos-only red, run
+ * 30737193862: "pane 201 MCP bridge timed out" — the bridge command went into the
+ * continuation, so the bridge process was never started and nothing ever connected.)
+ *
+ * 512 leaves a full chunk inside the smallest queue with room for whatever is already in
+ * it. Paced delivery is the caller's half of the contract — see the daemon's writePty.
+ */
+export const PTY_INPUT_CHUNK_CHARS = 512
+
+/**
+ * Split pane input into writes no larger than the smallest pty input queue.
+ *
+ * Never splits a surrogate pair: each chunk is encoded on its own, so half a pair would
+ * reach the pty as U+FFFD and the character would be lost as surely as the truncation this
+ * exists to prevent.
+ */
+export function chunkPtyInput(data: string, size = PTY_INPUT_CHUNK_CHARS): string[] {
+  if (!data) return []
+  if (data.length <= size) return [data]
+  const out: string[] = []
+  for (let i = 0; i < data.length; ) {
+    let end = Math.min(i + size, data.length)
+    if (end < data.length) {
+      const last = data.charCodeAt(end - 1)
+      // A high surrogate at the boundary belongs with the low half in the NEXT chunk —
+      // unless backing up would empty this one, which no sane `size` can reach.
+      if (last >= 0xd800 && last <= 0xdbff && end - 1 > i) end -= 1
+    }
+    out.push(data.slice(i, end))
+    i = end
+  }
+  return out
+}
+
 /** How far past a fresh cap cut we'll look for a clean line start. */
 const TEAR_SCAN = 400
 

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { sourceOf } from './source-body'
-import { RESTORE_MODE_RESET, trimTornStart } from '@backend/features/terminal/pane-shared'
+import {
+  PTY_INPUT_CHUNK_CHARS,
+  RESTORE_MODE_RESET,
+  chunkPtyInput,
+  trimTornStart
+} from '@backend/features/terminal/pane-shared'
 
 // The tear trimmer guards BOTH blind suffix cuts (the live ring's slice(-SCROLLBACK_CHARS)
 // and the persisted tail consumed by the daemon's restore()): a cut that lands mid escape
@@ -85,5 +90,44 @@ describe('RESTORE_MODE_RESET', () => {
     // would require putting the very byte being refused into this file.
     const RAW_CONTROL = new RegExp('[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]')
     expect(RAW_CONTROL.test(src), 'a raw control byte in the source').toBe(false)
+  })
+})
+
+// A pty's input queue is a fixed kernel buffer that DROPS what does not fit — Darwin caps it
+// at 1024 bytes where Linux holds 4096 — and the app types a whole composed first prompt into
+// a pane in one write (REPOMAP_DEFAULT_BUDGET alone is 4000 characters). The truncation is
+// silent on both sides, and a fenced ```repomap block that loses part of its closing fence
+// leaves the pane's shell at a PS2 continuation prompt swallowing every later command.
+describe('chunkPtyInput', () => {
+  it('leaves anything that already fits the smallest input queue alone', () => {
+    expect(chunkPtyInput('echo hi')).toEqual(['echo hi'])
+    const exact = 'x'.repeat(PTY_INPUT_CHUNK_CHARS)
+    expect(chunkPtyInput(exact)).toEqual([exact])
+  })
+
+  it('writes nothing for nothing', () => {
+    expect(chunkPtyInput('')).toEqual([])
+  })
+
+  it('caps every chunk at the smallest input queue and loses not one character', () => {
+    const prompt = '```repomap\n' + 'sig line\n'.repeat(500) + '```\n\nTASK\r'
+    const chunks = chunkPtyInput(prompt)
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(PTY_INPUT_CHUNK_CHARS)
+    expect(chunks.join('')).toBe(prompt)
+  })
+
+  it('never splits a surrogate pair (each chunk is encoded on its own)', () => {
+    // The pair straddles the boundary: filler puts its HIGH half at index CHUNK-1.
+    const pair = '\u{1F600}'
+    const data = 'a'.repeat(PTY_INPUT_CHUNK_CHARS - 1) + pair + 'b'.repeat(10)
+    const chunks = chunkPtyInput(data)
+    expect(chunks.join('')).toBe(data)
+    for (const c of chunks) {
+      const first = c.charCodeAt(0)
+      const last = c.charCodeAt(c.length - 1)
+      expect(first >= 0xdc00 && first <= 0xdfff, 'a chunk opening on a lone low surrogate').toBe(false)
+      expect(last >= 0xd800 && last <= 0xdbff, 'a chunk ending on a lone high surrogate').toBe(false)
+    }
   })
 })
