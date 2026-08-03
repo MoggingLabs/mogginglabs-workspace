@@ -967,6 +967,11 @@ export class TerminalPane {
     // Meta chords are macOS-only: on Windows `metaKey` is the WINDOWS key, and any
     // Win+C/Win+V combo the OS lets through must not be eaten as copy/paste.
     const cmd = IS_MAC && e.metaKey
+    // DELIBERATELY "either", and NOT a hasModKey/matchChord site. The clipboard chords
+    // below accept ⌘+C *and* Ctrl+Shift+C on a Mac on purpose: ⌘ is the desktop's copy,
+    // Ctrl+Shift+C / Ctrl+Insert are the TERMINAL's, and a Mac user typing in a shell
+    // expects both. The bug chords.ts fixed was accepting the WINDOWS key as a modifier,
+    // which the `IS_MAC &&` above already refuses — so this pair is correct as written.
 
     // COPY. Cmd+C (mac), Ctrl+Shift+C, and Ctrl+Insert — plus BARE Ctrl+C, but only
     // when there is a selection to copy. With no selection, bare Ctrl+C must fall

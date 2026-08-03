@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { createWorktree } from '@backend/features/worktrees'
 import { capturePaneTokenForSmoke, sh, softFps, softGapMs } from './smoke-shell'
 import { approvalListed, sendApprovalFromPane } from './reviewer-smoke-helper'
+import { MOD_KEY_FIELD } from './kit'
 
 // Env-gated Phase-4 SWARM MILESTONE (MOGGING_SWARMMILESTONE), two-phase like 2/05+3/06:
 //
@@ -180,7 +181,9 @@ export function runSwarmMilestoneSmoke(win: BrowserWindow): void {
       const repoOk = bothLanded && headClean && headMoved && clearedOk
 
       // ── B. Perf with the swarm up: board visited, 11+ panes, torrent + churn ─
-      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { ctrlKey: true, shiftKey: true, code: 'KeyG', bubbles: true }))`)
+      // THIS platform's modifier (⌘ on macOS, Ctrl elsewhere) — chords.ts made it the
+      // platform's own and never both, so a hardcoded Ctrl press opens no Board on a Mac.
+      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { ${MOD_KEY_FIELD}: true, shiftKey: true, code: 'KeyG', bubbles: true }))`)
       await sleep(700)
       await ES(`window.__mogging.workspace.create({ name: 'Torrent' })`)
       await sleep(500)

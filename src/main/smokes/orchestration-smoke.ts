@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sh, softFps, softGapMs } from './smoke-shell'
 import { approvalListed, sendApprovalFromPane } from './reviewer-smoke-helper'
+import { MOD_KEY_FIELD } from './kit'
 
 // Env-gated ORCHESTRATION milestone smoke (MOGGING_ORCHESTRATION, Phase-3/06).
 // The whole Phase-3 promise as ONE asserted flow, two-phase like the perf milestone:
@@ -240,8 +241,8 @@ export function runOrchestrationSmoke(win: BrowserWindow): void {
 
       // ── B. Perf under orchestration (Phase-2 budget, UNCHANGED) ─────────────
       await ES(
-        `window.dispatchEvent(new KeyboardEvent('keydown', { ctrlKey: true, shiftKey: true, code: 'KeyG', bubbles: true }))`
-      ) // board OPEN (renders bound cards)…
+        `window.dispatchEvent(new KeyboardEvent('keydown', { ${MOD_KEY_FIELD}: true, shiftKey: true, code: 'KeyG', bubbles: true }))`
+      ) // board OPEN (renders bound cards)… on THIS platform's modifier (chords.ts)
       await sleep(700)
       await ES(`window.__mogging.templates.openIsolated(${JSON.stringify(repo)}, [{provider:'gemini',count:2}])`)
       await sleep(2000)

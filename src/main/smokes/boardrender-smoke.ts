@@ -300,7 +300,8 @@ export function runBoardRenderSmoke(win: BrowserWindow): void {
       // step above, and starting this one from the wrong view would let a toggle READ as a refusal.
       await ES(`window.__mogging.view('board')`)
       await waitTrue(`!!document.querySelector('#content.view-board')`)
-      await ES(`(window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true })), 1)`)
+      // The palette's own chord, on this platform's modifier — same rule as PLATFORM_MOD above.
+      await ES(`(window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ${PLATFORM_MOD === 'meta' ? 'metaKey' : 'ctrlKey'}: true, bubbles: true })), 1)`)
       const paletteUp = await waitTrue(`!!document.querySelector('.palette-overlay:not([hidden]) .palette-input')`)
       await ES(`(() => {
         const i = document.querySelector('.palette-input')

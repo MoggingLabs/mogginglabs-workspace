@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { MOD_KEY_FIELD } from './kit'
 
 // Env-gated wizard-isolation SUCCESS smoke (MOGGING_WIZARDISO). WIZARDFAIL proves the
 // wizard's isolation failure paths roll back; NOTHING proved the success path through
@@ -13,13 +14,15 @@ import { join } from 'node:path'
 // Launch — then demands testimony: two managed worktrees exist, the workspace's
 // paneCwds point INTO them, and each pane's SHELL really ran there (a `custom:`
 // provider writes `git branch --show-current` into branch.txt at its own cwd).
-// Also owns the layout menu's verbs since the reorganize redesign: the isolated
-// BATCH stepper (N worktrees in one gesture — worktrees must equal panes added,
-// and the return is true only when every requested terminal opened), the PLAIN
-// batch stepper (N terminals, zero worktrees), and REORGANIZE (the Reorganize row
-// opens the wizard's layout PAINTER in a modal; applying a custom arrangement +
-// new count reshapes to exactly that spec, gated by the live-work confirm on a
-// drop, survivors preserved).
+// Also owns the layout menu's verbs since the reorganize redesign: the MANUAL
+// isolated terminal (the popover's "New terminal…" row opens the pane-creation
+// modal, whose isolate tick must go live for a repo folder and put the new pane in
+// a worktree of its own), the isolated BATCH (N worktrees in one gesture —
+// worktrees must equal panes added, and the return is true only when every
+// requested terminal opened), the PLAIN batch (N terminals, zero worktrees), and
+// REORGANIZE (the Reorganize row opens the wizard's layout PAINTER in a modal;
+// applying a custom arrangement + new count reshapes to exactly that spec, gated by
+// the live-work confirm on a drop, survivors preserved).
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim()
 }
@@ -120,17 +123,42 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         branches.every((b) => b.startsWith('mogging/')) &&
         new Set(branches).size === 2
 
-      // ── Manual flow (layout menu): "New isolated terminal (worktree)" ──────────
-      // Drive the REAL titlebar menu, not the controller method: the row must exist,
-      // and clicking it must add one pane whose manifest cwd is a THIRD worktree.
+      // ── Manual flow (layout menu → "New terminal…" modal) ──────────────────────
+      // The popover's two stepper rows collapsed into ONE row that opens the pane-creation
+      // modal (workspace/index.ts: `New terminal…` → controller.openNewTerminals()), whose
+      // isolate tick is the manual twin of the wizard's checkbox and applies to every
+      // terminal it creates. The claim under test is unchanged — the REAL titlebar surface,
+      // not the controller method, must add a pane whose manifest cwd is a THIRD worktree —
+      // so only the path to it moved. `.layout-menu-add-isolated` no longer exists.
       const menuClicked = await ES<boolean>(`(async () => {
         document.querySelector('.layout-launcher > button')?.click()
         await new Promise((r) => setTimeout(r, 50))
-        const row = document.querySelector('.layout-menu-add-isolated')
+        const row = document.querySelector('.layout-menu-add')
         if (!(row instanceof HTMLElement)) return false
         row.click()
-        return true
+        await new Promise((r) => setTimeout(r, 250))
+        return !!document.querySelector('.modal .ntm-body')
       })()`)
+      // The modal's isolate box rides the SAME git preflight as the wizard's, and starts
+      // unticked in a fresh profile (no remembered lineup). Poll it LIVE, then tick it: a box
+      // that never enables for a repo folder is the "wasn't possible to isolate" bug class
+      // this gate exists for, exactly as at the wizard's own checkbox above.
+      const manualBox = await ES<{ found: boolean; live: boolean; checked: boolean }>(`(async () => {
+        const find = () => [...document.querySelectorAll('.modal .wizard-option-row label')]
+          .find((item) => item.textContent?.includes('Isolate each terminal'))?.querySelector('input')
+        for (let i = 0; i < 40; i++) {
+          const b = find()
+          if (b instanceof HTMLInputElement && !b.disabled) break
+          await new Promise((r) => setTimeout(r, 250))
+        }
+        const b = find()
+        if (!(b instanceof HTMLInputElement)) return { found: false, live: false, checked: false }
+        if (!b.disabled && !b.checked) b.click()
+        return { found: true, live: !b.disabled, checked: b.checked }
+      })()`)
+      const manualBoxLive = manualBox.found && manualBox.live && manualBox.checked
+      // Confirm by the primary action, the way a user leaves this dialog.
+      await ES(`document.querySelector('.modal .confirm-actions .btn--primary')?.click()`)
       let manualIsolated = false
       let manualCwd = ''
       for (let i = 0; i < 30 && !manualIsolated; i++) {
@@ -148,8 +176,12 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
       }
 
       // ── Ctrl+Shift+D stays PLAIN: the real keydown must split without a worktree ──
+      // Pressed with the modifier THIS platform is bound to (⌘ on macOS, Ctrl elsewhere): the
+      // workspace listener gates on isModKey, which core/commands/chords.ts made the platform's
+      // own and never both. A hardcoded Ctrl on a Mac splits nothing, so the claim being tested
+      // ("this chord splits, and splits PLAIN") would pass for the wrong reason.
       const worktreesBeforePlain = readdirSync(wtRoot).length
-      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'd', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }))`)
+      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'd', ${MOD_KEY_FIELD}: true, shiftKey: true, bubbles: true, cancelable: true }))`)
       let plainSplit = false
       for (let i = 0; i < 20 && !plainSplit; i++) {
         await sleep(300)
@@ -302,6 +334,7 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         cwdsAreWorktrees &&
         shellsIsolated &&
         menuClicked &&
+        manualBoxLive &&
         manualIsolated &&
         plainStaysPlain &&
         batchOk &&
@@ -321,6 +354,8 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         branches,
         shellsIsolated,
         menuClicked,
+        manualBox,
+        manualBoxLive,
         manualIsolated,
         manualCwd,
         plainStaysPlain,

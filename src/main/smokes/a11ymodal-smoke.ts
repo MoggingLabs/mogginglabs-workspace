@@ -1,6 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { MOD_KEY_FIELD } from './kit'
 
 /**
  * Audit regression (finding 30) — the three overlay/tab primitives, proved against the real DOM.
@@ -157,7 +158,9 @@ export function runA11yModalSmoke(win: BrowserWindow): void {
       // ── B. The palette, as a real combobox. ──
       stage = 'palette'
       await ES(`(document.querySelector('.palette-trigger')?.focus(), 1)`)
-      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true }))`)
+      // The PLATFORM's modifier (⌘ on macOS, Ctrl elsewhere) — the palette gates on isModKey,
+      // which core/commands/chords.ts made the platform's own and never both.
+      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ${MOD_KEY_FIELD}: true, bubbles: true, cancelable: true }))`)
       await sleep(450)
 
       const palette = await ES<Record<string, unknown>>(`(() => {

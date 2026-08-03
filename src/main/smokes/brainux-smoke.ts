@@ -8,6 +8,7 @@ import { serializeMemory } from '@backend/features/brain'
 import type { Telemetry } from '@contracts'
 import { handleBrainRebuild, handleBrainStatus } from '../brain'
 import { AA_PROBE_JS, probeContrastAcrossThemes } from './aa-probe'
+import { MOD_KEY_FIELD } from './kit'
 
 // Env-gated Brain-VIEW smoke (MOGGING_BRAINUX, ADR 0018/10). Fixture repo
 // indexed, REAL window:
@@ -176,7 +177,10 @@ export function runBrainUxSmoke(win: BrowserWindow): void {
       if (!built.ok) throw new Error('fixture rebuild refused: ' + JSON.stringify(built))
 
       // ── (g)+(a) the palette door, no focus steal, Esc back, the shortcut ───
-      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))`)
+      // Both doors press the PLATFORM's modifier (⌘ on macOS, Ctrl elsewhere): the palette
+      // and the Brain both gate on isModKey, which core/commands/chords.ts made the platform's
+      // own and never both, because `ctrlKey || metaKey` made the WINDOWS key a modifier.
+      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ${MOD_KEY_FIELD}: true, bubbles: true }))`)
       await waitTrue(`document.querySelector('.palette-overlay') && !document.querySelector('.palette-overlay').hidden`)
       await ES(`(() => { const i = document.querySelector('.palette-input'); i.value = 'brain'; i.dispatchEvent(new Event('input')) })()`)
       await sleep(250)
@@ -194,7 +198,7 @@ export function runBrainUxSmoke(win: BrowserWindow): void {
 
       await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
       const escBack = await waitTrue(`!document.querySelector('#content.view-brain')`)
-      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'M', code: 'KeyM', ctrlKey: true, shiftKey: true, bubbles: true }))`)
+      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'M', code: 'KeyM', ${MOD_KEY_FIELD}: true, shiftKey: true, bubbles: true }))`)
       const openedByShortcut = await waitTrue(`!!document.querySelector('#content.view-brain')`)
       const doorsOk = paletteRow && openedByPalette && escBack && openedByShortcut
 

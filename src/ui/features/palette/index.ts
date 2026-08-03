@@ -2,6 +2,7 @@ import type { UiFeature } from '../../core/registry/feature-registry'
 import { clear, el, icon, type IconName } from '../../components'
 import { activeView } from '../../core/shell/view-port'
 import { allCommands, availability, onCommandsChange, type Command } from '../../core/commands/command-port'
+import { isModKey } from '../../core/commands/shortcuts'
 import { trapOverlay, type OverlayTrap } from '../../core/a11y/overlay-trap'
 import { getTelemetry } from '../../core/telemetry'
 
@@ -212,8 +213,11 @@ export const paletteFeature: UiFeature = {
     window.addEventListener(
       'keydown',
       (e) => {
-        const mod = e.ctrlKey || e.metaKey
-        if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+        // Ctrl+K, ⌘+K on macOS — the platform's own modifier and never both. This
+        // listener is where the defect was loudest: `ctrlKey || metaKey` made Win+K
+        // open the palette, and Win+K is OS-reserved (Cast), so one press produced our
+        // palette *and* Windows' panel.
+        if (isModKey(e) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
           e.preventDefault()
           e.stopPropagation()
           toggle(!openState)

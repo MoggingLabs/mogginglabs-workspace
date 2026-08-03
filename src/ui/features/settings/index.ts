@@ -10,7 +10,7 @@ import { getTelemetry } from '../../core/telemetry'
 import { activeView, goBack, onViewChange, setActiveView } from '../../core/shell/view-port'
 import { registerSettingsTabNav, takeRequestedSettingsTab } from '../../core/shell/settings-tab-port'
 import { requestIntegrationsFocus, type IntegrationsFocus } from '../../core/shell/integrations-focus-port'
-import { renderShortcutList } from '../../core/commands/shortcuts'
+import { isModKey, renderShortcutList } from '../../core/commands/shortcuts'
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
 import { calmMotion, setCalmMotion } from '../../core/a11y/motion-port'
 import { TEMPLATE_COUNTS } from '../layout'
@@ -1043,21 +1043,24 @@ export const settingsFeature: UiFeature = {
       e.preventDefault()
       goBack()
     })
-    // S5: Ctrl/Cmd+F inside Settings focuses the search — the browser find has no
-    // meaning on a page whose content is mostly hidden tabs.
+    // S5: Ctrl+F (⌘+F on macOS) inside Settings focuses the search — the browser find
+    // has no meaning on a page whose content is mostly hidden tabs. isModKey is the one
+    // place the modifier is decided; it is the platform's own, never both.
     window.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === 'f' && activeView() === 'settings') {
+      if (isModKey(e) && !e.altKey && !e.shiftKey && e.key === 'f' && activeView() === 'settings') {
         e.preventDefault()
         searchInput.focus()
         searchInput.select()
       }
     })
-    // NAV-01: Ctrl/Cmd+, opens Settings from anywhere (the platform convention),
-    // toggling back out if it's already up — matching the gear button.
+    // NAV-01: Ctrl+, (⌘+, on macOS) opens Settings from anywhere (the platform
+    // convention), toggling back out if it's already up — matching the gear button.
+    // The convention is the platform's OWN modifier: Win+, is Windows' peek-desktop,
+    // and `ctrlKey || metaKey` fired both from a single press.
     window.addEventListener(
       'keydown',
       (e) => {
-        if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === ',') {
+        if (isModKey(e) && !e.altKey && !e.shiftKey && e.key === ',') {
           e.preventDefault()
           e.stopPropagation()
           if (activeView() === 'settings') goBack()

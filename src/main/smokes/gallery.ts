@@ -16,6 +16,7 @@ import { clearTrail, flushTrailForSmoke, recordTrail } from '../trail'
 import { setAgentConsent, setDrivingForSmoke } from '../browser-dock'
 import { approvalListed, sendApprovalFromPane } from './reviewer-smoke-helper'
 import { capturePaneTokenForSmoke } from './smoke-shell'
+import { MOD_KEY_FIELD } from './kit'
 
 // MOGGING_SHOT=all (Phase-5/01): the GALLERY — drive the app through every surface
 // and write numbered PNGs to out/gallery/, in BOTH themes. The audit + before/after
@@ -160,6 +161,11 @@ export function runGallery(win: BrowserWindow): void {
 
   const key = (opts: string): Promise<unknown> =>
     ES(`window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, ${opts} }))`)
+  /** This platform's modifier, as a KeyboardEvent init fragment. The app's chords take the
+   *  platform's OWN modifier and never both (core/commands/chords.ts) — a hardcoded Ctrl on a
+   *  Mac opens nothing, and the gallery would shoot the wrong screen for every chord-opened
+   *  surface (Board, Brain, palette). */
+  const MOD = `${MOD_KEY_FIELD}: true`
   const escape = (): Promise<unknown> => key(`key: 'Escape'`)
   const click = (sel: string): Promise<unknown> =>
     ES(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (e) e.click(); return !!e })()`)
@@ -450,10 +456,10 @@ export function runGallery(win: BrowserWindow): void {
           await sleep(300)
         })
         await part(`${tag}-board-empty`, async () => {
-          await key(`ctrlKey: true, shiftKey: true, code: 'KeyG'`)
+          await key(`${MOD}, shiftKey: true, code: 'KeyG'`)
           await sleep(500)
           await snap(`${tag}-board-empty`)
-          await key(`ctrlKey: true, shiftKey: true, code: 'KeyG'`)
+          await key(`${MOD}, shiftKey: true, code: 'KeyG'`)
           await sleep(300)
         })
         await part(`${tag}-wizard`, async () => {
@@ -751,7 +757,7 @@ export function runGallery(win: BrowserWindow): void {
           // (properties panel + wikilinks + the drafts section + usage counters).
           await ES(`window.__mogging.workspace.switchByIndex(0)`) // Alpha: the staged brain project
           await sleep(600)
-          await key(`key: 'M', code: 'KeyM', ctrlKey: true, shiftKey: true`)
+          await key(`key: 'M', code: 'KeyM', ${MOD}, shiftKey: true`)
           await sleep(1400) // the view opens; status + overview land
           await snap(`${tag}-brain-status`)
           await ES(`window.__mogging.brain.search('galleryHub')`)
@@ -926,7 +932,7 @@ export function runGallery(win: BrowserWindow): void {
         })
 
         await part(`${tag}-palette`, async () => {
-          await key(`ctrlKey: true, key: 'k'`)
+          await key(`${MOD}, key: 'k'`)
           await sleep(400)
           await snap(`${tag}-palette`)
           await escape()
@@ -944,10 +950,10 @@ export function runGallery(win: BrowserWindow): void {
         })
 
         await part(`${tag}-board-cards`, async () => {
-          await key(`ctrlKey: true, shiftKey: true, code: 'KeyG'`)
+          await key(`${MOD}, shiftKey: true, code: 'KeyG'`)
           await sleep(500)
           await snap(`${tag}-board-cards`)
-          await key(`ctrlKey: true, shiftKey: true, code: 'KeyG'`)
+          await key(`${MOD}, shiftKey: true, code: 'KeyG'`)
           await sleep(300)
         })
 

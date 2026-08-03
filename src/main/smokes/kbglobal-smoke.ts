@@ -1,6 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { MOD_KEY_CDP_BIT } from './kit'
 
 // Env-gated GLOBAL-SHORTCUT smoke (MOGGING_KBGLOBAL).
 //
@@ -43,15 +44,31 @@ import { join } from 'node:path'
 // CDP modifier bitmask: Alt=1 Ctrl=2 Meta=4 Shift=8. The workspace handler switches on
 // e.key.toLowerCase(); Board and Browser switch on e.code — so every chord carries both, exactly as
 // a real keypress does.
+//
+// MOD is the PLATFORM's modifier bit, not a hardcoded Ctrl. core/commands/chords.ts made the app's
+// modifier the platform's own and never both (⌘ on macOS, Ctrl elsewhere), because `ctrlKey ||
+// metaKey` made the WINDOWS key a modifier — Win+K fired our palette *and* Windows' Cast panel from
+// one press. Pressing Ctrl on a Mac now correctly reaches NOTHING, so a gate that hardcodes Ctrl
+// stops testing the shortcut layer at all and just re-asserts the removed defect. Every chord's
+// name below still reads "Ctrl+…" because that is the Windows/Linux spelling the shortcut sheet
+// prints; on macOS the same row means ⌘.
+//
+// The NEGATIVE section (8) presses these same chords and demands nothing happens. That stays honest
+// under this change — indeed it gets stricter: it now presses the modifier that genuinely WOULD
+// fire the verb (section 1 proves that exact dispatch splits a pane), so a pass there can no longer
+// be a chord the platform was going to ignore anyway.
+const MOD = MOD_KEY_CDP_BIT // Meta(4) on macOS, Ctrl(2) on Windows/Linux — kit.ts owns the choice
+const SHIFT = 8
+const ALT = 1
 const CHORDS = {
-  'Ctrl+Shift+D': { modifiers: 10, key: 'D', code: 'KeyD', vk: 68 },
-  'Ctrl+Shift+Enter': { modifiers: 10, key: 'Enter', code: 'Enter', vk: 13 },
-  'Ctrl+Alt+Right': { modifiers: 3, key: 'ArrowRight', code: 'ArrowRight', vk: 39 },
-  'Ctrl+Shift+G': { modifiers: 10, key: 'G', code: 'KeyG', vk: 71 },
-  'Ctrl+Shift+U': { modifiers: 10, key: 'U', code: 'KeyU', vk: 85 },
-  'Ctrl+T': { modifiers: 2, key: 't', code: 'KeyT', vk: 84 },
-  'Ctrl+1': { modifiers: 2, key: '1', code: 'Digit1', vk: 49 },
-  'Ctrl+2': { modifiers: 2, key: '2', code: 'Digit2', vk: 50 },
+  'Ctrl+Shift+D': { modifiers: MOD | SHIFT, key: 'D', code: 'KeyD', vk: 68 },
+  'Ctrl+Shift+Enter': { modifiers: MOD | SHIFT, key: 'Enter', code: 'Enter', vk: 13 },
+  'Ctrl+Alt+Right': { modifiers: MOD | ALT, key: 'ArrowRight', code: 'ArrowRight', vk: 39 },
+  'Ctrl+Shift+G': { modifiers: MOD | SHIFT, key: 'G', code: 'KeyG', vk: 71 },
+  'Ctrl+Shift+U': { modifiers: MOD | SHIFT, key: 'U', code: 'KeyU', vk: 85 },
+  'Ctrl+T': { modifiers: MOD, key: 't', code: 'KeyT', vk: 84 },
+  'Ctrl+1': { modifiers: MOD, key: '1', code: 'Digit1', vk: 49 },
+  'Ctrl+2': { modifiers: MOD, key: '2', code: 'Digit2', vk: 50 },
   F2: { modifiers: 0, key: 'F2', code: 'F2', vk: 113 },
   Escape: { modifiers: 0, key: 'Escape', code: 'Escape', vk: 27 }
 } as const

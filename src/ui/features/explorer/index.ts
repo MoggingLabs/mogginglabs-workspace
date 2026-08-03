@@ -42,6 +42,7 @@ import { explorerOpen, explorerReveal, setActionRoot } from './explorer.client'
 import { getWorkspaces, onWorkspacesChange, type WorkspaceInfo } from '../../core/workspace/workspace-info-port'
 import { getFocusedPane, onFocusedPane } from '../../core/layout/focus'
 import { setCommands } from '../../core/commands/command-port'
+import { isModKey } from '../../core/commands/shortcuts'
 import { getTelemetry } from '../../core/telemetry'
 import {
   explorerInit,
@@ -266,10 +267,12 @@ export const explorerFeature: UiFeature = {
       e.stopPropagation()
       void setLens(false)
     })
-    // Ctrl/Cmd+C copies the selected path. The tree's own handler ignores chords (its
-    // type-ahead is printable-only), so this rides alongside it rather than fighting it.
+    // Ctrl+C (⌘+C on macOS) copies the selected path. The tree's own handler ignores
+    // chords (its type-ahead is printable-only), so this rides alongside it rather than
+    // fighting it. isModKey, not `ctrlKey || metaKey`: copy is the platform's own
+    // modifier and nothing else — Win+C is Windows' own (Copilot), not ours.
     dock.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'c') return
+      if (!isModKey(e) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'c') return
       if (!selection) return
       e.preventDefault()
       actions.push({ verb: 'copy', path: selection })
@@ -851,12 +854,14 @@ export const explorerFeature: UiFeature = {
       getTelemetry().captureEvent({ name: 'explorer.dock', props: { open } }) // boolean only — never a path (ADR 0005)
     }
 
-    // Ctrl/Cmd+Shift+E. Capture, like the rail's Ctrl+Shift+B: a pane's terminal would
-    // otherwise swallow it. Shift is required — plain Ctrl+E is a real readline keystroke.
+    // Ctrl+Shift+E (⌘+Shift+E on macOS). Capture, like the rail's Ctrl+Shift+B: a pane's
+    // terminal would otherwise swallow it. Shift is required — plain Ctrl+E is a real
+    // readline keystroke. isModKey decides the modifier: Win+Shift+E opened this dock
+    // *and* Windows' own Win+E, from one press.
     window.addEventListener(
       'keydown',
       (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'e') {
+        if (isModKey(e) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'e') {
           e.preventDefault()
           e.stopPropagation()
           toggle(!open)

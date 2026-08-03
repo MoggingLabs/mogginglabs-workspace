@@ -25,6 +25,7 @@ import { IconButton, clear, confirmDialog, el, icon, openContextMenu, showToast 
 import { assignmentForPane, getWorkspaces, onWorkspacesChange } from '../../core/workspace/workspace-info-port'
 import { setCommands } from '../../core/commands/command-port'
 import { isModKey } from '../../core/commands/shortcuts'
+import { currentChordPlatform, hasModKey } from '../../core/commands/chords'
 import { createAsyncGuard } from '../../core/async/async-state'
 import { shortcutsBlocked } from '../../core/commands/context'
 import { getTelemetry } from '../../core/telemetry'
@@ -899,7 +900,10 @@ export const browserFeature: UiFeature = {
       const synthetic = { key: c.key, code: c.code, ctrlKey: c.ctrl, metaKey: c.meta, shiftKey: c.shift, altKey: c.alt }
       // The dock's own shortcuts first (find/zoom/address); then the global toggle.
       if (handleDockShortcut(synthetic)) return
-      if ((c.ctrl || c.meta) && c.shift && c.code === 'KeyU') toggle(!open)
+      // The relay carries the guest's REAL modifier state, so it is asked the same
+      // question the in-app listener above asks: the platform's own modifier, never
+      // both. Accepting either meant Win+Shift+U toggled the dock from a guest page.
+      if (hasModKey(synthetic, currentChordPlatform()) && c.shift && c.code === 'KeyU') toggle(!open)
       // Rail (Ctrl+Shift+B) / explorer (Ctrl+Shift+E) / palette (Ctrl+K) live in other
       // features; re-dispatch a trusted-shaped event so their document listeners run.
       else document.dispatchEvent(new KeyboardEvent('keydown', synthetic))
@@ -1097,7 +1101,11 @@ export const browserFeature: UiFeature = {
     // in-page-focus case is relayed from main — see the guest-chord handler). Ctrl+F,
     // Ctrl+= / Ctrl+- / Ctrl+0. Ctrl+L focuses the address bar (F13 / U-item).
     function handleDockShortcut(e: { key: string; code: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean; preventDefault?: () => void }): boolean {
-      const mod = e.ctrlKey || e.metaKey
+      // hasModKey, not `ctrlKey || metaKey`: this runs for BOTH a real keydown in the
+      // dock chrome and the relayed guest chord, so it must give the same answer as
+      // every other listener — the platform's own modifier (Ctrl here, ⌘ on macOS).
+      // It takes a plain object, hence hasModKey rather than the KeyboardEvent wrapper.
+      const mod = hasModKey(e, currentChordPlatform())
       if (!mod || e.altKey || !open) return false
       if (e.code === 'KeyF' && !e.shiftKey) { openFind(); return true }
       if (e.code === 'KeyL' && !e.shiftKey) { urlInput.focus(); return true }
