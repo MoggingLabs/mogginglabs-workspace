@@ -3,12 +3,13 @@ import type { AgentState, CreateWorktreeResult, PaneId, RemoveWorktreeResult } f
 import { getBridge } from '../../core/ipc/bridge'
 import { GridLayout, parseTree, leafIds, specForCount, TEMPLATES, type GridSpecModel, type LayoutTreeNode } from '../layout'
 import { confirmDialog, icon, showToast, TOAST_DEFAULT_MS } from '../../components'
-import { batchSlots } from '../../core/layout/slots'
+import { batchSlots, clearSlots, publishSlots } from '../../core/layout/slots'
 import { openMovePaneModal, type MoveTarget } from './move-pane-modal'
 import { openReorganizeModal } from './reorganize-modal'
+import { openNewTerminalModal, type NewTerminalEntry } from './new-terminal-modal'
 import { setFocusedPane } from '../../core/layout/focus'
 import { setPaneCwd, getPaneCwd, getPaneCwdProjection } from '../../core/layout/pane-cwd'
-import { setPaneRole, setPaneRemote, clearPaneRemote, setPaneLabel, getPaneRemote } from '../../core/layout/pane-meta'
+import { setPaneRole, setPaneRemote, clearPaneRemote, setPaneLabel, setPaneUserTitle, getPaneRemote } from '../../core/layout/pane-meta'
 import { paneState, paneFinished, acknowledgeFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { announce } from '../../core/a11y/live-region'
 import { clearPaneLaunch } from '../../core/agents/toolplan-panes'
@@ -180,6 +181,27 @@ export class WorkspaceController {
   // their panes stay ALIVE for a 5-second undo grace, disposed only when it
   // lapses. Key -> the dispose timer + the order index to restore to.
   private readonly pendingClose = new Map<string, { timer: ReturnType<typeof setTimeout>; index: number }>()
+  // Panes mid-close — the pane-level twin of pendingClose. A closed pane is DETACHED
+  // from its grid but parked under its own slots-port source, so its id never leaves
+  // the aggregate slot set and the terminal feature keeps the pane (and its PTY)
+  // alive until the toast's undo grace lapses. Key: the pane id.
+  private readonly pendingPaneClose = new Map<
+    number,
+    {
+      timer: ReturnType<typeof setTimeout>
+      wsId: string
+      /** The local slot it sat in — where readoptPane and the manifest row put it back. */
+      slot: number
+      /** The arrangement BEFORE the detach — what an exact undo restores. */
+      tree: LayoutTreeNode
+      /** The serialized layout right AFTER the detach. Undo restores `tree` wholesale only
+       *  while this still matches — restoring the snapshot over a layout the user reshaped
+       *  meanwhile would tear down panes the snapshot has never heard of. */
+      after: string
+      manifest: PaneManifest
+      el: HTMLElement
+    }
+  >()
   private lastAttnTotal = 0 // for the A11Y-01 "needs your input" announcement
 
   // ── The three pulse/alert lifetimes. Red and green are deliberately NOT symmetric. ──
@@ -838,7 +860,11 @@ export class WorkspaceController {
         : 'This pane is still running.'
       const ok = await confirmDialog({
         title: `Close pane ${paneId}?`,
-        message: `${what} Closing it stops that work and cannot be undone.`,
+        // The worktree path is the one close with no undo: the directory the pane runs in
+        // is about to be deleted, so there is nothing to restore the pane into.
+        message: opts.replacementCwd
+          ? `${what} Closing it stops that work and cannot be undone.`
+          : `${what} Closing it stops that work. You’ll have a few seconds to undo.`,
         confirmLabel: 'Close pane',
         danger: true
       })
@@ -848,8 +874,142 @@ export class WorkspaceController {
       this.splitPane(wsId, paneId, 'h', opts.replacementCwd)
       if (view.layout.paneCount <= 1) return false
     }
-    this.closePane(wsId, paneId)
+    // "Remove worktree" closes hard — its caller deletes the pane's directory next, and
+    // a pane kept alive in a directory being unlinked would hold the removal open past
+    // its bounded retries. Every other close gets the same undo grace a workspace does.
+    if (opts.replacementCwd) this.closePane(wsId, paneId)
+    else this.softClosePane(wsId, paneId)
     return true
+  }
+
+  /** Detach a pane from its grid but keep it ALIVE — parked under its own slots-port
+   *  source — and offer an Undo for exactly as long as the toast is up: the pane-level
+   *  twin of softClose. Disposed for real only when the grace lapses. */
+  private softClosePane(wsId: string, paneId: number): void {
+    const view = this.views.get(wsId)
+    if (!view) return
+    if (view.layout.paneCount <= 1) {
+      // Its LAST pane: the workspace leaves with it, through the workspace's own grace.
+      this.softClose(wsId)
+      return
+    }
+    const slot = view.layout.slotOf(paneId)
+    if (slot == null) return
+    const tree = view.layout.snapshotTree()
+    const manifest = this.takeManifestSlot(view.meta, slot)
+    // Registered BEFORE the detach: detachPane's onLayoutChange runs refreshAttention,
+    // whose prune must already count this pane as pending — its pulse memory survives
+    // the grace, exactly as a mid-close workspace's panes' does.
+    const entry = {
+      timer: undefined as unknown as ReturnType<typeof setTimeout>,
+      wsId,
+      slot,
+      tree,
+      after: '',
+      manifest,
+      el: undefined as unknown as HTMLElement
+    }
+    this.pendingPaneClose.set(paneId, entry)
+    const el = batchSlots(() => {
+      const detached = view.layout.detachPane(paneId)
+      // Parked under its own source, INSIDE the batch: the id never leaves the aggregate
+      // slot set, so the terminal feature never reads the pane as gone.
+      if (detached) publishSlots(`pane-close:${paneId}`, [{ id: paneId as PaneId, el: detached }])
+      return detached
+    })
+    if (!el) {
+      this.pendingPaneClose.delete(paneId)
+      this.putManifestSlot(view.meta, slot, manifest)
+      return
+    }
+    entry.el = el
+    entry.after = view.layout.serialize()
+    // Off the screen but still parented (and streaming). If it held the focus ring,
+    // pass it on — the same first-slot fallback rebuild() applies after a real close.
+    const wasFocused = el.classList.contains('focused')
+    el.classList.remove('focused')
+    el.classList.add('soft-closed')
+    if (wasFocused) {
+      const next = view.layout.paneIds()[0]
+      if (next != null) view.layout.focusPane(next)
+    }
+    entry.timer = setTimeout(() => {
+      this.pendingPaneClose.delete(paneId)
+      this.disposePendingPane(paneId, entry)
+    }, TOAST_DEFAULT_MS)
+    showToast({
+      title: `Closed pane ${paneId}`,
+      body: 'Undo to keep it — it never stopped running.',
+      // The toast IS the undo window (same contract as the move-pane toast): the dispose
+      // grace above runs on the same clock, so the button cannot outlive its promise.
+      timeout: TOAST_DEFAULT_MS,
+      action: { label: 'Undo', onClick: () => this.undoClosePane(paneId) }
+    })
+  }
+
+  /** The toast's Undo: put the parked pane back — same terminal, same process, same agent. */
+  private undoClosePane(paneId: number): void {
+    const p = this.pendingPaneClose.get(paneId)
+    if (!p) return
+    clearTimeout(p.timer)
+    this.pendingPaneClose.delete(paneId)
+    const view = this.views.get(p.wsId)
+    if (!view) {
+      // Its workspace closed for good during the grace. There is nothing to restore
+      // into — say so (never half-undo), and stop keeping the pane alive.
+      this.disposePendingPane(paneId, p)
+      showToast({
+        tone: 'attention',
+        title: 'Too late to undo',
+        body: 'That pane’s workspace has already closed.'
+      })
+      return
+    }
+    this.revivePending(p.wsId) // a workspace mid-close comes back with its pane
+    p.el.classList.remove('soft-closed')
+    let slot: number | null = null
+    batchSlots(() => {
+      clearSlots(`pane-close:${paneId}`) // the grid re-publishes it before the batch lifts
+      if (view.layout.serialize() === p.after) {
+        // Nothing else touched the layout: the exact arrangement (seams included) returns.
+        view.layout.readoptPane(p.el, paneId, p.slot, p.tree)
+        slot = p.slot
+      } else {
+        // The user reshaped the workspace meanwhile — restoring the snapshot would tear
+        // down panes it has never heard of. The pane re-enters beside the focused one.
+        slot = view.layout.adoptPane(p.el, paneId, {})
+      }
+    })
+    if (slot == null) {
+      // The workspace filled to its cap during the grace; the pane has nowhere to land,
+      // and its id just left the aggregate — the terminal feature has disposed it.
+      p.el.remove()
+      clearPaneLaunch(paneId)
+      showToast({
+        tone: 'attention',
+        title: 'Too late to undo',
+        body: 'The workspace filled up — the pane could not be put back.'
+      })
+      return
+    }
+    this.putManifestSlot(view.meta, slot, p.manifest)
+    this.switch(p.wsId)
+    view.layout.focusPane(paneId)
+    this.refreshAttention()
+    this.onChange()
+  }
+
+  /** The grace lapsed (or the undo arrived too late to matter): dispose the parked pane
+   *  for real — clearing its source is what tells the terminal feature to kill the PTY. */
+  private disposePendingPane(paneId: number, p: { wsId: string; el: HTMLElement }): void {
+    clearPaneLaunch(paneId) // drop its tool-plan signature (8/09)
+    clearSlots(`pane-close:${paneId}`)
+    p.el.remove()
+    getTelemetry().captureEvent({
+      name: 'pane.closed',
+      props: { remaining: this.views.get(p.wsId)?.meta.paneCount ?? 0 }
+    })
+    this.refreshAttention() // no longer pending: the prune may forget its pulse memory
   }
 
   /**
@@ -988,6 +1148,9 @@ export class WorkspaceController {
       const pending = this.views.get(id)
       if (pending) for (const paneId of pending.layout.paneIds()) scanned.add(paneId)
     }
+    // Panes mid-close (the pane-level undo grace) are pending for the same reason and
+    // get the same protection: an undone close must not replay a spent green swell.
+    for (const paneId of this.pendingPaneClose.keys()) scanned.add(paneId as PaneId)
     // Prune every lifetime set to the panes that still exist. Pane ids are ordinal-derived and
     // REUSED after a workspace closes: a pane disposed mid-alert would otherwise leave its
     // entry behind, and the successor holding that id would read "already pulsed" — its first
@@ -1162,6 +1325,7 @@ export class WorkspaceController {
       clearPaneRemote(paneId)
       setPaneRole(paneId, '')
       setPaneLabel(paneId, '')
+      setPaneUserTitle(paneId, '')
       this.scrubManifestSlot(a.meta, local - 1, '')
     }
     // The layout FIRST, and only then the manifest. applyRegions returns false without
@@ -1329,6 +1493,7 @@ export class WorkspaceController {
     clearPaneRemote(newId)
     setPaneRole(newId, '')
     setPaneLabel(newId, '') // nor the closed slot's agent label ("Claude Code" on a fresh shell)
+    setPaneUserTitle(newId, '') // nor a name the user typed for the pane that used to live here
     // A split always creates a LOCAL terminal. A remote path belongs to the far side and
     // must never be passed to the local spawn; fall back to the workspace root instead.
     // An explicit caller-supplied cwd (already a local path) still wins.
@@ -1454,6 +1619,129 @@ export class WorkspaceController {
         tone: 'attention',
         title: 'Could not create a worktree',
         body: `${added > 0 ? `Opened ${added} of ${goal} isolated terminals — then ` : ''}${error instanceof Error ? error.message : String(error)}`
+      })
+      return false
+    }
+  }
+
+  /** "New terminal…" (titlebar layout popover): the wizard's placement palette over
+   *  the panes being ADDED to this workspace. The modal collects the lineup; the
+   *  split + launch below is splitActiveLineup's. */
+  openNewTerminals(): void {
+    const view = this.active()
+    if (!view) return
+    const cap = this.effectiveMaxPanes(view)
+    const headroom = cap - view.layout.paneCount
+    if (headroom <= 0) {
+      this.refusePaneCap(view, cap)
+      return
+    }
+    openNewTerminalModal({
+      headroom,
+      cwd: view.meta.cwd,
+      onCreate: (entries, isolate) => void this.splitActiveLineup(entries, isolate)
+    })
+  }
+
+  /** Split the ACTIVE workspace's focused pane into one terminal per entry and launch
+   *  each non-shell provider into its pane THROUGH THE LAUNCH PORT — the workspace's
+   *  own subscription records every request as that slot's manifest assignment (+
+   *  profile + launch cwd), so a modal lineup survives restore exactly like a
+   *  wizard one. `isolate` gives EVERY created terminal its own worktree, agents and
+   *  shells alike: this path replaced both popover rows, and "New isolated terminal"
+   *  always isolated plain shells too (the wizard's checkbox scopes to agents only
+   *  because there the shells are just the rest of the grid). Same 3/03 contract as
+   *  splitActiveIsolated: each worktree is created FIRST, a refused split takes its
+   *  pane-less worktree back out, and a mid-batch failure stops with an honest toast.
+   *  Returns true only when every requested terminal opened. */
+  async splitActiveLineup(entries: readonly NewTerminalEntry[], isolate: boolean): Promise<boolean> {
+    const a = this.active()
+    if (!a || entries.length === 0) return false
+    const want = entries.length
+    const cap = this.effectiveMaxPanes(a)
+    const headroom = cap - a.layout.paneCount
+    if (headroom <= 0) {
+      this.refusePaneCap(a, cap)
+      return false
+    }
+    const goal = Math.min(want, headroom)
+    const repo = a.meta.cwd
+    let added = 0
+    try {
+      if (isolate) {
+        // Same honesty as the wizard's checkbox: refuse a non-repo BEFORE touching
+        // the filesystem — the modal's preflight said yes, but folders change.
+        if (!repo || (await getBridge().invoke(GitChannels.query, repo)) == null) {
+          showToast({
+            tone: 'attention',
+            title: 'Not a git repository',
+            body: 'Run `git init` in the workspace folder (or open a repo) to isolate terminals in worktrees.'
+          })
+          return false
+        }
+      }
+      for (; added < goal; added++) {
+        const entry = entries[added]
+        let worktree: string | undefined
+        if (isolate) {
+          const wt = (await getBridge().invoke(WorktreeChannels.create, { repo })) as CreateWorktreeResult
+          if (!wt.ok || !wt.path) {
+            showToast({
+              tone: 'attention',
+              title: 'Could not create a worktree',
+              body: `${added > 0 ? `Opened ${added} of ${goal} terminals — then ` : ''}${wt.error || 'git refused.'}`
+            })
+            return false
+          }
+          worktree = wt.path
+        }
+        // The id the split WILL use — peeked the same way splitPane itself does, so
+        // the launch request below names the pane the split just built.
+        const newId = a.layout.peekNextPaneId()
+        const before = a.layout.paneCount
+        this.splitPane(a.meta.id, a.layout.focusedPaneId(), undefined, worktree)
+        if (a.layout.paneCount === before) {
+          // Refused after all (the live limit can shift mid-batch — splitPane already
+          // toasted why). A worktree with no pane to serve is litter: take it back out.
+          if (worktree) void getBridge().invoke(WorktreeChannels.remove, { repo, path: worktree, force: false })
+          return false
+        }
+        if (entry.provider && entry.provider !== 'shell') {
+          // Typed delivery into the live pane (whenPaneLive holds the command until
+          // first output) — the palette's own path, so no spawn-run arming needed.
+          const cwd = worktree ?? getPaneCwdProjection(newId as PaneId)?.cwd ?? a.meta.cwd
+          requestAgentLaunch({
+            paneId: newId as PaneId,
+            provider: entry.provider,
+            cwd,
+            resume: false,
+            profileId: entry.profileId
+          })
+        }
+      }
+      getTelemetry().captureEvent({
+        name: 'workspace.split_lineup',
+        props: {
+          panes: goal,
+          agents: entries.slice(0, goal).filter((e) => e.provider && e.provider !== 'shell').length,
+          isolated: isolate // a boolean — never the paths (ADR 0005)
+        }
+      })
+      if (goal < want) {
+        showToast({
+          title: `Opened ${goal} of ${want} terminals`,
+          body:
+            cap < a.layout.limit()
+              ? `Your ${entitlementPlan()} plan runs up to ${cap} terminals per workspace.`
+              : `A workspace holds at most ${cap} terminals on this screen.`
+        })
+      }
+      return goal === want
+    } catch (error) {
+      showToast({
+        tone: 'attention',
+        title: 'Could not open the terminals',
+        body: `${added > 0 ? `Opened ${added} of ${goal} terminals — then ` : ''}${error instanceof Error ? error.message : String(error)}`
       })
       return false
     }

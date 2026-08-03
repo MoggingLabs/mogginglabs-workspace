@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { app, ipcMain, shell, type BrowserWindow } from 'electron'
 import { createExplorerWatcher, listExplorer, type ExplorerWatcher } from '@backend/features/explorer'
+import { findRepoRoot } from '@backend/features/git'
 import { canonical, isUnder } from '@backend/platform/fs-paths'
 import {
   EXPLORER_DOCK_WIDTH,
@@ -29,6 +30,7 @@ import { waitForExplorerRaceAudit } from './explorer-race-audit-faults'
 const KV_OPEN = 'explorer.open'
 const KV_WIDTH = 'explorer.width'
 const KV_HIDDEN = 'explorer.showHidden'
+const KV_FOLLOW_PIN = 'explorer.followPin'
 
 let watcher: ExplorerWatcher | null = null
 
@@ -134,7 +136,8 @@ export function registerExplorer(getWin: () => BrowserWindow | null): void {
     return {
       open: s?.getSetting(KV_OPEN) === '1',
       width: Number(s?.getSetting(KV_WIDTH)) || EXPLORER_DOCK_WIDTH,
-      showHidden: s?.getSetting(KV_HIDDEN) === '1'
+      showHidden: s?.getSetting(KV_HIDDEN) === '1',
+      followPinned: s?.getSetting(KV_FOLLOW_PIN) === '1'
     }
   })
 
@@ -149,6 +152,21 @@ export function registerExplorer(getWin: () => BrowserWindow | null): void {
 
   ipcMain.on(ExplorerChannels.setShowHidden, (_e, p: { showHidden?: unknown }) => {
     getSettingsStore()?.setSetting(KV_HIDDEN, p?.showHidden === true ? '1' : '')
+  })
+
+  ipcMain.on(ExplorerChannels.setFollowPin, (_e, p: { pinned?: unknown }) => {
+    getSettingsStore()?.setSetting(KV_FOLLOW_PIN, p?.pinned === true ? '1' : '')
+  })
+
+  // ── Follow-the-pane rooting (11/07) ───────────────────────────────────────
+  // A containment question, not an action: NOT guarded by actionRoot, because it is asked
+  // BEFORE rooting (it decides what the root becomes). Pure filesystem walk — findRepoRoot
+  // never spawns git, and a gone/non-repo path is an ordinary null, never a throw.
+  ipcMain.handle(ExplorerChannels.resolveRoot, (_e, p: unknown) => {
+    if (typeof p !== 'string' || !p) return { root: null }
+    const path = canonical(p)
+    if (!isAbsolute(path)) return { root: null }
+    return { root: findRepoRoot(path) }
   })
 
   // ── Delegation (11/06) ────────────────────────────────────────────────────
@@ -190,7 +208,9 @@ export function disposeExplorer(): void {
   ipcMain.removeHandler(ExplorerChannels.stats)
   ipcMain.removeHandler(ExplorerChannels.open)
   ipcMain.removeHandler(ExplorerChannels.reveal)
+  ipcMain.removeHandler(ExplorerChannels.resolveRoot)
   ipcMain.removeAllListeners(ExplorerChannels.root)
+  ipcMain.removeAllListeners(ExplorerChannels.setFollowPin)
   ipcMain.removeAllListeners(ExplorerChannels.watch)
   ipcMain.removeAllListeners(ExplorerChannels.unwatch)
   ipcMain.removeAllListeners(ExplorerChannels.setOpen)

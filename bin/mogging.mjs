@@ -13,8 +13,9 @@
 // nothing listens on TCP). Control verbs carry labels/names/bytes-to-type only; `capture`
 // output goes to YOUR stdout and nowhere else.
 import { execFileSync, spawn } from 'node:child_process'
-import { resolve } from 'node:path'
-import { closeSync, openSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { tmpdir, userInfo } from 'node:os'
 import net from 'node:net'
 import { runFile } from './lib/runtime-paths.mjs'
 import { parseInvocation, splitTrailingFlags, takeLeadingOption, usageStream } from './lib/cli-core.mjs'
@@ -1311,8 +1312,8 @@ function notifTypeToEvent(type) {
 }
 
 /** The hook payload rides stdin. Bounded: a TTY (a human running this by hand) or no payload
- *  within 400ms keeps the argv event; a hook must never hang the agent it's attached to. */
-function readStdinType() {
+ *  within 400ms resolves null; a hook must never hang the agent it's attached to. */
+function readStdinJson() {
   return new Promise((resolve) => {
     if (process.stdin.isTTY) return resolve(null)
     let buf = ''
@@ -1321,12 +1322,7 @@ function readStdinType() {
       if (settled) return
       settled = true
       try {
-        // 'notification_type' is the REAL discriminator -- verified against a live Claude Code
-        // turn (the docs call it 'type'; it is not). Reading 'type' yielded undefined, which fell
-        // through to the argv event 'needs-input', so every notification -- completions included
-        // -- still painted the pane red. 'type' stays only as a fallback for other dialects.
-        const p = JSON.parse(buf)
-        resolve(p.notification_type ?? p.type ?? null)
+        resolve(JSON.parse(buf))
       } catch {
         resolve(null)
       }
@@ -1346,6 +1342,15 @@ function readStdinType() {
       done()
     })
   })
+}
+
+/** 'notification_type' is the REAL discriminator -- verified against a live Claude Code
+ *  turn (the docs call it 'type'; it is not). Reading 'type' yielded undefined, which fell
+ *  through to the argv event 'needs-input', so every notification -- completions included
+ *  -- still painted the pane red. 'type' stays only as a fallback for other dialects. */
+async function readStdinType() {
+  const p = await readStdinJson()
+  return p ? (p.notification_type ?? p.type ?? null) : null
 }
 
 async function runNotify(args) {
@@ -1369,6 +1374,34 @@ async function runNotify(args) {
     }
   }
   if (!event) event = 'needs-input'
+
+  // Identity event (claude SessionStart: startup, --resume/--continue, /clear): write the
+  // pane's CONTEXT SINK and stop — never a daemon frame (notifyEventToState defaults
+  // unknown events to 'attention', so a session merely starting would ring the pane red)
+  // and never a byte on stdout (SessionStart hook stdout is added to the model's context).
+  // Same rendezvous as the statusline relay and the generated notify script: tmpdir +
+  // username + channel/protocol segment + pane id — RUN_SEGMENT is that segment. Needs no
+  // endpoint: identity is a file, not a wire. PARITY: twin of the session-start branch in
+  // backend/features/agents/notify-hook.ts — the NOTIFYPARITY gate runs both artifacts.
+  if (event === 'session-start') {
+    if (paneId && /^[\w.-]+$/.test(String(paneId))) {
+      const p = await readStdinJson()
+      const tp = p && typeof p.transcript_path === 'string' ? p.transcript_path : null
+      if (tp) {
+        try {
+          const dir = join(tmpdir(), 'mogging-ctx-' + userInfo().username + '-' + RUN_SEGMENT)
+          mkdirSync(dir, { recursive: true })
+          const file = join(dir, paneId + '.json')
+          const tmp = file + '.' + process.pid + '.tmp' // never the relay's own tmp name
+          writeFileSync(tmp, JSON.stringify({ at: Date.now(), usedPct: null, transcriptPath: tp }))
+          renameSync(tmp, file)
+        } catch {
+          /* identity is a nicety; never fail the hook over it */
+        }
+      }
+    }
+    process.exit(0)
+  }
 
   // BEFORE the stdin read, not after. This runs as an agent CLI's notification hook, and a
   // hook fires wherever the user runs that CLI — including outside any pane of ours, where

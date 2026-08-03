@@ -57,6 +57,7 @@ first-party layer for the CLIs that support hooks.
 | `turn-failed` | idle *(never red, never green)* | the turn **died** (an API error — Claude's `StopFailure`, OpenCode's `session.error`); without it the pane would wear busy forever |
 | `idle-prompt` | idle *(never red)* | "Claude is waiting for your input" — parked, not blocked |
 | `usage-limit` | attention *(+ failover offer)* | the agent hit a provider usage limit — the app offers a profile switch |
+| `session-start` | *(no pane state — identity only)* | Claude's `SessionStart` hook (startup / resume / `/clear`): writes the session's `transcript_path` to the pane's context sink so the header's context gauge tracks the **exact** session — never a daemon frame, never stdout (which would reach the model's context) |
 
 ### Not every `Notification` is a call for help
 

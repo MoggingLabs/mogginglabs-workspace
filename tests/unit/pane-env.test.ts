@@ -86,4 +86,39 @@ describe('paneProcessEnv', () => {
     expect(env.PATH).toBe('b')
     expect(env.Path).toBe('a')
   })
+
+  // Claude Code's session-NESTING markers must not survive into a pane. The app launched
+  // from a terminal inside a Claude Code session handed every pane
+  // CLAUDE_CODE_CHILD_SESSION — and a claude launched there believed itself nested and
+  // TURNED TRANSCRIPT SAVING OFF, silently breaking resume/pooling/failover continuity
+  // (found live 2026-08-02). A pane is a fresh terminal, not part of the launching session.
+  it('strips inherited claude nesting markers, any casing, but never user config', () => {
+    const env = composePaneEnv(true, {
+      CLAUDECODE: '1',
+      CLAUDE_CODE_CHILD_SESSION: 'true',
+      claude_code_session_id: 'abc',
+      CLAUDE_PID: '123',
+      CLAUDE_CODE_ENTRYPOINT: 'cli',
+      CLAUDE_CODE_EXECPATH: 'C:\\x',
+      CLAUDE_EFFORT: 'high',
+      CLAUDE_CODE_OAUTH_TOKEN: 'user-set-keep',
+      CLAUDE_CONFIG_DIR: 'C:\\keep',
+      KEEP: '1'
+    })
+    expect(env.CLAUDECODE).toBeUndefined()
+    expect(env.CLAUDE_CODE_CHILD_SESSION).toBeUndefined()
+    expect(env.claude_code_session_id).toBeUndefined()
+    expect(env.CLAUDE_PID).toBeUndefined()
+    expect(env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined()
+    expect(env.CLAUDE_CODE_EXECPATH).toBeUndefined()
+    expect(env.CLAUDE_EFFORT).toBeUndefined()
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('user-set-keep')
+    expect(env.CLAUDE_CONFIG_DIR).toBe('C:\\keep')
+    expect(env.KEEP).toBe('1')
+  })
+
+  it('an overlay cannot smuggle a nesting marker back in', () => {
+    const env = composePaneEnv(true, { KEEP: '1' }, { CLAUDE_CODE_CHILD_SESSION: 'true' })
+    expect(env.CLAUDE_CODE_CHILD_SESSION).toBeUndefined()
+  })
 })

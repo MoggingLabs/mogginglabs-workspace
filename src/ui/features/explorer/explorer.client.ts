@@ -3,6 +3,7 @@ import {
   type ExplorerActionResult,
   type ExplorerChangedEvent,
   type ExplorerDockInit,
+  type ExplorerResolveRootResult,
   type ExplorerResult,
   type ExplorerWatchStats
 } from '@contracts'
@@ -30,6 +31,17 @@ export function persistWidth(width: number): void {
 
 export function persistShowHidden(showHidden: boolean): void {
   getBridge().send(ExplorerChannels.setShowHidden, { showHidden })
+}
+
+export function persistFollowPin(pinned: boolean): void {
+  getBridge().send(ExplorerChannels.setFollowPin, { pinned })
+}
+
+/** The repo/worktree root containing `path`, or null when it is not inside a repo.
+ *  Pure filesystem walk main-side — never a git spawn (11/07). */
+export async function explorerResolveRoot(path: string): Promise<string | null> {
+  const r = (await getBridge().invoke(ExplorerChannels.resolveRoot, path)) as ExplorerResolveRootResult | null
+  return typeof r?.root === 'string' && r.root ? r.root : null
 }
 
 // ── The liveness law's renderer half (11/04) ────────────────────────────────

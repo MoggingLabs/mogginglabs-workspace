@@ -130,6 +130,20 @@ export interface ExplorerDockInit {
   open: boolean
   width: number
   showHidden: boolean
+  /** Follow-the-pane rooting is ON unless the user pinned the root (11/07). */
+  followPinned: boolean
+}
+
+// ── Follow-the-pane rooting (11/07) ─────────────────────────────────────────
+// The dock roots at the worktree the FOCUSED PANE is standing in, not blindly at the
+// workspace folder — a pane isolated into a worktree (3/03) gets its own checkout shown.
+// Main answers the containment question; the walk is pure filesystem (findRepoRoot),
+// so a non-repo path costs zero git spawns. Still not a write verb.
+
+/** `explorer:resolveRoot` — the repo/worktree root containing the given absolute path,
+ *  or null when the path is not inside a repo (or is invalid/gone). */
+export interface ExplorerResolveRootResult {
+  root: string | null
 }
 
 /** Default dock width, and the clamp the renderer enforces on every drag.

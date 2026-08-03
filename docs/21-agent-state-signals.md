@@ -150,7 +150,8 @@ Verified against `code.claude.com/docs/en/hooks`. Claude Code exposes ~30 events
 | `PostToolUse` | after a tool call succeeds | ◻ | rejected with PreToolUse — same fidelity as PostToolBatch at ~200× the fires |
 | `PostToolUseFailure` | after a tool call fails | ◻ | (still working) |
 | `PreCompact` / `PostCompact` | around context compaction | ◻ | (compaction ≈ still working) |
-| `SessionStart` / `SessionEnd` | session begins / terminates | ◻ | lifecycle |
+| `SessionStart` | session begins (startup / `--resume` / `/clear`) | ✅ | **no state at all** — the identity event: the script writes `transcript_path` into the pane's context sink (the gauge's exact-session pin, `context/monitor.ts`) and exits. Never a tracker frame (`notifyEventToState` defaults unknown events to `attention` — a session merely starting would ring red) and never a byte on stdout (SessionStart stdout reaches the model, §below). Riding the global wiring is what gives a HAND-TYPED claude — including a typed resume — exact gauge identity. |
+| `SessionEnd` | session terminates | ◻ | deliberately unwired: the app sweeps the sink on unwatch, and a late SessionEnd racing the next session's SessionStart could delete fresh identity |
 | `PermissionRequest` / `PermissionDenied` | permission dialog / auto-deny | ◻ | an explicit block channel (richer than Notification) |
 | `Elicitation` / `ElicitationResult` | MCP asks for input / answered | ◻ | an explicit block/clear channel |
 | `TeammateIdle` | agent-team teammate about to idle | ◻ | — |

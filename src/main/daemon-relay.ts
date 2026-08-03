@@ -15,6 +15,7 @@ import { DaemonMigrationDeferredError, migrateOlderDaemonSessions } from './daem
 import { sweepDeadRunDirs } from './daemon-sweep'
 import { getSettingsStore } from './app-settings'
 import { notePaneAgent, notePaneGone } from './agent-presence'
+import { forgetAssignedSession } from './assigned-sessions'
 import { resolveServiceKeyEnv } from './service-keys'
 import { onPaneGoneForBridge, onPaneStateForBridge } from './event-bridge'
 import { setDaemonHealth, setDaemonHealthRetry } from './runtime-health'
@@ -152,6 +153,12 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
         livePaneIds.delete(id)
         cwdRevisions.delete(id)
         notePaneGone(Number(id)) // no process, no agent — the needs-you gate must agree
+        // The SHELL is gone, so the pane is: release its assigned session id. (An agent
+        // exiting to its shell does NOT come through here, which is what keeps the
+        // failover's id alive across the interrupt that kills the capped CLI.) Releasing
+        // is what makes the uniqueness guard finite — otherwise a long-running app would
+        // accumulate ids for panes that no longer exist.
+        forgetAssignedSession(Number(id))
         onPaneGoneForBridge(Number(id)) // ...and the bridge forgets it, so a reused id has no history
         getWebContents()?.send(TerminalChannels.exit, { id: Number(id), exitCode })
       },

@@ -37,6 +37,7 @@ import {
 import { effectivePaneCapacity, type PaneCapacity } from './pane-capacity'
 import { treeForRegions, type GridSpecModel } from './grid-regions'
 import { machineSpec } from '../../core/system/machine-port'
+import { notifyPanesRevealed } from '../../core/layout/reveal-port'
 
 export { parseTree, leafIds, MIN_PANE_WIDTH_PX, minimumLayoutWidth } from './layout-tree'
 export type { LayoutTreeNode, SplitDir } from './layout-tree'
@@ -638,6 +639,7 @@ export class GridLayout {
     const viewportX = Math.min(Math.max(0, this.scrollHost.scrollLeft), Math.max(0, W - viewportWidth))
     const viewportHeight = Math.min(H, Math.max(MIN_PANE_HEIGHT_PX, this.scrollHost.clientHeight))
     const viewportY = Math.min(Math.max(0, this.scrollHost.scrollTop), Math.max(0, H - viewportHeight))
+    let revealed: number[] | null = null
     for (const [id, rect] of layout.leaves) {
       const el = this.slotEls.get(id)
       if (!el) continue
@@ -647,9 +649,16 @@ export class GridLayout {
         if (id === this.expandedId) r = this.expandedRect(target, viewportX, viewportWidth, viewportY, viewportHeight)
         else covered = this.coveredByExpand(target, rect)
       }
+      // A covered → visible flip is the ONE layout event with no box change behind it
+      // (visibility:hidden kept the box) — no observer will ever see it, so the panes
+      // are told outright (reveal-port; the grid-drift incident). clearExpand strips
+      // the class before most reveals and notifies for those itself; this catches the
+      // uncoverings that happen WITHIN an expanded state (a mode/viewport change).
+      if (!covered && el.classList.contains('covered')) (revealed ??= []).push(this.globalOf(id))
       el.classList.toggle('covered', covered)
       setRect(el, r)
     }
+    if (revealed) notifyPanesRevealed(revealed)
     for (const g of layout.gutters) {
       const el = this.gutterEls.get(`${g.path}:${g.index}`)
       if (!el) continue
@@ -681,9 +690,12 @@ export class GridLayout {
   /** Zoom/expand a pane — 'full' = the whole workspace, 'col' = full height (own
    *  width), 'row' = full width (own height). Covered siblings hide via `visibility:
    *  hidden` (global.css) and KEEP their WebGL contexts — their boxes never change, so
-   *  no IntersectionObserver fires, no refit runs, and restoring the grid is pure
-   *  paint. Only hidden WORKSPACES release contexts (the budget path). Toggling the
-   *  same mode restores the grid. */
+   *  no IntersectionObserver fires and restoring the grid is pure paint. Because no
+   *  observer fires, the RESTORE announces itself: clearExpand/reflow publish the
+   *  uncovered panes on the reveal port, and each answers with a deduped refit — a
+   *  grid that drifted while covered would otherwise stay wrong forever (the
+   *  grid-drift incident; GRIDHEAL's reveal phase). Only hidden WORKSPACES release
+   *  contexts (the budget path). Toggling the same mode restores the grid. */
   toggleExpand(paneId?: number, mode: ExpandMode = 'full'): void {
     const target = paneId ?? this.focusedPaneId() ?? undefined
     if (target == null) return
@@ -726,7 +738,19 @@ export class GridLayout {
     this.expandedId = null
     this.expandMode = null
     this.grid.classList.remove('has-expand')
-    for (const el of this.slotEls.values()) el.classList.remove('covered')
+    // Uncovering is a reveal with NO box change behind it (visibility:hidden kept the
+    // box), so no observer will ever announce it — this does (reveal-port), or a grid
+    // that drifted while covered stays wrong forever. Callers that go on to CHANGE
+    // boxes (splits, closes, applies) cost nothing extra: the refit each pane answers
+    // with is deduped, and the box change refits again through ResizeObserver anyway.
+    let revealed: number[] | null = null
+    for (const [local, el] of this.slotEls) {
+      if (el.classList.contains('covered')) {
+        (revealed ??= []).push(this.globalOf(local))
+        el.classList.remove('covered')
+      }
+    }
+    if (revealed) notifyPanesRevealed(revealed)
   }
 
   /** Legacy alias (keyboard Ctrl+Shift+Enter, dev handle): full-workspace zoom. */
