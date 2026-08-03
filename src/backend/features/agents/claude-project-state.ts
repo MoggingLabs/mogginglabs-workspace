@@ -1,7 +1,8 @@
 import * as fs from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import writeFileAtomic from 'write-file-atomic'
+import { toCallerNamespace } from '../../platform/fs-paths'
 
 // Project state follows profiles (the ADR-0013 extension, 2026-08-02). Claude keeps a
 // per-PROJECT entry in each config home's `.claude.json` state file: the folder-trust
@@ -24,8 +25,15 @@ import writeFileAtomic from 'write-file-atomic'
 //   canonical keys  claude keys entries by the cwd AS ITS PROCESS SAW IT — forward
 //                  slashes, and 8.3 short form when launched through one (observed
 //                  live: "C:/Users/PVELOS~1/AppData/..."). Entries are matched by
-//                  canonical path (realpath + case-fold), never string equality, and a
-//                  fresh entry is keyed the way claude itself would write it.
+//                  canonical path (realpath + case-fold), never string equality.
+//   every spelling  but claude READS by exact string, so matching canonically is only
+//                  half the job: a fresh entry keyed the way WE saw the cwd is invisible
+//                  to a claude that saw the other spelling, and it mints its own entry
+//                  and paints the dialog anyway — the carry silently did nothing. So a
+//                  fresh entry is written under EVERY spelling claude might report
+//                  (claudeKeysFor), sharing one object, and trust is forced on every
+//                  spelling already on file: two keys for one folder can never disagree
+//                  about whether it is trusted.
 //   best effort    a state-file failure is swallowed per home and the launch proceeds
 //                  — a broken carry degrades to the CLI asking its own questions,
 //                  never to a refused launch.
@@ -66,6 +74,55 @@ function claudeKeyFor(cwd: string): string {
   return cwd.replace(/\\/g, '/')
 }
 
+/**
+ * EVERY spelling claude might key this cwd under, most-likely first.
+ *
+ * Claude reads its entry with an EXACT string lookup on the cwd its own process reports,
+ * and node hands a child the cwd VERBATIM — a child spawned at
+ * `C:\Users\PVELOS~1\AppData\Local\Temp\x` reports exactly that; spawned at the long
+ * spelling of the same directory it reports the long one. Node never canonicalizes, so
+ * the spelling is decided by whoever computed the cwd — and this app has both kinds of
+ * caller: paths that went through `realpathSync.native` (long) and paths taken straight
+ * off `%TEMP%`, which on Windows is routinely the 8.3 short form. That is not theory:
+ * of the 53 project entries in the real config on this machine, 42 are keyed
+ * `C:/Users/PVELOS~1/AppData/Local/Temp/...` and 11 under the long `pveloso01` spelling,
+ * for directories sharing the same parent.
+ *
+ * Writing ONE spelling meant guessing which side of that split claude would land on, and
+ * a wrong guess made the whole carry a silent no-op: claude found no entry, minted its
+ * own, and painted the trust dialog — the exact case the buffer-scraping fallback exists
+ * to catch. Seeding every spelling costs one extra key and removes the guess.
+ *
+ * `tmp` is injectable so this stays testable on a machine whose TEMP is not aliased.
+ * Exported for that reason only — the carry is its one caller.
+ */
+export function claudeKeysFor(cwd: string, tmp: string = tmpdir()): string[] {
+  const forms = [cwd]
+  let physical = cwd
+  try {
+    physical = fs.realpathSync.native(cwd) // 8.3 short / junction / symlink -> the long, physical spelling
+    forms.push(physical)
+  } catch {
+    /* the cwd may not resolve — the spelling we were handed is all there is */
+  }
+  // ...and back the other way. `toCallerNamespace` walks TEMP's own lexical ancestors for
+  // one whose realpath prefixes the physical path, then splices the physical suffix onto
+  // that ancestor's spelling — which turns a long path under TEMP into the 8.3 spelling
+  // `%TEMP%` itself is written in. TEMP is the aliased root that actually occurs here;
+  // for a cwd outside it the call returns `physical` unchanged and adds nothing.
+  try {
+    forms.push(toCallerNamespace(physical, tmp))
+  } catch {
+    /* an unreadable ancestor just means no alias spelling to seed */
+  }
+  const keys: string[] = []
+  for (const form of forms) {
+    const key = claudeKeyFor(form)
+    if (key && !keys.includes(key)) keys.push(key)
+  }
+  return keys
+}
+
 function readStateFile(file: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown
@@ -82,16 +139,22 @@ function projectsOf(state: Record<string, unknown>): Record<string, ProjectEntry
     : {}
 }
 
-function entryFor(
+/** EVERY entry naming this cwd, in file order. More than one is normal once a folder has
+ *  been launched under two spellings (8.3 and long), and they are one folder: the carry
+ *  forces trust on all of them so two keys can never disagree about it. */
+function entriesFor(
   state: Record<string, unknown>,
   cwd: string,
   memo?: Map<string, string>
-): { key: string; entry: ProjectEntry } | null {
+): { key: string; entry: ProjectEntry }[] {
   const want = canonPath(cwd, memo)
+  const found: { key: string; entry: ProjectEntry }[] = []
   for (const [key, entry] of Object.entries(projectsOf(state))) {
-    if (canonPath(key, memo) === want && entry && typeof entry === 'object') return { key, entry }
+    if (canonPath(key, memo) === want && entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      found.push({ key, entry })
+    }
   }
-  return null
+  return found
 }
 
 const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
@@ -156,29 +219,49 @@ export function carryClaudeProjectState(
     const state = readStateFile(targetStateFile) ?? {}
     const projects = projectsOf(state)
     state.projects = projects
-    const existing = entryFor(state, cwd, canonMemo)
-    const key = existing?.key ?? claudeKeyFor(cwd)
-    const entry: ProjectEntry = existing?.entry ?? {}
-    // The before-image of the entry we are about to mutate in place. An absent entry
-    // has no before-image and is always a write.
-    const before = existing ? JSON.stringify(entry) : null
-    projects[key] = entry
+    const matches = entriesFor(state, cwd, canonMemo)
+    // The entry the grants merge INTO: the one already on file, else a fresh one. Every
+    // spelling we seed below shares this same object, so they cannot be born disagreeing.
+    const entry: ProjectEntry = matches[0]?.entry ?? {}
+    // Which of claude's possible spellings are not present AS KEYS. Claude looks its entry
+    // up by exact string, so a spelling it might report needs a key of its own — a
+    // canonical match under a DIFFERENT spelling is invisible to it. Computed before any
+    // mutation, and it also reclaims a key holding a non-object (a null left by a
+    // truncated write is not an entry).
+    // The one exception is a cwd with a single spelling: there is no alias to defend
+    // against, so an existing canonical match already IS the entry claude reads, and
+    // minting a near-duplicate beside it would only split the folder's grants.
+    const forms = claudeKeysFor(cwd)
+    const seed = matches.length > 0 && forms.length === 1 ? [] : forms.filter((f) => !isRecord(projects[f]))
+    // The before-images of the entries we are about to mutate in place. A seeded key is a
+    // new key and is always a write.
+    const before = matches.map((m) => JSON.stringify(m.entry))
     const targetCanon = canonPath(targetStateFile, canonMemo)
     for (const sourceFile of sourceStateFiles) {
       if (!sourceFile || canonPath(sourceFile, canonMemo) === targetCanon) continue
       const source = readStateFile(sourceFile)
       if (!source) continue
-      const found = entryFor(source, cwd, canonMemo)
-      if (!found) continue
-      for (const carriedKey of CARRIED_KEYS) mergeKey(entry, found.entry, carriedKey)
+      // Every spelling in the source, not just the first: a grant the user made under the
+      // 8.3 launch of a folder still belongs to that folder under its long spelling.
+      const found = entriesFor(source, cwd, canonMemo)
+      if (!found.length) continue
+      for (const one of found) for (const carriedKey of CARRIED_KEYS) mergeKey(entry, one.entry, carriedKey)
       out.carried = true
     }
-    entry.hasTrustDialogAccepted = true // policy: the open workspace IS the declaration
-    // Unchanged entry ⇒ trust was already true and no source added anything ⇒ the file
-    // on disk already says exactly what this call would write. Same answer, no write.
-    // (Key order cannot drift here: both images are the same object, so a difference
-    // means a merge really added or changed something.)
-    if (before !== null && before === JSON.stringify(entry)) {
+    // Policy: the open workspace IS the declaration. Forced on the merge target AND on
+    // every other spelling already on file, so no two keys for one folder can disagree
+    // about trust — a stale alias saying `false` is a dialog waiting to happen.
+    entry.hasTrustDialogAccepted = true
+    for (const one of matches) one.entry.hasTrustDialogAccepted = true
+    // Seed the spellings claude might report and that no key covers yet. They share
+    // `entry`, so the grants and the trust verdict are one object under several names.
+    for (const key of seed) projects[key] = entry
+    // Nothing seeded and no entry changed ⇒ trust was already true, no source added
+    // anything, and every spelling already had a key ⇒ the file on disk already says
+    // exactly what this call would write. Same answer, no write.
+    // (Key order cannot drift here: each pair of images is the same object, so a
+    // difference means a merge really added or changed something.)
+    if (!seed.length && matches.every((m, i) => before[i] === JSON.stringify(m.entry))) {
       out.trusted = true
       return out
     }
