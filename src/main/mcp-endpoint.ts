@@ -8,7 +8,7 @@ import { handleUsageCall } from './usage'
 import { getSettingsStore } from './app-settings'
 import { onIntegrationsGrantChanged, resolveGrantedWriteTools, resolveWriteAllGranted, workspaceIdForPane } from './integrations'
 import { connectionUpstream, restBridgeUpstream } from './connections'
-import { handleRestBridgeRpc, mcpFetch, retryDelayMs, retrySpecFor, retryableStatus } from '@backend/features/integrations'
+import { connectionProxyRefusal, handleRestBridgeRpc, mcpFetch, retryDelayMs, retrySpecFor, retryableStatus } from '@backend/features/integrations'
 import { getDaemonClient } from './daemon-relay'
 import { runtimeDir as clientRuntimeDir } from './daemon-client'
 import { recordTrail } from './trail'
@@ -108,6 +108,12 @@ function toVerb(name: string, args: Record<string, unknown>): BrowserAgentVerb |
 // it at startup so the two can never drift silently.
 export const MCP_TOOL_NAMES: string[] = [...MCP_BROWSER_TOOL_NAMES]
 
+/** One frame is one line. Matches the cap the Codex app-server transport already uses
+ *  (agent-settings/codex-app-server.ts MAX_LINE_BYTES) — no control frame comes close. */
+const MAX_FRAME_BYTES = 1024 * 1024
+/** docs/06 and ADR 0006: an unauthenticated connection is dropped in ~3s. */
+const AUTH_DEADLINE_MS = 3000
+
 let server: net.Server | null = null
 let token = ''
 const authedSocks = new Set<net.Socket>()
@@ -181,6 +187,11 @@ async function handleConnectionRpc(
     if (resp && typeof resp === 'object' && (resp.result as { isError?: boolean } | undefined)?.isError) restBridgeStats.refusals += 1
     return resp === null ? { ok: true } : { ok: true, payload: resp }
   }
+  // THE gate the REST branch above already has. Without it this forwarded arbitrary JSON-RPC
+  // upstream with the connection's DECRYPTED token attached, for any caller that could read
+  // the endpoint file — no pane, no workspace, no grant to answer to.
+  const refusal = connectionProxyRefusal({ pane: boundPane })
+  if (refusal) return { ok: false, reason: refusal }
   const upstream = await connectionUpstream(connection)
   if (!upstream) {
     return {
@@ -390,8 +401,31 @@ export function startMcpEndpoint(): void {
     // One bridge process = one agent's MCP session. Scoped to the socket so it
     // dies with the agent, and so two agents never share a server session id.
     const mcpSessions = new Map<string, string>()
+
+    // Drop-unauthenticated, the same posture the daemon transport already holds
+    // (pty-daemon/transport.ts:90) and the same ~3s docs/06 and ADR 0006 promise.
+    // Without it any local process could open this pipe and simply sit there.
+    // The pane-bound handshake verifies its token against the daemon, so a
+    // verification in flight gets ONE more window rather than being cut off —
+    // but never an unbounded one.
+    let authGrace = 0
+    const authTimer = setInterval(() => {
+      if (authed) return clearInterval(authTimer)
+      if (authPending && authGrace++ < 1) return
+      clearInterval(authTimer)
+      sock.destroy()
+    }, AUTH_DEADLINE_MS)
+
     sock.on('data', (chunk) => {
       buf += chunk
+      // A frame is one line, so bytes with no newline in them are not a frame —
+      // they are just growth. Main owns the app's whole heap (docs/05 budgets it),
+      // and this socket is reachable pre-auth by any process running as this user,
+      // so an unbounded accumulator here is an OOM anyone can trigger with no token.
+      if (buf.length > MAX_FRAME_BYTES) {
+        sock.destroy()
+        return
+      }
       let i
       while ((i = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, i)
@@ -412,6 +446,7 @@ export function startMcpEndpoint(): void {
           const wantsPane = typeof msg.pane === 'string' || typeof msg.paneToken === 'string'
           if (!wantsPane) {
             authed = true // human/read-only app client; pane-scoped verbs still fail closed
+            clearInterval(authTimer)
             authedSocks.add(sock)
             sock.write(JSON.stringify({ t: 'welcome', tools: MCP_TOOL_NAMES, paneBound: false }) + '\n')
             continue
@@ -434,6 +469,7 @@ export function startMcpEndpoint(): void {
             }
             boundPane = pane
             authed = true
+            clearInterval(authTimer)
             authedSocks.add(sock)
             sock.write(JSON.stringify({ t: 'welcome', tools: MCP_TOOL_NAMES, paneBound: true }) + '\n')
           })
@@ -573,7 +609,10 @@ export function startMcpEndpoint(): void {
       }
     })
     sock.on('error', () => sock.destroy())
-    sock.on('close', () => authedSocks.delete(sock))
+    sock.on('close', () => {
+      clearInterval(authTimer)
+      authedSocks.delete(sock)
+    })
   })
 
   // A grant flip anywhere -> every live server session re-resolves (and emits
@@ -592,8 +631,29 @@ export function startMcpEndpoint(): void {
     /* endpoint best-effort; the dock chrome still works without agent control */
   })
   server.listen(address, () => {
+    // The unix socket, 0600 — the same hardening the PTY daemon does at pty-daemon/index.ts.
+    // docs/06 promises "a 0600 unix socket"; this one was created at the default umask, so on
+    // a multi-user macOS box any local account could connect and spend the auth budget. Named
+    // pipes reject remote clients by default and the runtime dir is per-user ACL-protected, so
+    // win32 needs nothing here.
+    if (process.platform !== 'win32') {
+      try {
+        fs.chmodSync(address, 0o600)
+      } catch {
+        /* best effort */
+      }
+    }
     try {
-      fs.writeFileSync(endpointFile(), JSON.stringify({ version: PROTOCOL, address, token }), { mode: 0o600 })
+      // `pid` is what makes a CRASH-STALE endpoint file distinguishable from a live one. Without
+      // it the two are byte-identical and a reader can only find out by connecting and timing
+      // out. daemon-client.ts's endpointLive() has always checked a pid; this file had none.
+      // Written to a sibling and RENAMED. A direct write is not atomic: a reader arriving
+      // mid-write gets a truncated file, and `JSON.parse` failing is indistinguishable from
+      // "no app running". rename() within one directory is atomic on every platform we ship.
+      const target = endpointFile()
+      const tmp = `${target}.${process.pid}.tmp`
+      fs.writeFileSync(tmp, JSON.stringify({ version: PROTOCOL, pid: process.pid, address, token }), { mode: 0o600 })
+      fs.renameSync(tmp, target)
     } catch {
       /* ignore */
     }
@@ -607,10 +667,33 @@ export function stopMcpEndpoint(): void {
     /* ignore */
   }
   server = null
+  // close() stops ACCEPT, nothing else: a socket that authenticated before the stop keeps
+  // every capability it had — and what it holds here is a proxy that attaches decrypted OAuth
+  // tokens to outbound calls. Stopping the endpoint has to mean stopping the endpoint.
+  for (const sock of authedSocks) {
+    try {
+      sock.destroy()
+    } catch {
+      /* peer already gone */
+    }
+  }
+  authedSocks.clear()
+  // A restart mints a fresh token; leaving the old one in the module let a client that had
+  // read the previous endpoint file authenticate against the next server.
+  token = ''
   try {
     fs.unlinkSync(endpointFile())
   } catch {
     /* already gone */
+  }
+  // The socket itself. The address embeds our pid, so a crashed run leaves browser-<oldpid>.sock
+  // behind forever — nothing ever swept them.
+  if (process.platform !== 'win32') {
+    try {
+      fs.unlinkSync(socketAddress())
+    } catch {
+      /* already gone */
+    }
   }
 }
 

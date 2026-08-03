@@ -13,7 +13,7 @@ import {
 } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { TEMPLATE_COUNTS, type GridSpecModel } from '../layout'
-import { Button, IconButton, clear, createStepper, el, icon, showToast } from '../../components'
+import { Button, IconButton, clear, el, icon, showToast } from '../../components'
 import { WorkspaceController, type CreateOpts } from './controller'
 import { resolveColors } from './model'
 import { workspaceClient } from './workspace.client'
@@ -563,74 +563,25 @@ export const workspaceFeature: UiFeature = {
         if (status.live > 0) bits.push(`${status.live} with live work`)
         layoutMenu.append(el('div', { class: 'layout-menu-status', text: bits.join(' · ') }))
       }
-      const headroom = status ? Math.max(1, status.cap - status.panes) : 1
-      // ADD terminals — the popover's whole additive vocabulary is counter-driven now
-      // (user direction: the template tiles pinned a COUNT, which is the one thing the
-      // owner of four live agents never wants pinned — Reorganize below keeps the
-      // tiles' real value, the SHAPE, without their kill switch). Each row's [− n +]
-      // clamps to the headroom the status line quotes; at 1 the row is exactly the
-      // single-split verb it always was, and Ctrl+Shift+D stays a plain single split.
-      let termCount = 1
-      const termLabel = el('span', { text: 'New terminal' })
-      const termStepper = createStepper({
-        value: 1,
-        min: 1,
-        max: headroom,
-        ariaLabel: 'How many terminals',
-        onChange: (n) => {
-          termCount = n
-          termLabel.textContent = n === 1 ? 'New terminal' : `${n} new terminals`
-        }
-      })
+      // ADD terminals — ONE row now, opening the pane-creation modal (user direction:
+      // an empty shell was the popover's only vocabulary; the modal speaks the
+      // wizard's — agents as brush chips, count, per-terminal worktree isolation —
+      // so the two stepper rows this replaces collapsed into their richer superset).
+      // The trailing "…" says it opens a dialog rather than acting on click; no kbd
+      // chip, because Ctrl+Shift+D deliberately stays the instant plain split.
       const add = el(
         'button',
         {
           class: 'menu-item layout-menu-add',
           type: 'button',
-          title: 'Splits the focused pane — the row/column re-equalizes',
+          title: 'Choose what runs in each new terminal — agents, count, worktree isolation',
           onClick: () => {
             layoutMenu.hidden = true
-            controller.splitActive(undefined, termCount)
+            controller.openNewTerminals()
           }
         },
-        [
-          icon('plus', 14),
-          termLabel,
-          el('span', { class: 'kbd', text: 'Ctrl+Shift+D' })
-        ]
+        [icon('plus', 14), el('span', { text: 'New terminal…' })]
       )
-      const addRow = el('div', { class: 'layout-menu-stepper-row' }, [add, termStepper.el])
-      // ADD isolated terminals — same split, but each new pane lives in its own git
-      // worktree (fresh mogging/<slug> branch), the manual twin of the wizard's
-      // "Isolate each agent" checkbox. Menu-only by design: Ctrl+Shift+D stays plain.
-      let isoCount = 1
-      const isoLabel = el('span', { text: 'New isolated terminal (worktree)' })
-      const isoStepper = createStepper({
-        value: 1,
-        min: 1,
-        max: headroom,
-        ariaLabel: 'How many isolated terminals',
-        onChange: (n) => {
-          isoCount = n
-          // Same length singular and plural, so raising the count never re-truncates
-          // the row the user is looking at.
-          isoLabel.textContent = n === 1 ? 'New isolated terminal (worktree)' : `${n} isolated terminals (worktrees)`
-        }
-      })
-      const addIsolated = el(
-        'button',
-        {
-          class: 'menu-item layout-menu-add layout-menu-add-isolated',
-          type: 'button',
-          title: 'Splits the focused pane into fresh git worktrees — one branch per terminal',
-          onClick: () => {
-            layoutMenu.hidden = true
-            void controller.splitActiveIsolated(undefined, isoCount)
-          }
-        },
-        [icon('git-branch', 14), isoLabel]
-      )
-      const isoRow = el('div', { class: 'layout-menu-stepper-row' }, [addIsolated, isoStepper.el])
       // REORGANIZE — opens the layout painter (the wizard's own): choose a new grid
       // SIZE and ARRANGEMENT, changing the pane count if you want, on the live
       // workspace. The structural sibling of Balance: Balance evens the sizes of the
@@ -668,7 +619,7 @@ export const workspaceFeature: UiFeature = {
           el('span', { class: 'kbd', text: 'Ctrl+Shift+=' })
         ]
       )
-      layoutMenu.append(addRow, isoRow, el('div', { class: 'menu-sep' }), reorganize, balance)
+      layoutMenu.append(add, el('div', { class: 'menu-sep' }), reorganize, balance)
     }
 
     // ── Keyboard: capture phase + stopPropagation so xterm never sees these ──
@@ -939,10 +890,11 @@ function exposeForDev(controller: WorkspaceController): void {
     reorganize: () => controller.openReorganize(), // opens the painter panel
     reorganizeApply: (spec: GridSpecModel) => controller.requestReorganize(spec), // paint result, no UI
     status: () => controller.layoutStatus(),
-    close: (paneId: number) => {
-      const id = controller.activeMeta()?.id
-      if (id) void controller.requestClosePane(id, paneId)
-    }
+    // The CONTROL API's close verb, not the ✕'s — `layout.close` sits beside `apply` and
+    // `split` and means the same kind of thing they do: a programmatic layout edit that is
+    // finished when it returns. The ✕'s undo grace is a human affordance and is driven
+    // where it lives, through the real button (PANECLOSE).
+    close: (paneId: number) => controller.closePaneById(paneId)
   }
   w.__mogging.workspace = {
     create: (opts?: CreateOpts) => controller.create(opts ?? {}),

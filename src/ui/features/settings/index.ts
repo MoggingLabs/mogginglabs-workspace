@@ -10,7 +10,7 @@ import { getTelemetry } from '../../core/telemetry'
 import { activeView, goBack, onViewChange, setActiveView } from '../../core/shell/view-port'
 import { registerSettingsTabNav, takeRequestedSettingsTab } from '../../core/shell/settings-tab-port'
 import { requestIntegrationsFocus, type IntegrationsFocus } from '../../core/shell/integrations-focus-port'
-import { renderShortcutList } from '../../core/commands/shortcuts'
+import { isModKey, renderShortcutList } from '../../core/commands/shortcuts'
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
 import { calmMotion, setCalmMotion } from '../../core/a11y/motion-port'
 import { TEMPLATE_COUNTS } from '../layout'
@@ -31,7 +31,7 @@ import { openLibrary } from './library'
 const DEFAULT_LAYOUT_KEY = 'mogging.defaultPaneCount'
 
 /**
- * The nav is a MAP, not a list (8.5/04). Nine flat rows say only "there are nine";
+ * The nav is a MAP, not a list (8.5/04). A flat row list says only how many there are;
  * four named groups say where a knob lives before you read the labels. Grouping is
  * visual — every knob keeps its tab, and every tab keeps its `data-target` id.
  */
@@ -75,8 +75,10 @@ function setPref(key: string, value: string): void {
 }
 
 /**
- * Settings — a FULL-APP page (Phase-5/05, was a modal): a left TAB rail of NINE
- * tabs, grouped (Workspace · Agents & tools · Trust · System), where each tab is
+ * Settings — a FULL-APP page (Phase-5/05, was a modal): a left TAB rail whose sections
+ * are NAV_GROUPS below (the source of truth — this sentence used to say "nine" and the
+ * count had reached fourteen), grouped (Workspace · Agents & tools · Trust · System),
+ * where each tab is
  * its OWN page — selecting one shows only that section and hides the rest (not
  * stacked sections on one scroll). Every tab is a `SectionHeader` over `Card`s of
  * `FieldGroup`s / `ToggleRow`s (8.5/04); a card holding ONE knob uses its own head
@@ -883,7 +885,7 @@ export const settingsFeature: UiFeature = {
 
     // ── S5 · Settings search — the baseline VS Code/Chrome/macOS all lead with ──
     // Past ~30 knobs nobody navigates by taxonomy reliably; this app has ~80 across
-    // 13 tabs. The index is a DOM walk over titles, captions, toggle labels and
+    // every section in NAV_GROUPS. The index is a DOM walk over titles, captions, toggle labels and
     // field labels — rebuilt on the first keystroke of each search, so late-loading
     // blocks (usage grid, connections) are indexed by the time anyone can type.
     interface SearchHit {
@@ -1041,21 +1043,24 @@ export const settingsFeature: UiFeature = {
       e.preventDefault()
       goBack()
     })
-    // S5: Ctrl/Cmd+F inside Settings focuses the search — the browser find has no
-    // meaning on a page whose content is mostly hidden tabs.
+    // S5: Ctrl+F (⌘+F on macOS) inside Settings focuses the search — the browser find
+    // has no meaning on a page whose content is mostly hidden tabs. isModKey is the one
+    // place the modifier is decided; it is the platform's own, never both.
     window.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === 'f' && activeView() === 'settings') {
+      if (isModKey(e) && !e.altKey && !e.shiftKey && e.key === 'f' && activeView() === 'settings') {
         e.preventDefault()
         searchInput.focus()
         searchInput.select()
       }
     })
-    // NAV-01: Ctrl/Cmd+, opens Settings from anywhere (the platform convention),
-    // toggling back out if it's already up — matching the gear button.
+    // NAV-01: Ctrl+, (⌘+, on macOS) opens Settings from anywhere (the platform
+    // convention), toggling back out if it's already up — matching the gear button.
+    // The convention is the platform's OWN modifier: Win+, is Windows' peek-desktop,
+    // and `ctrlKey || metaKey` fired both from a single press.
     window.addEventListener(
       'keydown',
       (e) => {
-        if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === ',') {
+        if (isModKey(e) && !e.altKey && !e.shiftKey && e.key === ',') {
           e.preventDefault()
           e.stopPropagation()
           if (activeView() === 'settings') goBack()

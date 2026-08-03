@@ -1,10 +1,11 @@
 import { app } from 'electron'
+import { createHash } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
-import { MCP_MANAGED_BY, type AgentConfigValue, type HostedCliId, type McpServerEntry } from '@contracts'
+import { MCP_MANAGED_BY, isConnectionBridgeEntry, type AgentConfigValue, type HostedCliId, type McpServerEntry } from '@contracts'
 import { composePlanEntries, findWriter, materializePlanFor } from '@backend/features/integrations'
 import { jsoncCodec, tomlCodec } from '@backend/features/agent-settings'
-import { configMutationCoordinator } from '@backend/core/config-files'
+import { ConfigMutationError, configMutationCoordinator } from '@backend/core/config-files'
 import { verifyConnectionsForLaunch } from './connections'
 import { getToolPlan, hasToolPlan } from './integrations'
 import { houseServerEntry, listServers } from './mcp-manager'
@@ -65,14 +66,70 @@ export interface ToolPlanMaterialization {
   reason?: string
 }
 
+/** What a successful materialization produced, and the disk evidence that says it is
+ *  still true. Keyed per (workspace, cli, cwd) — the launch identity of a plan file. */
+interface ToolPlanMemo {
+  digest: string
+  args: string[]
+  excludeRelPaths: string[]
+  files: Array<{ path: string; mtimeMs: number; size: number }>
+}
+const materializedPlans = new Map<string, ToolPlanMemo>()
+
+const memoKey = (workspaceId: string, cli: HostedCliId, cwd: string): string => `${workspaceId} ${cli} ${cwd}`
+
+/** The composed plan's identity: the entries themselves, not the stored plan's
+ *  signature. A server DEFINITION can change (a command, an env pointer) while the
+ *  plan document is untouched, and that must re-materialize. */
+function planDigest(entries: unknown, inheritGlobal: boolean, cwd: string, cli: string): string {
+  return createHash('sha256').update(JSON.stringify({ entries, inheritGlobal, cwd, cli })).digest('hex')
+}
+
+/** Are the materialized files still byte-for-byte what we left there? Stats only —
+ *  the point is to avoid re-reading and re-hashing whole config files per launch. */
+function filesUnmoved(files: ToolPlanMemo['files']): boolean {
+  return files.every((f) => {
+    try {
+      const s = statSync(f.path)
+      return s.mtimeMs === f.mtimeMs && s.size === f.size
+    } catch {
+      return false
+    }
+  })
+}
+
+/** Which connections this launch's plan carries — composed WITHOUT touching a file, so
+ *  the caller can start the bounded pre-launch verification early and let it overlap
+ *  the settings reconcile instead of adding to it. Never rejects. */
+export function verifyToolPlanForLaunch(req: { agentId: string; workspaceId?: string }): Promise<void> {
+  try {
+    const cli = cliForAgent(req.agentId)
+    if (!cli || !req.workspaceId || !hasToolPlan(req.workspaceId)) return Promise.resolve()
+    const plan = getToolPlan(req.workspaceId)
+    const entries = composePlanEntries(plan, cli, listServers(), houseServerEntry())
+    const ids = entries.filter(isConnectionBridgeEntry).map((e) => e.id)
+    return ids.length ? verifyConnectionsForLaunch(ids).catch(() => undefined) : Promise.resolve()
+  } catch {
+    return Promise.resolve()
+  }
+}
+
 /** Materialize one workspace's planned MCP set through the shared config-file queue.
  *  A scoped launch that cannot be materialized is REFUSED (ok:false) — it never falls
- *  through to the CLI's global servers, and every file it touched is rolled back. */
-export async function materializeToolPlanAtLaunch(req: {
-  agentId: string
-  cwd: string
-  workspaceId?: string
-}): Promise<ToolPlanMaterialization> {
+ *  through to the CLI's global servers, and every file it touched is rolled back.
+ *
+ *  `opts.verified` is the pre-launch connection verification the caller already
+ *  started (verifyToolPlanForLaunch). It is still AWAITED here — the budget is allowed
+ *  to delay a launch, which is what the pulse gate's broken-budget mutation proves —
+ *  it simply ran alongside the reconcile instead of after it. */
+export async function materializeToolPlanAtLaunch(
+  req: {
+    agentId: string
+    cwd: string
+    workspaceId?: string
+  },
+  opts?: { verified?: Promise<void> }
+): Promise<ToolPlanMaterialization> {
   const cli = cliForAgent(req.agentId)
   // Scoping is OPT-IN: aider/opencode, plan-less launches, and workspaces that
   // never stored a plan all launch UNCHANGED (the CLI's own global config).
@@ -86,8 +143,26 @@ export async function materializeToolPlanAtLaunch(req: {
   // failing verification lands as card status afterward, not as a lost pane. This is
   // the seam because it is where the plan becomes launch env — a connection entry's
   // command is our bridge shim, recognizable by its `--connection <id>` argument.
-  const connectionIds = entries.filter((e) => e.args?.[0] === '--connection').map((e) => e.id)
-  if (connectionIds.length) await verifyConnectionsForLaunch(connectionIds)
+  const connectionIds = entries.filter(isConnectionBridgeEntry).map((e) => e.id)
+  if (opts?.verified) await opts.verified
+  else if (connectionIds.length) await verifyConnectionsForLaunch(connectionIds)
+  // NOTHING CHANGED SINCE THE LAST LAUNCH? Then the files on disk already say exactly
+  // what this call would write, and the CAS round trip (read + hash + queue + compare,
+  // per file, per launch) is pure restatement. The digest covers what we would write;
+  // the per-file stats cover whether anything else moved it. Either doubt re-does the
+  // whole thing — the memo only ever skips work it can prove is redundant.
+  const key = memoKey(workspaceId, cli, req.cwd)
+  const digest = planDigest(entries, plan.inheritGlobal, req.cwd, cli)
+  const memo = materializedPlans.get(key)
+  if (memo && memo.digest === digest && filesUnmoved(memo.files)) {
+    // The exclude append is idempotent and cheap, and it guards something the user can
+    // SEE (a managed file showing up in `git status`), so it is re-checked even here.
+    if (!memo.excludeRelPaths.length || gitExcludeInWorktree(req.cwd, memo.excludeRelPaths)) {
+      skippedScopes.delete(workspaceId)
+      return { ok: true, args: memo.args }
+    }
+    materializedPlans.delete(key) // could not re-hide it — fall through and refuse properly
+  }
   const mat = materializePlanFor({
     cli,
     entries,
@@ -116,6 +191,7 @@ export async function materializeToolPlanAtLaunch(req: {
   }
   const refuse = async (reason: string): Promise<ToolPlanMaterialization> => {
     skippedScopes.set(workspaceId, reason)
+    materializedPlans.delete(key) // a refusal is never remembered as a good materialization
     await rollback()
     console.warn(`tool-plan: ${reason}`)
     return { ok: false, args: [], reason }
@@ -133,16 +209,32 @@ export async function materializeToolPlanAtLaunch(req: {
       // The write itself goes through the shared config-file queue: CAS on the bytes we read,
       // codec-validated, atomically renamed — and for a project file it MERGES (only
       // Workspace-tagged entries are replaced; foreign settings and comments survive).
-      const snapshot = await configMutationCoordinator.read(file.path)
-      before.push({ path: file.path, existed: snapshot.text !== null, content: snapshot.text ?? '' })
-      await configMutationCoordinator.mutate({
-        file: file.path,
-        expectedHash: snapshot.hash,
-        transform: (current) => (file.projectScoped ? mergeToolPlanProjectConfig(cli, current.text, entries) : file.content),
-        validate: file.projectScoped
-          ? (content) => (cli === 'codex' ? tomlCodec.validate(content) : jsoncCodec.validate(content))
-          : undefined
-      })
+      //
+      // ONE retry on a lost CAS. The settings reconcile runs alongside this now, and for
+      // codex/gemini both can legitimately write the same project config file; the
+      // coordinator serializes them, so the loser simply read a snapshot that the winner
+      // then replaced. Re-reading and re-merging is the correct answer to that — the
+      // merge is defined against whatever is currently there. A SECOND loss is not a
+      // race, it is someone else editing the file continuously, and refusal is exactly
+      // who refusal is for.
+      const writeOnce = async (): Promise<void> => {
+        const snapshot = await configMutationCoordinator.read(file.path)
+        before.push({ path: file.path, existed: snapshot.text !== null, content: snapshot.text ?? '' })
+        await configMutationCoordinator.mutate({
+          file: file.path,
+          expectedHash: snapshot.hash,
+          transform: (current) => (file.projectScoped ? mergeToolPlanProjectConfig(cli, current.text, entries) : file.content),
+          validate: file.projectScoped
+            ? (content) => (cli === 'codex' ? tomlCodec.validate(content) : jsoncCodec.validate(content))
+            : undefined
+        })
+      }
+      try {
+        await writeOnce()
+      } catch (error) {
+        if (!(error instanceof ConfigMutationError) || error.code !== 'changed-under-us') throw error
+        await writeOnce()
+      }
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error)
       return await refuse(`Could not materialize the scoped tool plan: ${file.path} was preserved (${why}). The scoped agent was not launched.`)
@@ -150,6 +242,21 @@ export async function materializeToolPlanAtLaunch(req: {
   }
   if (mat.excludeRelPaths.length && !gitExcludeInWorktree(req.cwd, mat.excludeRelPaths)) {
     return await refuse('Could not hide the managed tool-plan file from Git. The scoped agent was not launched.')
+  }
+  // Remember what we just established, with the disk evidence to prove it later. A file
+  // we cannot stat right after writing is not evidence, so that memo is simply not kept.
+  try {
+    materializedPlans.set(key, {
+      digest,
+      args: mat.launchArgs,
+      excludeRelPaths: mat.excludeRelPaths,
+      files: mat.files.map((f) => {
+        const s = statSync(f.path)
+        return { path: f.path, mtimeMs: s.mtimeMs, size: s.size }
+      })
+    })
+  } catch {
+    materializedPlans.delete(key)
   }
   return { ok: true, args: mat.launchArgs }
 }

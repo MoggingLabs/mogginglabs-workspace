@@ -15,7 +15,7 @@ import type {
 import { spawnPty, ptyEmulation, type IPty } from '../../platform/pty-host'
 import { defaultShell, paneShellLaunch } from '../../platform/shell'
 import { killPtyTree } from '../../platform/process-tree'
-import { SCROLLBACK_CHARS, pickCwd, trimTornStart } from './pane-shared'
+import { SCROLLBACK_CHARS, pickCwd, trimTornStart , paneProcessEnv} from './pane-shared'
 import { getTelemetry } from '../../core/telemetry'
 import {
   ActivityTracker,
@@ -153,12 +153,12 @@ export class PtyService {
         // Shell integration (cwd reporting): the same env the daemon injects — a cmd.exe pane
         // that never told anyone where it was now does, on every prompt.
         // AIDER_ANALYTICS_LOG: the daemon's twin — aider's only exact source (see providers.ts).
-        env: {
-          ...inheritedEnv,
-          ...shellLaunch.env,
+        // Same composer as the daemon (pane-shared): a spread here would leave Windows
+        // holding both `Path` and `PATH` exactly as it did there.
+        env: paneProcessEnv(inheritedEnv, shellLaunch.env, {
           MOGGING_PANE_ID: String(req.id),
           MOGGING_PANE_TOKEN: paneToken
-        } as Record<string, string>
+        }) as Record<string, string>
       })
       this.sizes.set(req.id, { cols, rows })
       this.cwdStates.set(req.id, cwdState)

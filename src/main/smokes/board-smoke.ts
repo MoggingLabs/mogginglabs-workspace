@@ -34,9 +34,23 @@ function git(cwd: string, args: string[]): string {
 // running. That is stronger than the scrape ever was, and it is true whatever is on the PATH.
 const MARKER = 'TASK_MARKER_4242'
 const NOTES = 'Reverse the polarity of the neutron flow.'
-/** The board's own fallback timer (startOnCard). A write that lands a beat after DETECTION is
- *  the feature working; one that lands on this timer is the feature guessing. */
-const HAND_AFTER_DETECT_MS = 3000
+/**
+ * Upper bound on the gap between DETECTION and the write. It exists to catch a write that
+ * rode no signal at all; it is not a latency budget.
+ *
+ * It was 3000ms, tuned when the hand-off typed a fixed 800ms after the agent process
+ * appeared. It no longer waits for the process — it waits for the agent to be USABLE, which
+ * on a real claude is the TUI taking the screen and painting, and under CI load that is
+ * seconds: this gate measured 6.4s on the windows runner and 13.5s on macos, against 2.0s
+ * on a quiet desktop. Typing at 800ms is exactly the bug that change fixed — the prompt
+ * went into a booting CLI that discards input.
+ *
+ * So the bound follows the wait the board actually performs (`whenPaneUncovered`, 20s) plus
+ * its paint beat. What used to separate "working" from "guessing" is now structural rather
+ * than temporal: the board's fail-closed fallback does not type at all, it settles
+ * 'failed-startup', so a write can only ever come from the readiness path.
+ */
+const HAND_AFTER_DETECT_MS = 21_000
 
 export function runBoardSmoke(win: BrowserWindow): void {
   setTimeout(() => app.exit(1), 120000) // safety net
@@ -197,7 +211,16 @@ export function runBoardSmoke(win: BrowserWindow): void {
       // is prose in a chat box: it never runs, no approval is ever recorded, and the ✓-chip that
       // depends on it never appears. Exactly the trap settleToShell exists for (smoke-shell.ts),
       // and exactly the sequence the product asks of a person: leave the agent, then type.
-      const settled = await settleToShell({ es: ES, sleep, paneId })
+      // MORE TRIES THAN THE DEFAULT, because the card's task now actually LANDS. The
+      // hand-off used to type its prompt a fixed beat after the agent process appeared,
+      // which on a real claude is mid-boot — measured, the CLI still discards keystrokes
+      // there (scripts/measure-agent-readiness.mjs). The prompt was swallowed, the agent
+      // sat idle at an empty input box, and two ^C put the shell back instantly. Now the
+      // hand-off waits for the launch cover to lift, so the agent RECEIVES its task and
+      // starts working — and stopping a working agent legitimately takes more than one
+      // interrupt round. The gate's claim is "the shell can be got back", not "it comes
+      // back on the first try".
+      const settled = await settleToShell({ es: ES, sleep, paneId, tries: 10 })
       // The USER names the reviewer. `mogging role` writes only the DAEMON's map, which every
       // pane can write and which no longer confers sign-off authority (daemon-relay: appRoles)
       // — a reviewer named that way would produce an approval the app correctly ignores.

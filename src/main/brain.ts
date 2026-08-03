@@ -37,7 +37,7 @@ import {
 } from '@contracts'
 import { getSettingsStore } from './app-settings'
 import { resolveGrantedWriteTools, workspaceIdForPane } from './integrations'
-import { fetchLibraryDocs } from './libfetch'
+import { fetchLibraryDocs, type LibFetchRegistries } from './libfetch'
 import { recordTrail } from './trail'
 import { vaultAvailable, vaultClearKey, vaultHas, vaultLoad, vaultStore } from './vault'
 
@@ -334,6 +334,12 @@ export function setRecallAtLaunch(workspaceId: string, on: boolean): boolean {
 // ── The library-docs fetch consent (08): per-workspace, default OFF ───────────
 // The orient knob's storage shape with CONSENT semantics: absent = FALSE — no
 // network unless this workspace's human said so, and the smokes never say so.
+
+/** Registry bases for the library fetch. Empty in every real build — ADR 0016 pins the
+ *  origins and forbids an ENV read choosing them. A gate smoke injects its loopback
+ *  fixture here through brainDebug(), which is a call-site parameter (the seam
+ *  backend/core/origins.ts prescribes), never an ambient environment variable. */
+let libRegistries: LibFetchRegistries = {}
 
 const LIBFETCH_KV = 'brain.fetchLibraryDocs'
 
@@ -787,7 +793,7 @@ export async function handleBrainLibDocsMcp(
         }
         const cached = h.store.libDoc(dep.ecosystem, dep.name, dep.version)
         if (!cached) {
-          const fetched = await fetchLibraryDocs(dep.ecosystem as BrainLibEcosystem, dep.name, dep.version)
+          const fetched = await fetchLibraryDocs(dep.ecosystem as BrainLibEcosystem, dep.name, dep.version, libRegistries)
           if (!fetched.ok) return { ok: false, reason: fetched.reason, detail: fetched.detail }
           service.landLibraryDoc(caller, {
             ecosystem: dep.ecosystem,
@@ -890,8 +896,12 @@ export function brainDebug(): {
   embedStats: () => { performed: number; skipped: number; failures: number; passes: number }
   semToasts: () => number
   recallEmbedCalls: () => number
+  setRegistries: (r: LibFetchRegistries) => void
 } {
   return {
+    setRegistries: (r: LibFetchRegistries) => {
+      libRegistries = r
+    },
     openCount: () => service?.openCount() ?? 0,
     dispose: () => disposeBrain(),
     dump: (root: string) => ensureService().dump(root),

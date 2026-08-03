@@ -68,12 +68,35 @@ if (sources.length < 100) {
 // The \b after BASE keeps MOGGING_DEV_BASEURL (a dev-arm knob, not an origin) legal.
 const ENV_READ = /process\.env\.MOGGING_\w*_BASE\b/
 const ANY_NAME = new RegExp(`\\b(${BASE_NAMES.join('|')})\\b`)
+
+// Rule (a2): the SHAPE, not the name.
+//
+// The name pattern above missed the real thing twice. libfetch.ts read
+// MOGGING_BRAIN_REGISTRY_NPM and _PY — each defaulting to a registry URL literal, each
+// honoured in a signed build, each distilling fetched README text into the brain and
+// thence into agent context — and neither name ends in _BASE, so this gate stayed green
+// over exactly the bypass it exists to forbid. A banlist of names can only ever catch the
+// override someone already thought of; what makes an env read an ORIGIN read is the URL
+// literal it falls back to. Match that instead and the next invented name is caught on
+// the day it is written.
+//
+// `|| 'https://…'` and `?? "http://…"` are the whole idiom. Anything genuinely needing an
+// env-chosen URL is a dev arm and belongs behind the harness, not in shipped source.
+const ENV_URL_DEFAULT = /process\.env\.[A-Z_][A-Z0-9_]*\s*(?:\|\||\?\?)\s*(['"`])https?:\/\//
 const sourceHits = []
 for (const file of sources) {
   const body = readFileSync(file, 'utf8')
   const rel = relative(ROOT, file).split(sep).join('/')
+  // The shape rule applies to SHIPPED source only. A gate smoke pointing its own driven
+  // browser at a fixture site is not a product origin, and smokes reach no shipped bundle
+  // — check-prod-artifact.mjs is the gate that proves it (the production entry must import
+  // none of them). The NAME rules below still cover smokes, so a real *_BASE override
+  // cannot hide in one.
+  const isHarness = rel.startsWith('src/main/smokes/')
   if (ENV_READ.test(body)) sourceHits.push(`${rel}: env read (${body.match(ENV_READ)[0]})`)
-  else if (ANY_NAME.test(body)) sourceHits.push(`${rel}: names ${body.match(ANY_NAME)[0]}`)
+  else if (!isHarness && ENV_URL_DEFAULT.test(body)) {
+    sourceHits.push(`${rel}: env read defaulting to a URL — an origin by shape (${body.match(ENV_URL_DEFAULT)[0].slice(0, 60)}…)`)
+  } else if (ANY_NAME.test(body)) sourceHits.push(`${rel}: names ${body.match(ANY_NAME)[0]}`)
 }
 checks.noEnvOverrideInSource = sourceHits.length === 0
 if (sourceHits.length) failures.push(`origin-override names in shipped source:\n    ${sourceHits.join('\n    ')}`)

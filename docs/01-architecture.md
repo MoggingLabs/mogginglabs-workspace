@@ -30,7 +30,7 @@ See [ADR 0001](adr/0001-electron-over-tauri.md) for the Electron-over-Tauri deci
 - **Lifecycle:** track pid, cwd, exit code; forward resize (SIGWINCH); kill the whole
   process tree on pane close (Windows: job objects / `taskkill /T`; Unix: process-group
   kill).
-- **OSC parser** (`src/engine/osc-parser.ts`) on the raw PTY stream: OSC 9/99/777 →
+- **OSC parser** (`src/backend/features/agent-state/osc-parser.ts`) on the raw PTY stream: OSC 9/99/777 →
   "attention"; OSC 133 A/B/C/D → command boundaries + exit code (busy↔idle, command
   blocks); OSC 7 → cwd. Because not every CLI emits OSC, add a fallback quiescence
   heuristic in Phase 2.

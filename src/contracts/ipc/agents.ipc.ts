@@ -124,6 +124,34 @@ export interface AgentCommandRequest {
   remoteHostId?: string
   /** The command is typed into the POSIX shell on the far side of SSH. */
   remote?: boolean
+  /**
+   * `false` = a PREFETCH build: compute the command, but DEFER every effect that spends
+   * something a discarded build must not spend — the one-shot session overrides, the
+   * restore shelf's exact-session intent, the pane's session declaration, the
+   * agent-bearing mark. `agents:commandCommit` applies them at the moment the command
+   * is really typed. Default (omitted/true) is the immediate shape every caller had.
+   *
+   * This is what lets a RESUME launch overlap its build with the pane-live and
+   * spawn-settled waits — and a profile switch overlap it with the interrupt — instead
+   * of paying for it afterwards. Those paths could not prefetch before precisely
+   * because building consumed one-shots that an adopted (never-typed) launch would
+   * have thrown away.
+   */
+  consume?: boolean
+}
+
+/** Apply a prefetched build's deferred effects — the moment its command is typed. */
+export interface AgentCommandCommitRequest {
+  agentId: AgentCliId
+  paneId?: number
+  workspaceId?: string
+}
+
+/** `ok:false` = there was nothing pending for that pane (never built, already
+ *  committed, or the TTL lapsed). The caller must rebuild with `consume` unset rather
+ *  than type a command whose effects were never claimed. */
+export interface AgentCommandCommitResult {
+  ok: boolean
 }
 
 /** A failed source-of-truth reconciliation must be visible, never a silent null launch. */
@@ -132,6 +160,13 @@ export interface AgentCommandResult {
   command?: string
   /** Honest launch refusal (unknown agent, missing remote, or scoped-plan conflict). */
   reason?: string
+  /** claude launches: main declared the launch cwd TRUSTED in the launch home (and
+   *  carried the cwd's grants from the other homes — claude-project-state.ts), so the
+   *  folder-trust dialog will not paint. The renderer skips its trust-settle wait. */
+  trustPrepared?: boolean
+  /** Dev/measurement: wall-ms main spent building this command (handler entry →
+   *  return). The launch-latency gates read it; never rendered to the user. */
+  buildMs?: number
   /** Local launches only: the profile declares an email but its config home
    *  disagrees — nobody signed in yet (no `actual`), or a different account
    *  (`actual` names it). The profile email is a label the app cannot enforce

@@ -81,10 +81,22 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
       // ── A: spawn-run CLI delivery ──────────────────────────────────────────────
       await ES("window.__mogging.templates.open([{provider:'shell',count:1},{provider:'claude',count:1}])")
       // Settled = bookkeeping landed (session written) AND the command echoed in the pane.
+      //
+      // THE COVER, sampled along the way. This path hands the command to the daemon, which
+      // types it as the shell's first act — so a claude pane must be covered from before
+      // its first byte, and the SHELL pane beside it must never be (no agent, no cover).
+      // Watched here rather than asserted once because the cover is transient by design:
+      // it lifts on the CLI's own readiness signal, and a single late look would find the
+      // pane already handed over and call that a pass. That blind spot is exactly how this
+      // path shipped with no cover at all under a gate that already drove it.
       let aText = ''
       let aSession: { provider?: string } | null = null
+      let claudeWasCovered = false
+      let shellEverCovered = false
       for (let i = 0; i < 80; i++) {
         await delay(250)
+        if ((await ES(`window.__mogging.agents.paneCover(${CLAUDE_PANE})`)) === 'launching') claudeWasCovered = true
+        if ((await ES(`window.__mogging.agents.paneCover(${SHELL_PANE})`)) !== null) shellEverCovered = true
         aText = String(await ES(paneText(CLAUDE_PANE)))
         aSession = (await ES(`window.__mogging.agents.session(${CLAUDE_PANE})`)) as { provider?: string } | null
         if (/claude/.test(aText) && aSession) break
@@ -96,18 +108,32 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
       const spawnRunDelivered = /claude/.test(aText) && aTypedWrites.length === 0
       const spawnRunBookkept = aLast?.provider === 'claude' && aSession?.provider === 'claude'
       const shellPaneClean = aShellWrites.length === 0
+      // ...and the cover LIFTS. A cover that goes up and stays up is worse than none, so
+      // the gate waits it out rather than sampling once: bounded by the ceiling itself,
+      // which guarantees termination even if the CLI never signals (a fail either way —
+      // reaching the ceiling means the pane sat blurred long after it was usable).
+      let coverLifted = false
+      for (let i = 0; i < 140 && !coverLifted; i++) {
+        coverLifted = (await ES(`window.__mogging.agents.paneCover(${CLAUDE_PANE})`)) === null
+        if (!coverLifted) await delay(250)
+      }
+      const coveredWhileBooting = claudeWasCovered && coverLifted && !shellEverCovered
 
       // ── B: spawn-run custom delivery ───────────────────────────────────────────
       await ES(`window.__mogging.templates.open([{provider:'custom:echo ${CUSTOM_MARK}',count:1}])`)
       let bText = ''
+      let customEverCovered = false
       for (let i = 0; i < 60; i++) {
         await delay(250)
+        // A custom command is not a provider with a readiness signal — nothing could end
+        // its cover truthfully, so it must never get one.
+        if ((await ES(`window.__mogging.agents.paneCover(${CUSTOM_PANE})`)) !== null) customEverCovered = true
         bText = String(await ES(paneText(CUSTOM_PANE)))
         if (bText.indexOf(CUSTOM_MARK) >= 0) break
       }
       await delay(500)
       const bWrites = JSON.parse(String(await ES(markWritesOf(CUSTOM_PANE, CUSTOM_MARK)))) as SpyWrite[]
-      const customDelivered = bText.indexOf(CUSTOM_MARK) >= 0 && bWrites.length === 0
+      const customDelivered = bText.indexOf(CUSTOM_MARK) >= 0 && bWrites.length === 0 && !customEverCovered
 
       // ── C: the typed fallback bites ────────────────────────────────────────────
       await ES('window.__mogging.agents.setSpawnRunHold(6000)')
@@ -130,6 +156,7 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
         spawnRunDelivered &&
         spawnRunBookkept &&
         shellPaneClean &&
+        coveredWhileBooting &&
         customDelivered &&
         fallbackTypedOnce &&
         fallbackOrdered &&
@@ -139,6 +166,11 @@ export function runLaunchNowSmoke(win: BrowserWindow): void {
         spawnRunDelivered,
         spawnRunBookkept,
         shellPaneClean,
+        coveredWhileBooting,
+        claudeWasCovered,
+        coverLifted,
+        shellEverCovered,
+        customEverCovered,
         customDelivered,
         fallbackTypedOnce,
         fallbackOrdered,

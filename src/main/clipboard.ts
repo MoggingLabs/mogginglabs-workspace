@@ -4,6 +4,7 @@ import {
   ClipboardChannels,
   CLIPBOARD_HISTORY_LIMIT,
   CLIPBOARD_MAX_ENTRY_BYTES,
+  sameClipboardText,
   shellFlavor
 } from '@contracts'
 import type {
@@ -292,8 +293,7 @@ export function registerClipboard(): void {
     // content, which still differs) without falsely warning on every pasted code block. An
     // empty write has nothing to verify. `clipboard.readText` directly, NOT the audited
     // reader: this is a write-path check, not the history watcher opening the clipboard.
-    const sameText = (a: string, b: string): boolean => a.replace(/\r\n/g, '\n') === b.replace(/\r\n/g, '\n')
-    if (text && !sameText(clipboard.readText(), text)) throw new Error('clipboard write did not take')
+    if (text && !sameClipboardText(clipboard.readText(), text)) throw new Error('clipboard write did not take')
     recordOurText(text, payload?.source ?? 'app')
   })
 
@@ -368,7 +368,10 @@ export function registerClipboard(): void {
         clipboard.clear()
         lastImageSig = ''
       }
-    } else if (gone.text && readClipboardText() === gone.text) {
+      // Same predicate as the write check above. With a strict === this asked a DIFFERENT
+      // question than the one that wrote the text, so deleting the row that IS the clipboard
+      // left it on the clipboard.
+    } else if (gone.text && sameClipboardText(readClipboardText(), gone.text)) {
       clipboard.clear()
       lastText = ''
     }

@@ -12,12 +12,23 @@
 // MOGGING_DAEMON_ENDPOINT), authed socket handshake, an event LABEL only — never
 // prompt/PTY content or credentials (ADR 0002). A hook must never fail its agent:
 // every path exits 0, and outside an app pane it no-ops.
+//
+// One event never touches the socket: `session-start` (claude's SessionStart hook)
+// writes the pane's CONTEXT SINK instead — the transcript_path that names the exact
+// session log this pane now lives in, the identity the app's log matcher otherwise
+// has to guess (context/monitor.ts). Because the hook rides the GLOBAL wiring
+// (global-hooks.ts), a HAND-TYPED claude gets exact identity too — including a typed
+// resume, the one case no filesystem heuristic can reach.
+
+import { DAEMON_PROTOCOL_VERSION } from '@contracts'
 
 export const NOTIFY_HOOK_SOURCE = `// MoggingLabs Workspace notify hook - GENERATED, do not edit (rewritten on app start).
 // Raises the current pane's attention over the daemon's authed socket. Event label
 // only: no prompt text, no credentials. Always exits 0 (a hook must never fail its
 // agent); outside a MoggingLabs pane it silently no-ops.
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir, userInfo } from 'node:os'
 import * as net from 'node:net'
 
 const args = process.argv.slice(2)
@@ -62,6 +73,65 @@ if (typeof raw === 'string' && raw.trim().startsWith('{')) {
   }
 }
 if (!event) event = 'needs-input'
+
+// The payload rides stdin. Bounded: a TTY (a human running this by hand) or no payload
+// within 400ms resolves null; a hook must never hang its agent.
+const readStdinJson = () =>
+  new Promise((resolve) => {
+    if (process.stdin.isTTY) return resolve(null)
+    let buf = ''
+    let settled = false
+    const done = () => {
+      if (settled) return
+      settled = true
+      try {
+        resolve(JSON.parse(buf))
+      } catch {
+        resolve(null)
+      }
+    }
+    const t = setTimeout(done, 400)
+    t.unref?.()
+    process.stdin.setEncoding('utf8')
+    process.stdin.on('data', (c) => { buf += c })
+    process.stdin.on('end', () => { clearTimeout(t); done() })
+    process.stdin.on('error', () => { clearTimeout(t); done() })
+  })
+
+// Identity event (claude SessionStart: startup, --resume/--continue, /clear): write the
+// pane's CONTEXT SINK and stop. The payload's transcript_path names the EXACT session
+// log this pane now lives in — the app's log matcher pins it instead of guessing from
+// mtimes (a resumed transcript predates the pane's watch, which the matcher's birth
+// gate deliberately refuses to guess). Same rendezvous as the statusline relay
+// (context-relay.mjs): tmpdir + username + channel/protocol segment + pane id; the
+// segment is interpolated from the contract, never restated. Clobbering a relay sink
+// here is REQUIRED, not merely safe: SessionStart fires before the new identity's
+// first statusline render, so any numbers it overwrites belong to the previous
+// identity. Two silences are load-bearing: NEVER a daemon frame (notifyEventToState's
+// default arm reads unknown events as 'attention' — a session merely starting would
+// ring the pane red), and NEVER a byte on stdout (SessionStart hook stdout is added
+// to the model's context). SessionEnd is deliberately not wired: the app sweeps the
+// sink on unwatch, and a late SessionEnd racing the NEXT session's SessionStart
+// could delete fresh truth.
+if (event === 'session-start') {
+  if (paneId && /^[\\w.-]+$/.test(String(paneId))) {
+    const p = await readStdinJson()
+    const tp = p && typeof p.transcript_path === 'string' ? p.transcript_path : null
+    if (tp) {
+      try {
+        const SEGMENT = (process.env.MOGGING_CHANNEL === 'dev' ? 'dev-v' : 'v') + ${DAEMON_PROTOCOL_VERSION}
+        const dir = join(tmpdir(), 'mogging-ctx-' + userInfo().username + '-' + SEGMENT)
+        mkdirSync(dir, { recursive: true })
+        const file = join(dir, paneId + '.json')
+        const tmp = file + '.' + process.pid + '.tmp' // never the relay's own tmp name
+        writeFileSync(tmp, JSON.stringify({ at: Date.now(), usedPct: null, transcriptPath: tp }))
+        renameSync(tmp, file)
+      } catch {}
+    }
+  }
+  process.exit(0)
+}
+
 if (!paneId || !endpointFile) process.exit(0)
 
 // Claude Code's Notification hook is MULTIPLEXED: one event carrying eleven different
@@ -105,39 +175,19 @@ const notifTypeToEvent = (type) => {
   }
 }
 
-// The payload rides stdin. Bounded: a TTY (a human running this by hand) or no payload
-// within 400ms keeps the argv event; a hook must never hang its agent.
-const readStdinType = () =>
-  new Promise((resolve) => {
-    if (process.stdin.isTTY) return resolve(null)
-    let buf = ''
-    let settled = false
-    const done = () => {
-      if (settled) return
-      settled = true
-      try {
-        // 'notification_type' is the REAL discriminator -- VERIFIED against a live Claude Code
-        // turn, which hands a Notification hook exactly this:
-        //   {"hook_event_name":"Notification","notification_type":"idle_prompt",
-        //    "message":"Claude is waiting for your input","session_id":..,"cwd":..}
-        // The docs call it 'type'. It is not. Reading 'type' yielded undefined, undefined fell
-        // through to the argv event ('needs-input'), and so EVERY notification still painted the
-        // pane red -- completions included. That was the entire bug, and no unit test could have
-        // caught it: the tests fed the same wrong shape the code read. Only a live turn did.
-        // 'type' stays as a fallback for any other dialect that uses it.
-        const p = JSON.parse(buf)
-        resolve(p.notification_type ?? p.type ?? null)
-      } catch {
-        resolve(null)
-      }
-    }
-    const t = setTimeout(done, 400)
-    t.unref?.()
-    process.stdin.setEncoding('utf8')
-    process.stdin.on('data', (c) => { buf += c })
-    process.stdin.on('end', () => { clearTimeout(t); done() })
-    process.stdin.on('error', () => { clearTimeout(t); done() })
-  })
+// 'notification_type' is the REAL discriminator -- VERIFIED against a live Claude Code
+// turn, which hands a Notification hook exactly this:
+//   {"hook_event_name":"Notification","notification_type":"idle_prompt",
+//    "message":"Claude is waiting for your input","session_id":..,"cwd":..}
+// The docs call it 'type'. It is not. Reading 'type' yielded undefined, undefined fell
+// through to the argv event ('needs-input'), and so EVERY notification still painted the
+// pane red -- completions included. That was the entire bug, and no unit test could have
+// caught it: the tests fed the same wrong shape the code read. Only a live turn did.
+// 'type' stays as a fallback for any other dialect that uses it.
+const readStdinType = async () => {
+  const p = await readStdinJson()
+  return p ? (p.notification_type ?? p.type ?? null) : null
+}
 // Only the Notification hook is ambiguous - don't stall any other event on stdin.
 if (event === 'needs-input') {
   const type = await readStdinType()
@@ -229,7 +279,18 @@ export function claudeNotifyHooks(invocation: string): Record<string, unknown> {
     PostToolBatch: hook('busy'),
     SubagentStart: hook('subagent-start'),
     SubagentStop: hook('subagent-stop'),
-    UserPromptSubmit: hook('turn-start')
+    UserPromptSubmit: hook('turn-start'),
+    // SessionStart: the IDENTITY event, not a bell. Fires on startup, resume and /clear —
+    // exactly when the pane's session log changes — and the script writes transcript_path
+    // to the pane's context sink and exits (see the session-start branch above: never a
+    // daemon frame — notifyEventToState defaults unknown events to 'attention' — and never
+    // stdout, which SessionStart feeds to the model). Riding this map puts it in BOTH the
+    // launch overlay and the GLOBAL wiring (global-hooks.ts derives HOOK_EVENTS from these
+    // keys), which is what gives a HAND-TYPED claude — including a typed resume — the same
+    // exact gauge identity as an app launch. SessionEnd is deliberately absent: the app
+    // sweeps the sink on unwatch, and a late SessionEnd racing the next session's
+    // SessionStart could delete fresh truth.
+    SessionStart: hook('session-start')
   }
 }
 
@@ -264,7 +325,18 @@ export function claudeNotifyHooks(invocation: string): Record<string, unknown> {
  *
  *  `notifyScript` is the generated notify.mjs (null when it could not be written, or when
  *  its path contains a `'` — a TOML literal cannot escape one, and a launch must never
- *  break over the bell). Without it Codex keeps the OSC-9 baseline. */
+ *  break over the bell). Without it Codex keeps the OSC-9 baseline.
+ *
+ *  WHY THESE STAY `-c` ARGS (considered and rejected, 2026-08-02): codex 0.146 offers
+ *  `-p/--profile <name>`, which layers `$CODEX_HOME/<name>.config.toml` and would
+ *  collapse these 8-12 pairs into one flag. It is not worth it. The args cost nothing
+ *  at runtime — a longer typed line, nothing more — while a generated profile would be
+ *  a WRITE INTO THE USER'S OWN CODEX HOME, which this layer exists precisely to avoid
+ *  (generated config lives in userData; user homes get only guarded, legible edits).
+ *  It would also add a second stale-config surface — every bell/title change needing
+ *  regeneration, a stale file silently changing launch behavior — and a name collision
+ *  with a profile the user already has is unresolvable politely. Revisit only if codex
+ *  ever caps argv length. */
 export function codexBellArgs(notifyScript?: string): string[] {
   const args = [
     '-c', 'tui.notifications=true',

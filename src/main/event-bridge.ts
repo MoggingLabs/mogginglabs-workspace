@@ -1,6 +1,6 @@
 import { ipcMain, type BrowserWindow } from 'electron'
 import { BRIDGE_EVENTS, IntegrationsChannels, type BridgeEventName } from '@contracts'
-import { buildBridgeEvent, deliverWebhook, urlAllowed, webhookReceives } from '@backend/features/integrations'
+import { PaneStateHistory, buildBridgeEvent, deliverWebhook, urlAllowed, webhookReceives } from '@backend/features/integrations'
 import { getSettingsStore } from './app-settings'
 import { paneHasAgent } from './agent-presence'
 import { vaultAvailable, vaultClearKey, vaultLoad, vaultStore } from './vault'
@@ -206,14 +206,25 @@ async function nodeFetch(url: string, init: { method: string; headers: Record<st
 }
 
 // ── The house-event subscription (attention stream, daemon untouched) ────────
-const lastState = new Map<number, string>()
+//
+// Keyed by pane id, and pane ids are REUSED — a split takes the lowest free slot. So an
+// entry left behind by a closed pane becomes the "previous state" of whatever opens at
+// that id next: a successor whose very first state is `attention` finds prev === 'attention'
+// and the transition is swallowed. The user's automations never hear about the one pane
+// that opened already needing them. (The mirror of the same id-reuse rule the daemon states
+// for roles and claims, and the renderer for liveness marks.)
+const paneStates = new PaneStateHistory()
+
+/** The pane is gone for good — forget it, so a reused id starts with no history.
+ *  Called from the same place that tells agent-presence (daemon-relay's onExit). */
+export function onPaneGoneForBridge(paneId: number): void {
+  paneStates.forget(paneId)
+}
 /** Called from daemon-relay's onState. A transition INTO attention = a pane
  *  needs the human -> a `needs-you` bridge event (ids only; the daemon dropped
  *  the note, honestly). */
 export function onPaneStateForBridge(paneId: number, state: string): void {
-  const prev = lastState.get(paneId)
-  lastState.set(paneId, state)
-  if (state === 'attention' && prev !== 'attention') {
+  if (paneStates.enters(paneId, state, 'attention')) {
     // ALERTAGREE: the wire tells the same story as the pane. The daemon's tracker runs for
     // every pane — a plain shell's BEL latches `attention` too — but only a pane that runs an
     // agent may say "needs-you" to the user's automations, exactly as only such a pane may

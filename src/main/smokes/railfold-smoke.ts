@@ -1,6 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { MOD_KEY_FIELD } from './kit'
 
 // Env-gated rail fold/unfold smoke (MOGGING_RAILFOLD, 2026-07-18). The rail's width
 // TRANSITIONS (--dur-rail) but its collapsed end-state is a discrete re-layout — and
@@ -77,7 +78,10 @@ export function runRailfoldSmoke(win: BrowserWindow): void {
           overlap: !!(ir && cr && shown && cr.left < ir.right - 0.5 && cr.right > ir.left + 0.5)
         }
       }
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, shiftKey: true }))
+      // The PLATFORM's modifier (Cmd on macOS, Ctrl elsewhere): the rail toggle gates on
+      // isModKey, which core/commands/chords.ts made the platform's own and never both --
+      // accepting either had made the WINDOWS key a modifier here (Win+Shift+B).
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ${MOD_KEY_FIELD}: true, shiftKey: true }))
       // The rail-anim stamp rides app-shell's MutationObserver MICROTASK — a snap in the
       // dispatch task itself would force layout on the collapse classes WITHOUT the
       // in-flight rules, a state the observer guarantees can never paint (that phantom

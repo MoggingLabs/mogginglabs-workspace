@@ -1,6 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { MOD_KEY_FIELD } from './kit'
 
 // Env-gated EQUALIZE smoke (MOGGING_EQUALIZE) — the equalize/balance verbs, driven through
 // the REAL surfaces a user touches, never the model directly:
@@ -179,7 +180,12 @@ const PHASE_B = `(async () => {
   await press(gutter('1', 1), 'ArrowDown')
   check('5 CONTROL: skewed again for the chord', slotBox(spanner).w - slotBox(top).w >= 60,
     slotBox(spanner).w + ' vs ' + slotBox(top).w)
-  window.dispatchEvent(new KeyboardEvent('keydown', { key: '+', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }))
+  // The PLATFORM's modifier (Cmd on macOS, Ctrl elsewhere). The workspace listener gates every
+  // chord on isModKey (features/workspace/index.ts), which core/commands/chords.ts made the
+  // platform's own and never both -- accepting either had made the WINDOWS key a modifier.
+  // A hardcoded Ctrl press on a Mac is that refusal working correctly, so asserting it balances
+  // would assert the defect the product just removed.
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: '+', ${MOD_KEY_FIELD}: true, shiftKey: true, bubbles: true, cancelable: true }))
   await sleep(300)
   const sK = slotBox(spanner); const tK = slotBox(top); const bK = slotBox(bottom)
   check('5 Ctrl+Shift+= balances', near(sK.w, tK.w, 2) && near(tK.h, bK.h, 1), JSON.stringify({ sK, tK, bK }))

@@ -162,34 +162,6 @@ export interface Approval {
 
 /** Validate + normalize a claim pattern: repo-relative glob, forward slashes, no
  *  `..`, no absolute/drive roots. Returns null when the shape is unacceptable. */
-export function normalizeClaimPattern(raw: string): string | null {
-  if (typeof raw !== 'string') return null
-  const p = raw.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '')
-  if (!p || p.length > CLAIM_PATTERN_MAX) return null
-  if (p.startsWith('/') || /^[A-Za-z]:/.test(p)) return null // absolute / drive root
-  if (p.split('/').some((seg) => seg === '..' || seg === '')) return null
-  return p
-}
-
-/** Conservative glob-vs-glob overlap: only a PURE-LITERAL segment mismatch proves
- *  the branches diverge — `**`, `*`, partial wildcards, prefix containment all count
- *  as overlap. When in doubt, DENY (the ledger is a referee, not an oracle). */
-export function claimsOverlap(a: string, b: string): boolean {
-  const sa = a.split('/')
-  const sb = b.split('/')
-  for (let i = 0; ; i++) {
-    const x = sa[i]
-    const y = sb[i]
-    if (x === undefined || y === undefined) return true // equal or prefix-contained
-    if (x === '**' || y === '**') return true
-    // Only a pure-literal mismatch proves divergence. A wildcard segment on either
-    // side may or may not match — the walk continues as if it did, so a later
-    // literal-vs-literal mismatch can still separate the branches; anything else
-    // reaches the end and denies (the conservative default).
-    if (!x.includes('*') && !y.includes('*') && x !== y) return false // proven divergence
-  }
-}
-
 /** Discovery record the daemon writes and the client reads (mode 0600). */
 export interface DaemonEndpoint {
   version: number

@@ -1,4 +1,8 @@
-import { normalizeRemoteConnection, type PersistedPane } from '@contracts'
+import { normalizeRemoteConnection, REMOTE_READY_OSC, type PersistedPane } from '@contracts'
+
+/** Remove the live remote-readiness signal from persisted history. Imported, never spelled:
+ *  a second copy of these bytes is a second thing to keep in agreement. */
+const stripReadinessMarkers = (text: string): string => text.split(REMOTE_READY_OSC).join('')
 
 // The PURE half of session persistence: PersistedPane <-> the panes-table row shape,
 // sqlite-free so the unit tier can bite on the mapping (the workspace-rows.ts lesson:
@@ -61,7 +65,11 @@ export function paneToRow(p: PersistedPane): PaneRowCells {
     remotePlatform: p.remote?.platform ?? null,
     remoteShell: p.remote?.shell ?? null,
     command: p.command ?? null,
-    scrollback: p.scrollback.slice(-PERSISTED_SCROLLBACK_CHARS),
+    // The remote-readiness OSC is a LIVE signal, not history. It is ordinary pty output, so
+    // it lands in scrollback like anything else - and on a cold-start restore the replay feeds
+    // it back through the parser, declaring a brand-new unauthenticated ssh session READY.
+    // The resume lineup then types into a password prompt. Stripped on the way out...
+    scrollback: stripReadinessMarkers(p.scrollback).slice(-PERSISTED_SCROLLBACK_CHARS),
     gridCols: p.cols ?? null,
     gridRows: p.rows ?? null,
     updatedAt: p.updatedAt
@@ -103,7 +111,9 @@ export function rowToPane(r: PaneRowCells): PersistedPane | null {
     // that a restored pane comes back speaking the dialect it went away in.
     remote: remote ? { ...remote, cwd: r.remoteCwd ?? undefined, shell: asRemoteShell(r.remoteShell) } : undefined,
     command: r.command ?? undefined,
-    scrollback: r.scrollback,
+    // ...and on the way IN, because rows written by every build before this one already hold
+    // it. A write-side fix alone protects nobody who is upgrading.
+    scrollback: stripReadinessMarkers(r.scrollback),
     ...(cols !== undefined && rows !== undefined ? { cols, rows } : {}),
     updatedAt: r.updatedAt
   }

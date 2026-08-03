@@ -273,15 +273,29 @@ export const boardFeature: UiFeature = {
         run: () => setActiveView(activeView() === 'board' ? 'grid' : 'board')
       }
     ])
-    window.addEventListener('keydown', (e) => {
-      // A global shortcut must not fire from a modal or a text field (finding
-      // 29), and must use the platform modifier, not bare ctrlKey (finding 28).
-      if (shortcutsBlocked(e.target)) return
-      if (isModKey(e) && e.shiftKey && !e.altKey && e.code === 'KeyG') {
-        e.preventDefault()
-        setActiveView(activeView() === 'board' ? 'grid' : 'board')
-      }
-    })
+    // CAPTURE, like the workspace's pane verbs and the rail's Ctrl+Shift+B. It listened in
+    // the BUBBLE phase, which made the guard below unreachable on the one path it exists
+    // for: a text field that calls stopPropagation() (the workspace rename input does)
+    // ended the event before it ever got here, so on Windows/Linux "Ctrl+Shift+G must not
+    // open the Board while renaming" held by accident, and `shortcutsBlocked` was never
+    // asked. The events that DID arrive were the ones the focused field had not swallowed —
+    // whose target is therefore something else — so the guard's one question was the one
+    // question that could not come back true, and on macOS the Board opened mid-rename.
+    // Capturing puts this on the same footing as every other global chord: the guard, not
+    // another surface's stopPropagation(), is what decides.
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        // A global shortcut must not fire from a modal or a text field (finding
+        // 29), and must use the platform modifier, not bare ctrlKey (finding 28).
+        if (shortcutsBlocked(e.target)) return
+        if (isModKey(e) && e.shiftKey && !e.altKey && e.code === 'KeyG') {
+          e.preventDefault()
+          setActiveView(activeView() === 'board' ? 'grid' : 'board')
+        }
+      },
+      true
+    )
     void model.openForActiveWorkspace()
 
     // Dev/smoke handle — same pattern as the other features.

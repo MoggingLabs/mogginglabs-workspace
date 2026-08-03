@@ -187,6 +187,13 @@ export function spawnLocalMcpSmokeClient(
  * hands its bytes to the bridge's own (unread) stdin — the shell never runs them, and this
  * call simply times out waiting for a connection that was never launched. A smoke that
  * needs N concurrent pane-bound sessions needs N panes.
+ *
+ * A SHELL MUST BE READING THE PANE'S KEYBOARD. `mogging send` exiting 0 proves the daemon
+ * accepted the bytes and wrote them to the pty — never that anything ran them. Type into a
+ * pane a foreground CLI owns, or one whose shell is parked on a continuation prompt, and
+ * the line is swallowed: no bridge process, no connection, and the 15s watchdog below is
+ * all that reports it. Every caller here spawns into a pristine pane except the milestone's
+ * board-LAUNCHED one, which is why the timeout carries the pane's own bytes.
  */
 export async function spawnPaneMcpSmokeClient(options: PaneClientOptions): Promise<PaneMcpSmokeClient> {
   const nonce = `${process.pid}-${randomBytes(8).toString('hex')}`
@@ -199,7 +206,13 @@ export async function spawnPaneMcpSmokeClient(options: PaneClientOptions): Promi
   let socket: Socket | null = null
   const server = createServer()
   const accepted = new Promise<Socket>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`pane ${options.paneId} MCP bridge timed out`)), 15_000)
+    const timer = setTimeout(() => {
+      const timedOut: Error & { paneBridgeTimeout?: true } = new Error(
+        `pane ${options.paneId} MCP bridge timed out`
+      )
+      timedOut.paneBridgeTimeout = true // the catch below adds the pane's testimony
+      reject(timedOut)
+    }, 15_000)
     server.once('connection', (connected) => {
       clearTimeout(timer)
       socket = connected
@@ -252,6 +265,20 @@ export async function spawnPaneMcpSmokeClient(options: PaneClientOptions): Promi
     ;(socket as Socket | null)?.destroy()
     server.close()
     try { unlinkSync(bridgePath) } catch { /* best effort */ }
+    if ((error as { paneBridgeTimeout?: true }).paneBridgeTimeout) {
+      // The house debugging law: only the pane's own bytes prove what the shell did with
+      // the line we typed. A bare "timed out" cannot tell a bridge that crashed from a
+      // command that was never run at all — the difference is on screen, and a CI red is
+      // the one place nobody can go and look.
+      let tail = ''
+      try {
+        const shot = await options.cli(['capture', options.paneId, '--lines', '40'])
+        tail = shot.stdout.slice(-1200)
+      } catch {
+        /* testimony is best effort; the verdict never depends on it */
+      }
+      throw new Error(`${(error as Error).message} — pane tail=${JSON.stringify(tail)}`, { cause: error })
+    }
     throw error
   }
 }

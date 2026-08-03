@@ -69,12 +69,26 @@ export function isWriteToolGranted(
  *  bank/mail/gov session. Moved here from `@contracts/usage` (its comment
  *  always said this was the 8/01 blocklist, needed there first). */
 export const SENSITIVE_ORIGIN_PATTERNS: readonly string[] = [
-  'bank', 'chase.com', 'wellsfargo', 'paypal', 'venmo', 'coinbase', 'stripe.com',
-  'mail.google', 'gmail', 'outlook', 'mail.', 'proton.me',
-  '.gov', 'irs.gov', 'ssa.gov',
+  // 'bank' covers bankofamerica and every host with the word in it — which is exactly
+  // why the list looked complete and was not. The institutions that do NOT say "bank"
+  // are the majority of the ones a person actually holds money at, and every one of them
+  // was reachable: citi, fidelity, schwab, vanguard, robinhood, capitalone, amex.
+  'bank', 'chase.com', 'wellsfargo', 'citi.com', 'citibank', 'capitalone', 'usbank',
+  'pnc.com', 'truist', 'hsbc', 'barclays', 'lloyds', 'natwest', 'santander', 'monzo',
+  'revolut', 'wise.com', 'nubank',
+  // Brokerages and retirement — a session here is worth as much as a bank's.
+  'fidelity.com', 'schwab.com', 'vanguard.com', 'etrade', 'robinhood', 'interactivebrokers',
+  'ameritrade', 'merrilledge',
+  // Payments and crypto.
+  'paypal', 'venmo', 'cash.app', 'squareup', 'coinbase', 'kraken.com', 'binance',
+  'stripe.com', 'americanexpress', 'amex.com',
+  // Mail — a mailbox is a password-reset machine for everything else.
+  'mail.google', 'gmail', 'outlook', 'mail.', 'proton.me', 'fastmail',
+  // Government and identity.
+  '.gov', 'irs.gov', 'ssa.gov', 'gov.uk', 'id.me',
   // Matched against ORIGINS, which never carry a path — a pattern with a '/'
   // in it can never fire. Apple's account surface is its own host.
-  'icloud.com', 'appleid.apple.com'
+  'icloud.com', 'appleid.apple.com', 'accounts.google.com', 'login.microsoftonline.com'
 ]
 export function isSensitiveOrigin(origin: string): boolean {
   const h = origin.toLowerCase()

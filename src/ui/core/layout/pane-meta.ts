@@ -22,6 +22,29 @@ export function onPaneLabel(cb: (paneId: PaneId, label: string) => void): () => 
   return () => subscribers.delete(cb)
 }
 
+// ── User title: the name a user TYPED into the rename dialog. Deliberately a
+// separate field from the launch label above — the label is provider identity
+// ("Claude Code") that an agent's live OSC task title is meant to outrank, while
+// a typed name is a decision that outranks both. Empty string clears it (the
+// pane returns to automatic titles). Same port pattern. ──
+const userTitles = new Map<PaneId, string>()
+const userTitleSubscribers = new Set<(paneId: PaneId, title: string) => void>()
+
+export function setPaneUserTitle(paneId: PaneId, title: string): void {
+  if (title) userTitles.set(paneId, title)
+  else userTitles.delete(paneId)
+  for (const cb of userTitleSubscribers) cb(paneId, title)
+}
+
+export function getPaneUserTitle(paneId: PaneId): string | undefined {
+  return userTitles.get(paneId)
+}
+
+export function onPaneUserTitle(cb: (paneId: PaneId, title: string) => void): () => void {
+  userTitleSubscribers.add(cb)
+  return () => userTitleSubscribers.delete(cb)
+}
+
 // ── Swarm role (Phase-4/01): named by the workspace feature from the template
 // manifest; rendered by TerminalPane as a `.pane-role` chip. Same port pattern. ──
 const roles = new Map<PaneId, string>()

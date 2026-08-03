@@ -11,18 +11,27 @@ at Phase 7/13; the parity map lives in
 
 ## What the meter shows
 
-- **The titlebar gauge**: two bars (session over weekly — the CodexBar icon
-  grammar), a ≥90% dot badge, a provider-incident dot (7/08), and optional
-  `%` / glyph / label content (7/10). Which plan it mirrors is a display
-  mode: **merged** (highest severity — the default), **auto** (highest
-  usage), or **pinned** (one provider).
+- **The titlebar gauge**: two bars (session over weekly) that fill with the
+  % LEFT — the SAME remaining-fill grammar as every popover bar (a full
+  track is a full tank; it drains as you use) — a ≥90%-used dot badge, a
+  provider-incident dot (7/08), and optional `%` (also % left) / glyph /
+  label content (7/10). Which plan it mirrors is a display mode: **merged**
+  (highest severity — the default), **auto** (highest usage), or **pinned**
+  (one provider).
 - **The popover** (click the gauge): the CodexBar bar's own layout — a
-  segmented strip (Overview · one tab per provider), then stacked provider
-  sections: header (name · account · age · tier), per-window bars that fill
-  with the % LEFT (a tick marks where the budget line sits), reset lines,
-  the pace verdict, the cost cluster (2×2 stat grid + 30-day spark), and
-  health (`fresh · stale · error · unconfigured`). `stale` means the last
-  good reading re-served after an error — old data, honestly aged, never
+  segmented strip (Overview · one tab per provider, remaining-fill
+  hairlines), then stacked provider sections: header (name · pills only
+  when news · the ACCOUNT SWITCHER — the active profile's name with a
+  fold-down chevron that opens the lane list; one lane = plain text, no
+  arrow), per-window bars that fill with the % LEFT (a tick marks where the
+  budget line sits) with a signed delta chip per window (verdict + risk in
+  its tooltip), reset lines, ONE plan-level pace verdict per section, a
+  labeled credits/spend row (a cloud provider's spend reads "Billed this
+  month" — an actual bill; the tooltip says how it is measured), the cost
+  cluster (2×2 stat grid + 30-day spark, tagged "local estimate"; absent on
+  cloud-cli providers, whose spend row IS the bill), and health
+  (`fresh · stale · error · unconfigured`). `stale` means the last good
+  reading re-served after an error — old data, honestly aged, never
   dropped. The active profile's lane carries the selection bar; Enter or
   click switches which profile NEW launches use. (The strip has no Auto
   chip — auto stays a Settings § Usage display mode.)
@@ -267,7 +276,7 @@ involves any credential the app would hold, stop: that is the line ADR
 `mogging usage --json` + `usage cost --json` are stable contracts
 (`PlanUsage[]`, `CostScan[]`) for scripts and CI. The six usage gates
 (USAGE, USAGEUI, USAGEGLANCE, WEBUSAGE, USAGECLI, USAGESET) run in the same
-207-gate sweep as everything else, on Windows, macOS, and Linux — entirely on
+215-gate sweep as everything else, on Windows, macOS, and Linux — entirely on
 the FAKE adapter: under any usage smoke env the registry holds no real adapter,
 the status poller holds no fetcher, and the cost scan reads only a seeded
 fixture dir. Zero network is structural, not disciplined.

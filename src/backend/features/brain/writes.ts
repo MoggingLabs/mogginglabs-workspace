@@ -66,7 +66,7 @@ const SHA256_HEX = /^[0-9a-f]{64}$/
 
 /** 0-based byte offset where each 1-based line starts. A trailing newline does
  *  not open a phantom last line — mirroring how the extractor counts lines. */
-function lineStarts(buf: Buffer): number[] {
+export function lineStarts(buf: Buffer): number[] {
   const starts = [0]
   for (let i = 0; i < buf.length; i++) if (buf[i] === 0x0a) starts.push(i + 1)
   if (starts.length > 1 && starts[starts.length - 1] === buf.length) starts.pop()
@@ -77,14 +77,14 @@ const lineEndOffset = (buf: Buffer, starts: number[], line: number): number =>
   line < starts.length ? starts[line] : buf.length
 
 /** The line's own terminator: '\r\n', '\n', or '' (EOF without one). */
-function eolOfLine(buf: Buffer, starts: number[], line: number): string {
+export function eolOfLine(buf: Buffer, starts: number[], line: number): string {
   const end = lineEndOffset(buf, starts, line)
   if (end > 0 && buf[end - 1] === 0x0a) return end > 1 && buf[end - 2] === 0x0d ? '\r\n' : '\n'
   return ''
 }
 
 /** Leading blanks of the line, decoded losslessly (indent bytes are ASCII). */
-function indentOfLine(buf: Buffer, starts: number[], line: number): string {
+export function indentOfLine(buf: Buffer, starts: number[], line: number): string {
   const start = starts[line - 1]
   const end = lineEndOffset(buf, starts, line)
   let i = start
@@ -100,7 +100,7 @@ const countNewlines = (s: string): number => {
 
 /** The anchor's indentation, prepended to every non-blank payload line — the
  *  caller writes the text unindented; blank lines stay bare. */
-function applyIndent(text: string, indent: string): string {
+export function applyIndent(text: string, indent: string): string {
   if (!indent) return text
   return text
     .split(/(?<=\n)/)

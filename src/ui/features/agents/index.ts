@@ -1,6 +1,16 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { AgentHookChannels, IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentCliId, type AgentCommandResult, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type GlobalHooksMutationResult, type GlobalHooksStatus, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
+import { AgentChannels, AgentHookChannels, IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentCliId, type AgentCommandResult, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type GlobalHooksMutationResult, type GlobalHooksStatus, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
 import { dismissSignInBanner, offerSignIn } from './signin-banner'
+import { interruptAgent, noteAgentGone, noteAgentPresent, recordSwitchPhase, resetSwitchTrace, switchTrace } from './interrupt'
+import { endProvesAgentGone } from './interrupt-core'
+import { NO_LAUNCH_COVER, beginLaunchCover, type LaunchCover } from './launch-readiness'
+import { autoTrustClaudeLaunch, isTrustSettled, markTrustPrepared } from './auto-trust'
+import { trustDialogLive } from './prompt-answer'
+import { typeContinuation } from './continuation'
+import { readPaneBufferTail } from '../../core/terminal/pane-buffer-port'
+import { paneMatchesCappedLane } from './profile-match'
+import { getPaneFailoverOffer, setPaneFailoverOffer } from '../../core/agents/failover-offer-port'
+import { announceUsageCapped, onUsageCapped } from '../../core/usage/usage-capped-port'
 import { recordPaneLaunch } from '../../core/agents/toolplan-panes'
 import { recordPaneCli, setMcpSnapshot } from '../../core/agents/mcp-status-port'
 
@@ -11,15 +21,18 @@ import { getPaneCwd, getPaneCwdProjection, onPaneCwdProjection, setPaneCwd } fro
 import { getPaneRemote, setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover, type AgentLaunchRequest } from '../../core/agents/launch-port'
 import { armSpawnRun, whenSpawnRunOutcome } from '../../core/terminal/spawn-run-port'
-import { clearPaneAgentSession, getPaneAgentSession, setPaneAgentSession, type PaneAgentSession } from '../../core/agents/agent-session-port'
-import { setCommands } from '../../core/commands/command-port'
+import { paneInstance } from '../../core/terminal/pane-instance-port'
+import { clearPaneAgentSession, getPaneAgentSession, onPaneAgentSession, setPaneAgentSession, type PaneAgentSession } from '../../core/agents/agent-session-port'
+import { allCommands, setCommands } from '../../core/commands/command-port'
 import { setActiveView } from '../../core/shell/view-port'
 import { requestSettingsTab } from '../../core/shell/settings-tab-port'
-import { getWorkspaces, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
+import { getWorkspaces, onWorkspacesChange, workspaceIdForPane } from '../../core/workspace/workspace-info-port'
 import { onProfilesChanged } from '../../core/agents/profiles-port'
 import {
+  clearPaneReattached,
   isPaneLive,
   isPaneRemoteReady,
+  markPaneReattached,
   markPaneRemoteReady,
   paneLiveAt,
   wasPaneReattached,
@@ -63,8 +76,13 @@ export const agentsFeature: UiFeature = {
     })
     const nameById = new Map<string, string>()
     let installedIds: string[] = []
+    /** The last-listed profiles — the capped-claim's SYNCHRONOUS order-0 lookup
+     *  (populate() refreshes it on mount, registry change, and every profiles edit). */
+    let cachedProfiles: AgentProfile[] = []
     /** What launched in each pane — the failover context. Values are ids only. */
     const lastLaunch = new Map<number, { provider: string; cwd: string; profileId?: string }>()
+    /** Main's build wall-ms for the most recent launch (dev measurement seam). */
+    let lastBuildMs: number | null = null
     /** Per-workspace auto-failover opt-in (in-memory; the toast is the default). */
     const autoFailover = new Map<string, boolean>()
     /** One-hop guard: a pane mid-failover ignores further limit events. */
@@ -121,10 +139,35 @@ export const agentsFeature: UiFeature = {
       else void launchInPane(req.paneId as number, req.provider, req.cwd, req.resume, req.profileId)
     })
 
-    // Usage-limit events (4/04) arrive on a dedicated channel from the daemon.
+    // Usage-limit events (4/04) arrive on a dedicated channel from the daemon —
+    // the immediate trigger, when a provider hook ever emits one.
     getBridge().on(TerminalChannels.limit, (payload) => {
       const id = Number((payload as { id?: number })?.id)
-      if (Number.isFinite(id)) void onLimit(id)
+      if (Number.isFinite(id)) void offerSwitch(id, 'notify')
+    })
+
+    // Persisted auto-failover follows the ACTIVE workspace (F6): hydrate its stored
+    // state on every switch and keep the palette title honest about it.
+    let lastActiveWs: string | null = null
+    onWorkspacesChange((snap) => {
+      if (snap.activeId === lastActiveWs) return
+      lastActiveWs = snap.activeId
+      if (!snap.activeId) return
+      void hydrateAutoFailover(snap.activeId).then(() => publishFailoverCommand())
+    })
+
+    // The usage ENGINE's trigger (F4): a lane crossed 100% ('capped' alert). Claim it
+    // by raising the offer on every LIVE pane running that lane; unclaimed events fall
+    // back to the usage feature's toast. Synchronous claim over in-memory state only.
+    onUsageCapped((ev) => {
+      const orderZero = cachedProfiles
+        .filter((p) => p.provider === ev.providerId)
+        .sort((a, b) => a.order - b.order)[0]?.id
+      const targets = [...lastLaunch.entries()].filter(
+        ([id, ctx]) => isPaneLive(id) && !failingOver.has(id) && paneMatchesCappedLane(ctx, ev, orderZero)
+      )
+      for (const [id] of targets) void offerSwitch(id, 'capped')
+      return targets.length > 0
     })
 
     // TYPED-LAUNCH DETECTION. The backend watches each pane's PTY subtree and says which
@@ -134,6 +177,19 @@ export const agentsFeature: UiFeature = {
     // HERE because `agents` is the port's one writer, so a detected session is the same
     // object as a launched one: context gauge, provider mark, MCP chip, failover, resume.
     getBridge().on(TerminalChannels.agent, (payload) => void onAgentDetected(payload as AgentDetectedEvent))
+
+    // Belt and braces beside the process verdict: a PTY exit, or the pane being closed
+    // out from under the switch, also mean "nothing left to interrupt" — and a WRITTEN
+    // session re-arms the gone signal, so a switch started while the next CLI is already
+    // booting waits for a real exit instead of insta-succeeding on stale state.
+    //
+    // But only the ends that are PROOF (interrupt-core's endProvesAgentGone). This used
+    // to note EVERY clear as gone, which handed the interrupt the OSC-133 prompt guess as
+    // a verdict — the fail-closed hole the PROFSWITCH flake was.
+    onPaneAgentSession((paneId, session, end) => {
+      if (session) noteAgentPresent(Number(paneId))
+      else if (end && endProvesAgentGone(end)) noteAgentGone(Number(paneId))
+    })
 
     async function onAgentDetected(ev: AgentDetectedEvent): Promise<void> {
       const paneId = Number(ev?.id)
@@ -146,16 +202,31 @@ export const agentsFeature: UiFeature = {
       // relaunch, a user relaunching by hand) is a different session, and its identity must
       // survive its predecessor's death rattle.
       if (!ev.agentId) {
-        if ((detectedAt.get(paneId) ?? 0) >= (sessionSetAt.get(paneId) ?? 0)) clearPaneAgentSession(paneId as PaneId)
+        // The reattach mark describes the pane's SPAWN-TIME agent ("already running when
+        // we asked"). The process table just said that agent is gone — whichever session
+        // the guard below decides to keep, a future resume typed here is a real launch
+        // again, not words into a running CLI (audit F1: the mark used to hold for the
+        // pane's whole life, so every post-restart failover adopted and typed nothing).
+        clearPaneReattached(paneId)
+        // The deterministic interrupt (interrupt.ts) waits on exactly this verdict —
+        // fired BEFORE the stamp guard below, which may legitimately keep an adopted
+        // session while the process is nonetheless gone.
+        noteAgentGone(paneId)
+        if ((detectedAt.get(paneId) ?? 0) >= (sessionSetAt.get(paneId) ?? 0)) clearPaneAgentSession(paneId as PaneId, 'verdict')
         // The offer belonged to the agent that just died. Leaving it up would ask the user
         // to sign a CLI in that is no longer running, into a shell that would reject the
         // slash command it was built for.
         dismissSignInBanner(paneId)
+        // Same honesty for a standing profile-switch OFFER: the capped agent it was
+        // about is gone. A 'switching' overlay stays — this verdict IS its success
+        // signal mid-flight, and the flow settles it itself.
+        if (getPaneFailoverOffer(paneId as PaneId)?.state === 'offered') setPaneFailoverOffer(paneId as PaneId, null)
         return
       }
       // ONE stamp for this verdict and for any session it writes below — see writeSession.
       const at = Date.now()
       detectedAt.set(paneId, at)
+      noteAgentPresent(paneId) // an interrupt started later must wait for a REAL exit
 
       // The app launched this very CLI here: its own record is strictly richer (the exact launch
       // cwd, the profile it chose), so detection only CONFIRMS it — rewriting would restart the
@@ -318,6 +389,7 @@ export const agentsFeature: UiFeature = {
       installedIds = installed.map((a) => a.id)
       const profiles = await listProfiles()
       if (generation !== populateGeneration) return
+      cachedProfiles = profiles
       // Palette + pane-menu entries: one launch command per installed CLI — and one
       // per PROFILE when a provider has more than one (the picker, 4/04).
       const commands = installed.flatMap((a) => {
@@ -340,21 +412,97 @@ export const agentsFeature: UiFeature = {
         ]
       })
       setCommands('agents', commands)
+      // Manual pane-scoped profile switch (the escape hatch when limit detection
+      // misses, and the "move this session to my other account" verb): one command
+      // per OTHER profile of a multi-profile provider. Same interrupt → exact-resume
+      // flow as the failover; the global default is deliberately NOT touched. The
+      // pane ⋯ menu picks these up by hint + id prefix (its no-imports law).
+      const switchCommands = installed.flatMap((a) => {
+        const mine = profiles.filter((p) => p.provider === a.id).sort((x, y) => x.order - y.order)
+        if (mine.length < 2) return []
+        return mine.map((p) => ({
+          id: `agent:switch:${a.id}:${p.id}`,
+          title: `Switch focused pane to ${p.name} (resume session)`,
+          hint: 'Switch profile',
+          run: () => switchFocusedPane(a.id, p)
+        }))
+      })
+      setCommands('agents-switch', switchCommands)
+      publishFailoverCommand()
+    }
+
+    /** The manual switch's entry point: resolve the FOCUSED pane's launch context and
+     *  hand it to the one switch flow. Honest no-ops when the pane isn't running that
+     *  provider — a switch command must never relaunch a provider into a plain shell. */
+    function switchFocusedPane(provider: string, profile: { id: string; name: string }): void {
+      const focus = getFocusedPane()
+      if (!focus) return
+      const ctx = lastLaunch.get(focus.paneId)
+      if (!ctx || ctx.provider !== provider) {
+        showToast({
+          tone: 'attention',
+          title: `No ${nameById.get(provider) ?? provider} session in the focused pane`,
+          body: 'Switch profile continues a running session — launch the agent first.'
+        })
+        return
+      }
+      const current = ctx.profileId ?? cachedProfiles
+        .filter((p) => p.provider === provider)
+        .sort((a, b) => a.order - b.order)[0]?.id
+      if (current === profile.id) {
+        showToast({ tone: 'info', title: `Pane ${focus.paneId} already runs ${profile.name}` })
+        return
+      }
+      void switchPaneProfile(focus.paneId, ctx.provider, ctx.cwd, profile, 'manual')
+    }
+
+    /** The auto-failover palette entry, STATE-BEARING (audit F6: the old title never
+     *  said which way the toggle sat — you had to flip it to learn it). Republished on
+     *  toggle and on workspace switch, because the title names the ACTIVE workspace's
+     *  state. */
+    function publishFailoverCommand(): void {
+      const on = !!autoFailover.get(getWorkspaces().activeId ?? '')
       setCommands('agents-failover', [
         {
           id: 'agents:auto-failover',
-          title: 'Toggle auto-failover for this workspace',
+          title: `Auto-failover: ${on ? 'ON' : 'OFF'} for this workspace — turn ${on ? 'off' : 'on'}`,
           hint: 'Profiles',
-          run: () => {
-            const ws = getWorkspaces()
-            const id = ws.activeId
-            if (!id) return
-            const next = !autoFailover.get(id)
-            autoFailover.set(id, next)
-            showToast({ tone: 'info', title: `Auto-failover ${next ? 'ON' : 'OFF'} for this workspace` })
-          }
+          run: () => void toggleAutoFailover()
         }
       ])
+    }
+
+    /** Persisted per workspace (agents.autoFailover.<wsId>, audit F6) — the overnight-run
+     *  mode must survive a restart. The write's {ok} is OBEYED: an unsaved toggle that
+     *  slid over anyway is the browser-dock consent bug reborn. */
+    async function toggleAutoFailover(): Promise<void> {
+      const wsId = getWorkspaces().activeId
+      if (!wsId) return
+      const next = !autoFailover.get(wsId)
+      let ok = false
+      try {
+        ok = ((await getBridge().invoke(AgentChannels.failoverSet, { workspaceId: wsId, on: next })) as { ok?: boolean })?.ok === true
+      } catch {
+        ok = false
+      }
+      if (!ok) {
+        showToast({ tone: 'danger', title: 'Auto-failover was not changed', body: 'The setting could not be saved.' })
+        return
+      }
+      autoFailover.set(wsId, next)
+      publishFailoverCommand()
+      showToast({ tone: 'info', title: `Auto-failover ${next ? 'ON' : 'OFF'} for this workspace` })
+    }
+
+    /** Fill the cache for a workspace whose persisted state we have not read yet.
+     *  The cache is only ever a mirror of the store — the store decides. */
+    async function hydrateAutoFailover(wsId: string): Promise<void> {
+      if (autoFailover.has(wsId)) return
+      try {
+        autoFailover.set(wsId, (await getBridge().invoke(AgentChannels.failoverGet, wsId)) === true)
+      } catch {
+        /* unreadable — leave unset; the reader treats that as OFF */
+      }
     }
 
     function launchInFocused(agentId: string, profileId?: string): void {
@@ -382,7 +530,13 @@ export const agentsFeature: UiFeature = {
       resume: boolean,
       profileId: string | undefined,
       remoteHostId: string | undefined,
-      remote: boolean
+      remote: boolean,
+      opts?: {
+        /** false = a build that may still be DISCARDED (the adopt branch, a failed
+         *  interrupt): main defers the one-shots, the restore intent and the session
+         *  declaration until `commandCommit` says the command was really typed. */
+        consume?: boolean
+      }
     ): Promise<{ mine: AgentProfile[]; effectiveProfile?: string; workspaceId?: string; result: AgentCommandResult }> {
       // Default profile (order 0) applies when none was named and any exist (4/04).
       let mine: AgentProfile[] = []
@@ -403,7 +557,8 @@ export const agentsFeature: UiFeature = {
           // Both facts main-side needs: WHICH saved host to build for, and that the command
           // is typed into the POSIX shell on the far side of SSH.
           remoteHostId,
-          remote
+          remote,
+          ...(opts?.consume === false ? { consume: false } : {})
         })
         return { mine, effectiveProfile, workspaceId, result }
       } catch {
@@ -419,25 +574,69 @@ export const agentsFeature: UiFeature = {
       provider: string,
       cwd: string,
       resume = false,
-      profileId?: string
+      profileId?: string,
+      opts?: {
+        /** The caller has PROVEN the pane's agent is gone (profile switch: interrupt +
+         *  agent-gone verdict) — skip the reattach adopt branch and really type. The
+         *  detector's clear can lag the verdict this caller already awaited. */
+        forceType?: boolean
+        /** A build the caller already started (with `consume: false`) so it could run
+         *  alongside something else — the switch's interrupt, most of all. */
+        prefetched?: ReturnType<typeof prepareCliLaunch>
+        /** Handed the "is this agent usable yet" promise at the instant the launch command
+         *  is typed — the one moment a waiter can be registered without a race. A caller
+         *  running its OWN overlay (the profile switch) awaits this instead of guessing
+         *  with a timer. Never called when nothing is typed (the adopt branch, a refusal). */
+        onReady?: (ready: Promise<boolean>) => void
+      }
     ): Promise<void> {
       if (paneId < 0 || !provider || provider === 'shell') return
       const remoteTarget = getPaneRemote(paneId as PaneId)
       const remote = !!remoteTarget
       const custom = provider.startsWith('custom:')
-      // PREFETCH (fresh local CLI launches only): the command build is pure main-side
-      // work — profile resolution, config reconciliation, session pooling — none of
-      // which needs the pane's shell. Started here, it runs concurrently with the
-      // pane-live wait below, so by the first prompt byte the command is (usually)
-      // already in hand and the write lands immediately. Excluded on purpose:
-      //  - resume launches: they may ADOPT a reattached session and type nothing, and
-      //    building consumes one-shot config overrides (markAgentConfigSessionLaunched)
-      //    — a build that might not be typed must not run;
-      //  - remote launches: the far-side dialect ride is cheap and the SSH wait dwarfs it.
+      // PREFETCH: the command build is pure main-side work — profile resolution, config
+      // reconciliation, session pooling — none of which needs the pane's shell. Started
+      // here, it runs concurrently with the waits below, so by the first prompt byte the
+      // command is (usually) already in hand and the write lands immediately.
+      //
+      // RESUME launches prefetch too now. They could not before for one honest reason:
+      // building CONSUMED things a launch that never types must not spend (the one-shot
+      // config overrides, the restore shelf's exact-session intent) and it CLEARED the
+      // pane's session declaration — and a resume may still adopt a reattached agent and
+      // type nothing at all. `consume: false` splits those effects off; they are claimed
+      // by `commandCommit` at the moment the command is really typed, and a discarded
+      // prefetch simply never claims them. Remote launches still skip it: the far-side
+      // dialect ride is cheap and the SSH wait dwarfs it.
       const prefetched =
-        !remote && !resume && !custom && isAgentCliId(provider)
-          ? prepareCliLaunch(paneId, provider, cwd, resume, profileId, undefined, false)
-          : null
+        opts?.prefetched ??
+        (!remote && !custom && isAgentCliId(provider)
+          ? prepareCliLaunch(paneId, provider, cwd, resume, profileId, undefined, false, resume ? { consume: false } : undefined)
+          : null)
+      // THE COVER goes up HERE for a fresh launch — at the commitment, before the pane has
+      // even produced a prompt. Everything below (the liveness wait, the build, the typed
+      // command itself) is machinery the user did not ask to watch, and raising it at the
+      // write instead meant they watched the shell prompt appear and the `claude …` line
+      // get typed into it. `cancel()` on every path that ends up typing nothing.
+      //
+      // A RESUME launch is deliberately NOT covered yet: it may still adopt a reattached
+      // agent below, and covering that pane would block input to a LIVING conversation for
+      // the length of the spawn-settled wait. Its cover goes up once the adopt branch has
+      // been passed and typing is certain.
+      // THE PANE THIS LAUNCH IS FOR. A pane id is a slot number, not an identity: close a
+      // pane mid-launch and the next split can re-mint the id, so a command already in
+      // flight would be typed into a stranger — a full `cd … && claude …` line landing in
+      // whatever that pane was doing, which would then wear the dead launch's agent chip
+      // and have its own cover torn down. Every wait below (liveness, spawn-settled, the
+      // build) is a window for that. Same guard, and the same reason, as the board's
+      // card hand-off. An `undefined` capture means the pane has not mounted its xterm
+      // yet — a workspace opening behind the board view — and must still proceed.
+      const bornAs = paneInstance(paneId as PaneId)
+      const samePane = (): boolean => bornAs === undefined || paneInstance(paneId as PaneId) === bornAs
+      let cover: LaunchCover = NO_LAUNCH_COVER
+      const raiseCover = (): void => {
+        cover = beginLaunchCover(paneId, provider, remote, nameById.get(provider) ?? provider)
+      }
+      if (!resume) raiseCover()
       // A write raced into a still-spawning PTY is dropped by the daemon — wait for the
       // pane's first output (bounded; on timeout proceed, matching the old fixed-delay
       // behavior). Found by the Linux CI sweep: slow machines lost template-lineup launches.
@@ -447,6 +646,7 @@ export const agentsFeature: UiFeature = {
       // disposal cancels the waiter and still fails closed.
       const ready = remote ? await whenPaneRemoteReady(paneId) : await whenPaneLive(paneId, 15000)
       if (remote && !ready) {
+        cover.cancel()
         showToast({
           tone: 'danger',
           title: `Remote agent was not started in pane ${paneId}`,
@@ -465,7 +665,8 @@ export const agentsFeature: UiFeature = {
       // the running agent's prompt. Adopt the session instead: label it, claim its CLI for
       // the MCP chip, launch nothing. A fresh spawn (cold daemon) reports existing=false
       // and takes the normal path below.
-      if (resume && wasPaneReattached(paneId)) {
+      if (resume && wasPaneReattached(paneId) && !opts?.forceType) {
+        cover.cancel() // inert on this branch today (a resume raises no cover before here) — kept so it stays true if that ever changes
         const label = custom
           ? provider.slice('custom:'.length).trim().split(/\s+/)[0] || 'custom'
           : (nameById.get(provider) ?? provider)
@@ -493,20 +694,41 @@ export const agentsFeature: UiFeature = {
         lastLaunch.set(paneId, { provider, cwd, profileId: adoptedProfile })
         return
       }
+      // Past the adopt branch a resume WILL type: raise its cover now, so the build and
+      // the write are hidden even though the reattach verdict had to come first.
+      if (resume) raiseCover()
       if (custom) {
+        cover.cancel() // a custom command is not a provider with a readiness signal
         const cmd = provider.slice('custom:'.length).trim()
         if (!cmd) return
         agentsClient.launchInto(paneId, cmd)
         recordCustomLaunch(paneId, provider, cmd, cwd, resume)
         return
       }
-      if (!isAgentCliId(provider)) return
-      // The prefetched build (started before the liveness wait) — or, on the resume/
-      // remote paths that must not prefetch, the same build strictly ordered here.
-      const { mine, effectiveProfile, workspaceId, result } = await (
-        prefetched ?? prepareCliLaunch(paneId, provider, cwd, resume, profileId, remoteTarget?.hostId, remote)
-      )
+      if (!isAgentCliId(provider)) {
+        cover.cancel()
+        return
+      }
+      // The prefetched build (started before the liveness wait) — or, on the remote path
+      // that must not prefetch, the same build strictly ordered here.
+      let prep = await (prefetched ?? prepareCliLaunch(paneId, provider, cwd, resume, profileId, remoteTarget?.hostId, remote))
+      // A deferred build is about to become a real launch: claim its effects BEFORE the
+      // command is typed, so the pane's session declaration is in place before the CLI
+      // writes its first log line. A commit that finds nothing pending (the build was
+      // never deferred, or it aged out behind a long wait) is not an error — rebuild it
+      // the consuming way rather than type a command whose one-shots nobody claimed.
+      if (prep.result.ok && prep.result.command && resume && !remote) {
+        const committed = await agentsClient
+          .commandCommit({ agentId: provider, paneId, workspaceId: prep.workspaceId })
+          .catch(() => ({ ok: false }))
+        if (!committed.ok) {
+          // Local by construction here (`!remote`), so no host to name.
+          prep = await prepareCliLaunch(paneId, provider, cwd, resume, profileId, undefined, false)
+        }
+      }
+      const { mine, effectiveProfile, workspaceId, result } = prep
       if (!result.ok || !result.command) {
+        cover.cancel() // nothing will be typed — never leave the pane blurred over a failure
         showToast({
           tone: 'danger',
           title: `Agent was not launched in pane ${paneId}`,
@@ -514,8 +736,19 @@ export const agentsFeature: UiFeature = {
         })
         return
       }
+      // Last check before the bytes go out: the pane that asked for this launch is still
+      // the pane sitting on this id.
+      if (!samePane()) {
+        cover.cancel()
+        return
+      }
       agentsClient.launchInto(paneId, result.command)
       recordCliLaunch(paneId, provider, cwd, resume, { mine, effectiveProfile, workspaceId, result })
+      // Hold the cover until the agent is genuinely usable, then lift it — on the agent's
+      // word OR on the ceiling, because a cover that can outlive its own failure mode is a
+      // trap rather than a cover.
+      cover.settle()
+      if (cover.ready) opts?.onReady?.(cover.ready)
     }
 
     /** Everything a successful CLI launch records — shared by typed delivery (right after
@@ -569,6 +802,7 @@ export const agentsFeature: UiFeature = {
           .catch(() => undefined)
       }
       lastLaunch.set(paneId, { provider, cwd, profileId: effectiveProfile })
+      if (typeof result.buildMs === 'number') lastBuildMs = result.buildMs
       // Propagate MCP status to this pane's header (8/11): record its CLI +
       // the connected count it launched with (for the restart nudge).
       const cli = PROVIDER_CLI[provider]
@@ -579,6 +813,34 @@ export const agentsFeature: UiFeature = {
       // Context bar: LAUNCH cwd + profile ID (the id names the config home main-side;
       // env values never ride the port — ADR 0002).
       writeSession(paneId, { provider, cwd, profileId: effectiveProfile })
+      // FOLDER TRUST, the way claude itself records it. Opening a workspace at a folder
+      // IS the trust declaration (product decision), and claude's own mechanism for
+      // saying so is `projects["<cwd>"].hasTrustDialogAccepted` in its state file — which
+      // main already writes on every local launch and reports back as `trustPrepared`.
+      // Where that succeeded there is no dialog to answer: the gate is settled the moment
+      // the launch is typed.
+      //
+      // So the buffer WATCHER is now a belt, not the mechanism — and it only runs where
+      // the carry could not reach. It used to run unconditionally, scraping the pane's
+      // text every 400ms for 45 seconds and holding an auto-submitted prompt behind a
+      // nine-second dialog-free settle, on launches where the state file already proved
+      // the dialog could not paint. That is a poll standing in for a fact the app had
+      // written itself.
+      //
+      // The belt still earns its place in the three cases the carry cannot cover: a
+      // REMOTE claude (the state file resolves against the local home, so another
+      // machine's is unreachable), a first launch whose new entry is keyed in a different
+      // path form than claude's own process uses, and a carry that failed and honestly
+      // said so. All three arrive here as `trustPrepared` falsy.
+      //
+      // Ordering note for the belt path: it must come AFTER the session write, because the
+      // watcher's launch-died check reads the session port — called earlier it died on its
+      // first look and marked the gate settled with the dialog still coming (found live:
+      // the switch overlay sat on an unanswered dialog for its whole hold).
+      if (provider === 'claude') {
+        if (result.trustPrepared) markTrustPrepared(paneId)
+        else void autoTrustClaudeLaunch(paneId)
+      }
       setPaneLabel(paneId as PaneId, nameById.get(provider) ?? provider)
       // Booleans/ids only — never env values or command text (ADR 0005).
       getTelemetry().captureEvent({ name: 'agent.launched', props: { provider, resume, profiled: !!effectiveProfile } })
@@ -629,10 +891,24 @@ export const agentsFeature: UiFeature = {
         const ms = spawnRunHoldMs
         build = new Promise<void>((r) => setTimeout(r, ms)).then(() => build)
       }
+      // THE COVER, before the pane even exists. This path hands the command to the DAEMON,
+      // which types it as the shell's very first act — so there is no later moment to
+      // raise it at, and raising it here is also what makes the pane paint covered the
+      // instant it mounts (the offer port replays on subscribe). This is the path a
+      // wizard/template open takes, and it shipped uncovered: the whole boot, prompt and
+      // injected command line included, played out in the open.
+      const cover = beginLaunchCover(paneId, provider, false, nameById.get(provider) ?? provider)
       armSpawnRun(paneId, build)
+      // The whole delivery runs under a catch that GIVES THE PANE BACK. A cover is removed
+      // only by settle/cancel, so anything that throws between the raise and them — a
+      // subscriber blowing up inside recordCliLaunch's fan-out, a rejected build — would
+      // strand a pane blurred and refusing input, with no button on the overlay and no way
+      // out but closing it. The ceiling bounds the promise, not the overlay; this is what
+      // bounds the overlay against a throw.
       void (async () => {
         const outcome = await whenSpawnRunOutcome(paneId, 20000)
         if (custom) {
+          cover.cancel() // a custom command is not a provider with a readiness signal
           if (outcome !== true) {
             // Typed fallback: the pane spawned without the run (late build, reattach,
             // spawn failure) — deliver the pre-spawn-run way.
@@ -644,6 +920,7 @@ export const agentsFeature: UiFeature = {
         }
         const p = await prep!
         if (!p.result.ok || !p.result.command) {
+          cover.cancel() // nothing to launch — the pane is the user's again immediately
           showToast({
             tone: 'danger',
             title: `Agent was not launched in pane ${paneId}`,
@@ -656,11 +933,116 @@ export const agentsFeature: UiFeature = {
           agentsClient.launchInto(paneId, p.result.command)
         }
         recordCliLaunch(paneId, provider, cwd, false, p)
-      })()
+        // Both arms end here: the daemon typed it at spawn, or the fallback just did.
+        cover.settle()
+      })().catch(() => cover.cancel())
     }
 
-    /** Usage-limit failover (4/04): next profile, same pane, same cwd. ONE hop. */
-    async function onLimit(paneId: number): Promise<void> {
+    /**
+     * THE pane profile switch — usage-limit failover (auto or accepted offer) and the
+     * manual pane action are the same flow: prove the capped CLI is GONE (the
+     * deterministic interrupt, F2 — never type into a running agent), rewrite the
+     * slot's manifest, then relaunch in the SAME pane/cwd with resume — main-side
+     * session pooling + exact-session id (ADR 0013) make the new profile continue the
+     * conversation. The overlay narrates; failure leaves the pane untouched.
+     */
+    async function switchPaneProfile(
+      paneId: number,
+      provider: string,
+      cwd: string,
+      next: { id: string; name: string },
+      trigger: 'capped' | 'notify' | 'manual'
+    ): Promise<void> {
+      if (failingOver.has(paneId)) return
+      failingOver.add(paneId)
+      resetSwitchTrace(paneId)
+      setPaneFailoverOffer(paneId as PaneId, { state: 'switching', title: '', nextName: next.name })
+      try {
+        // The build is NOT started here, and that is deliberate. Overlapping it with the
+        // interrupt looks free — different concerns, one main-side, one keystrokes — but
+        // main is single-threaded and is also the process that relays the process-table
+        // verdict this interrupt is waiting for. Measured: with the build running
+        // alongside, the agent-gone verdict took 9.6s instead of ~1s, because the
+        // interrupt's 3s waits kept expiring while main was busy in the build's
+        // synchronous filesystem work. Since the build is now ~free anyway (memoized
+        // settings, plan, pooling and state carry), the overlap bought a few ms and cost
+        // the interrupt seconds. The launch below prefetches during its OWN waits, which
+        // is where a build genuinely has idle time to hide in.
+        const gone = await interruptAgent(paneId)
+        if (!gone) {
+          recordSwitchPhase(paneId, 'failed')
+          setPaneFailoverOffer(paneId as PaneId, {
+            state: 'failed',
+            title: `Couldn't switch to ${next.name}`,
+            nextName: next.name,
+            message: 'The agent kept running. Press Ctrl+C twice in the pane, then use Switch profile from the ⋯ menu.',
+            onDismiss: () => setPaneFailoverOffer(paneId as PaneId, null)
+          })
+          getTelemetry().captureEvent({ name: 'agent.profileSwitch', props: { provider, trigger, ok: false } })
+          return
+        }
+        // The workspace manifest follows the switch (6/04) — otherwise the next restart
+        // resurrects the capped profile. AFTER the interrupt verdict: a failed switch
+        // used to rewrite the manifest anyway, promising a profile it never launched.
+        announceProfileFailover({ paneId: paneId as PaneId, profileId: next.id })
+        // HOLD THE BLUR until the resumed session is really usable: the machinery under
+        // it (shell prompt, the typed resume command, the CLI's boot, the auto-answered
+        // trust dialog) is not the user's business — they clicked Continue and the next
+        // thing they see is their conversation.
+        //
+        // "Usable" is now the SAME observation every launch uses (launch-readiness.ts):
+        // claude's TUI taking the alternate screen, then a clear trust gate. What that
+        // replaced is worth naming, because it was the last timer on this path — a
+        // `running` process-table check (true a second before the trust dialog even
+        // paints) followed by a `max(1000, typed + 5000 - now)` splash FLOOR, tuned by
+        // hand because the readiness test underneath it could not be trusted. The floor
+        // both delayed switches that were already done and, when the trust carry made a
+        // boot unusually fast, still fired the continuation into a TUI that was mid-init
+        // (7.9s switch, prompt eaten — found live). One measured signal retires all of it.
+        let readyWait: Promise<boolean> | null = null
+        await launchInPane(paneId, provider, cwd, true, next.id, {
+          forceType: true,
+          onReady: (usable) => {
+            readyWait = usable
+          }
+        })
+        recordSwitchPhase(paneId, 'typed')
+        // Null means nothing was typed (the launch refused) — no agent, so no readiness.
+        const ready = readyWait ? await (readyWait as Promise<boolean>) : false
+        // EVERY switch exists to keep the WORK going — the interrupt cut a turn either
+        // way, so the continuation prompt is submitted into the resumed conversation
+        // (still behind the blur) and the agent picks its task back up by itself; the
+        // manual switch included (product decision 2026-08-02: choosing a different
+        // account mid-session is a request to continue there, not to start over).
+        // Only when readiness was actually OBSERVED — typed into an unknown TUI state
+        // it would be eaten again. Claude only for now: it is the one provider whose
+        // resume is exact-session today.
+        if (provider === 'claude' && ready) {
+          await typeContinuation(paneId)
+          recordSwitchPhase(paneId, 'continued')
+          await new Promise((r) => setTimeout(r, 600))
+        }
+        setPaneFailoverOffer(paneId as PaneId, null)
+        recordSwitchPhase(paneId, 'done')
+        getTelemetry().captureEvent({ name: 'agent.profileSwitch', props: { provider, trigger, ok: true } })
+      } finally {
+        failingOver.delete(paneId)
+        // AND THE BLUR COMES DOWN, whatever happened. The clear above sits on the success
+        // path; the `switching` overlay carries no button by contract (there is nothing
+        // useful to offer mid-interrupt), so a throw anywhere between raising it and that
+        // line left a pane permanently blurred and refusing input, escapable only by
+        // closing it. Clearing here is safe because it only ever removes an overlay this
+        // flow still owns — an offer raised by something newer is a different object and
+        // the success path already cleared ours.
+        const still = getPaneFailoverOffer(paneId as PaneId)
+        if (still?.state === 'switching') setPaneFailoverOffer(paneId as PaneId, null)
+      }
+    }
+
+    /** Usage-limit failover (4/04): next profile, same pane, same cwd. ONE hop.
+     *  The surface is the pane's own blurred OFFER overlay (failover-offer port) —
+     *  auto-failover skips straight to the switching state. */
+    async function offerSwitch(paneId: number, trigger: 'capped' | 'notify'): Promise<void> {
       if (failingOver.has(paneId)) return
       const ctx = lastLaunch.get(paneId)
       if (!ctx) return
@@ -676,31 +1058,23 @@ export const agentsFeature: UiFeature = {
       const curIdx = Math.max(0, mine.findIndex((p) => p.id === ctx.profileId))
       const next = mine[(curIdx + 1) % mine.length]
       const cur = mine[curIdx]
-      const doFailover = (): void => {
-        failingOver.add(paneId)
-        // Interrupt ONLY the CLI (^C) — the shell/PTY and its scrollback survive.
-        getBridge().send(TerminalChannels.write, { id: paneId as PaneId, data: '\x03' })
-        setTimeout(() => {
-          void launchInPane(paneId, ctx.provider, ctx.cwd, true, next.id).finally(() => failingOver.delete(paneId))
-        }, 900)
-        // The workspace manifest follows the switch (6/04) — otherwise the next
-        // restart resurrects the capped profile. Port only, one hop per event.
-        announceProfileFailover({ paneId: paneId as PaneId, profileId: next.id })
-      }
+      const doSwitch = (): void => void switchPaneProfile(paneId, ctx.provider, ctx.cwd, next, trigger)
       // The workspace that HOLDS this pane — a moved pane keeps its id, so the old
       // `id / 100` would read the auto-failover setting of the workspace it left.
+      // Hydrated on demand: a BACKGROUND workspace's persisted opt-in counts too —
+      // the overnight-run case is exactly a workspace nobody has switched to.
       const wsId = workspaceIdForPane(paneId)
+      if (wsId) await hydrateAutoFailover(wsId)
       if (wsId && autoFailover.get(wsId)) {
-        doFailover()
-        showToast({ tone: 'info', title: `Usage limit — relaunching on ${next.name}`, body: `Pane ${paneId} (auto-failover).` })
+        doSwitch()
         return
       }
-      showToast({
-        tone: 'attention',
-        title: `Usage limit on ${cur.name}`,
-        body: `Pane ${paneId} hit its limit.`,
-        timeout: 15000,
-        action: { label: `Relaunch on ${next.name}`, onClick: doFailover }
+      setPaneFailoverOffer(paneId as PaneId, {
+        state: 'offered',
+        title: `${cur.name} hit its usage limit`,
+        nextName: next.name,
+        onAccept: doSwitch,
+        onDismiss: () => setPaneFailoverOffer(paneId as PaneId, null)
       })
     }
 
@@ -716,13 +1090,34 @@ export const agentsFeature: UiFeature = {
         launchIn: (paneId: number, agentId: string, cwd: string, profileId?: string) =>
           launchInPane(paneId, agentId, cwd, false, profileId),
         remoteReady: (paneId: number) => isPaneRemoteReady(paneId),
-        setAutoFailover: (on: boolean) => {
+        // Writes THROUGH the persistence IPC (F6) so smokes exercise the real path;
+        // resolves the workspace id on success, null on a refused/failed write.
+        setAutoFailover: async (on: boolean) => {
           const id = getWorkspaces().activeId
-          if (id) autoFailover.set(id, on)
+          if (!id) return null
+          let ok = false
+          try {
+            ok = ((await getBridge().invoke(AgentChannels.failoverSet, { workspaceId: id, on })) as { ok?: boolean })?.ok === true
+          } catch {
+            ok = false
+          }
+          if (!ok) return null
+          autoFailover.set(id, on)
+          publishFailoverCommand()
           return id
+        },
+        getAutoFailover: async (wsId?: string) => {
+          const id = wsId ?? getWorkspaces().activeId
+          if (!id) return null
+          return (await getBridge().invoke(AgentChannels.failoverGet, id)) === true
         },
         lastLaunch: (paneId: number) => ({ ...(lastLaunch.get(paneId) ?? {}) }),
         paneLive: (paneId: number) => isPaneLive(paneId),
+        // LAUNCHNOW gate seam: the launch cover's state for a pane, or null when the pane
+        // is the user's. The gate polls it to prove a booting agent is covered and then
+        // uncovered — the assertion that was missing when spawn-run delivery shipped with
+        // no cover at all, in full view of a gate that already drove that exact path.
+        paneCover: (paneId: number) => getPaneFailoverOffer(paneId as PaneId)?.state ?? null,
         // First-output timestamp (performance.now) — the LAUNCHNOW gate measures the
         // live→write gap against it to prove lineup commands ride the readiness
         // signal, never a reintroduced fixed delay.
@@ -748,7 +1143,36 @@ export const agentsFeature: UiFeature = {
         // Smoke/dev shim: the compose seam itself (ADR 0018/06 + revision D) — the
         // BRAINRECALL gate's precise byte-budget witness (capture reflows lines).
         compose: (task: string, root: string, anchorWorkspaceId: string) =>
-          composeFirstPrompt({ task, root, anchorWorkspaceId })
+          composeFirstPrompt({ task, root, anchorWorkspaceId }),
+        // Smoke/dev shim: the switch ORDER witness (F2) — the gate asserts
+        // 'agent-gone' strictly precedes 'typed'. Phases only, never content.
+        switchTrace: (paneId: number) => switchTrace(paneId),
+        // Smoke/dev shim: the usage engine's capped trigger, driven at the port the
+        // real alert path announces on — proves claim → pane offer end to end.
+        capped: (ev: { providerId: string; profileId: string }) => announceUsageCapped(ev),
+        // Smoke/dev shim: put a pane in the daemon-reattached state (F1's precondition)
+        // without an app restart over a surviving daemon.
+        markReattached: (paneId: number) => markPaneReattached(paneId),
+        wasReattached: (paneId: number) => wasPaneReattached(paneId),
+        // Smoke/dev shim: the pane's current offer (state + names only) for DOM-free
+        // assertions; the overlay itself is asserted in the DOM.
+        offer: (paneId: number) => {
+          const o = getPaneFailoverOffer(paneId as PaneId)
+          return o ? { state: o.state, title: o.title, nextName: o.nextName } : null
+        },
+        // Smoke/dev shim: which commands a hint currently registers — ids only, the
+        // PROFSWITCH gate's diagnosis line when a menu entry it expects is absent.
+        commandsFor: (hint: string) => allCommands().filter((c) => c.hint === hint).map((c) => c.id),
+        // Smoke/dev shim: main's build wall-ms for the most recent launch — the
+        // launch-latency gates' before/after evidence for the pipeline optimizations.
+        lastBuildMs: () => lastBuildMs,
+        // Smoke/dev shim: the switch hold's three readiness conjuncts, sampled by the
+        // gate while the blur is up — the diagnosis line for a skipped continuation.
+        readiness: (paneId: number) => ({
+          running: getPaneAgentSession(paneId as PaneId)?.running === true,
+          trustSettled: isTrustSettled(paneId),
+          trustLive: trustDialogLive(readPaneBufferTail(paneId, 14))
+        })
       }
     }
   }

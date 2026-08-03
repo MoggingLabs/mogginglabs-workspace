@@ -45,6 +45,7 @@ import {
 import { livePaneCount } from '../../core/layout/slots'
 import { machineSpec, primeMachineSpec } from '../../core/system/machine-port'
 import { parseCdLine, resolveCdTarget, resolvePathAgainst } from './cd-path'
+import { isolationView, type IsolationProbe } from './isolation-state'
 import { applyCompletion, commonPrefix, completionContext, filterCompletions } from './cd-complete'
 import { createCdLine, type CdLineHandle } from './cd-line'
 import { getFocusedPane } from '../../core/layout/focus'
@@ -158,7 +159,7 @@ export const wizardFeature: UiFeature = {
     // installed after the app started, so it is on the system PATH and invisible to this
     // process), so a folder read as a repo, the box enabled itself, and every `git worktree
     // add` then failed at Launch. null = not asked yet.
-    let isolatePreflight: WorktreePreflight | null = null
+    let isolateProbe: IsolationProbe = { kind: 'no-folder' }
     /** The folder the current answer (or in-flight question) belongs to — one probe per
      *  folder, however many times the selection re-emits it. */
     let preflightCwd: string | null = null
@@ -255,12 +256,28 @@ export const wizardFeature: UiFeature = {
       if (activeView() === 'wizard') applyRoster(next)
     })
 
-    function leave(): void {
+    /**
+     * Release everything this open() generation holds.
+     *
+     * Split out of leave(), which did this AND navigated. The two are different concerns and
+     * only one of them is ever conditional: after a successful launch the opener has ALREADY
+     * switched the app to the live grid, so `if (activeView() === 'wizard') leave()` was false
+     * on every success and none of this ran — one generation of selection subscribers, cd-line
+     * timers and setup-panel AgentChannels subscriptions leaked per launch, on detached DOM,
+     * with `launching` stuck true.
+     *
+     * Safe to call twice: open() already re-disposes on its way in.
+     */
+    function disposeWizard(): void {
       openGeneration++
       selection?.dispose()
       cdLine?.dispose()
       for (const panel of setupPanels.splice(0)) panel.dispose()
       launching = false
+    }
+
+    function leave(): void {
+      disposeWizard()
       goBack()
     }
 
@@ -297,7 +314,7 @@ export const wizardFeature: UiFeature = {
       isolate = false
       // A fresh page must not inherit the last one's verdict about a folder it may not
       // even be looking at any more.
-      isolatePreflight = null
+      isolateProbe = { kind: 'no-folder' }
       preflightCwd = null
       remoteHost = null
       roster = [...getAgentRegistry()]
@@ -657,9 +674,11 @@ export const wizardFeature: UiFeature = {
           isolated: paneCwds !== undefined // a boolean — never the paths (ADR 0005)
         }
       })
-      // The workspace opener switches the app to the live grid; if no workspace
-      // feature is mounted (tests), fall back to wherever we came from.
-      if (activeView() === 'wizard') leave()
+      // The workspace opener switches the app to the live grid; if no workspace feature is
+      // mounted (tests), fall back to wherever we came from. TEARDOWN is unconditional — it is
+      // the NAVIGATION that depends on where we ended up.
+      disposeWizard()
+      if (activeView() === 'wizard') goBack()
       return true
     }
 
@@ -688,6 +707,8 @@ export const wizardFeature: UiFeature = {
     let brushHint!: HTMLElement
     let profilesHost!: HTMLElement
     let presetsHost!: HTMLElement
+    /** Why the last preset save/delete failed, or empty. Cleared by the next render. */
+    let presetError = ''
     let toolsSection!: HTMLElement
     let toolsHost!: HTMLElement
     let meterFill!: HTMLElement
@@ -699,6 +720,8 @@ export const wizardFeature: UiFeature = {
     let isolateBox!: ReturnType<typeof createCheckbox>
     let isolateHint!: HTMLElement
     let isolateFix!: HTMLButtonElement
+    /** Which job the fix button currently has — set by syncIsolate from the derived view. */
+    let isolateFixKind: 'path' | 'recheck' | null = null
     let launchAlert!: HTMLElement
     let customInput!: HTMLInputElement
     let customStepper: StepperHandle | null = null
@@ -1015,7 +1038,10 @@ export const wizardFeature: UiFeature = {
         onClick: () => {
           setGridSpec(uniformSpec(gridSpec.rows, gridSpec.cols))
           painter.set(gridSpec)
-          refreshAgents()
+          // renderAgentControls, not refreshAgents: painter.set() does not fire onChange, and
+          // refreshAgents only moves the meter. The Shell chip's x N and the palette's
+          // "Fill N empty" label are rendered by renderPalette, which only this path reaches.
+          renderAgentControls()
         }
       })
       // The capacity story compresses to one short line; the full reasoning (machine vs
@@ -1516,8 +1542,12 @@ export const wizardFeature: UiFeature = {
         type: 'button',
         text: 'Find Git',
         hidden: true,
-        title: 'Re-read your PATH — picks up anything installed since this app started',
-        onClick: repairToolPath
+        title: 'Ask again — the answer can change without the folder changing',
+        // Two jobs, because there are two kinds of refusal. 'path' re-reads the live PATH
+        // (git installed after the app started); 'recheck' just asks again, which five of the
+        // six refusal reasons had no way to do — a repo that became valid (first commit made,
+        // permissions fixed) stayed refused for the whole session.
+        onClick: () => (isolateFixKind === 'path' ? repairToolPath() : recheckIsolation())
       }) as HTMLButtonElement
 
       // Remote target (4/05): mutually exclusive with a local folder — choosing a
@@ -1608,16 +1638,29 @@ export const wizardFeature: UiFeature = {
       const customTotal = countOf('custom')
       if (customTotal > 0 && customCmd.trim()) mix.push({ provider: `custom:${customCmd.trim()}`, count: customTotal })
       const preset = { id: crypto.randomUUID(), name: presetName, mix }
-      void wizardClient.savePreset(preset).then(() => {
-        presets = [...presets, preset]
-        renderPresets()
-        getTelemetry().captureEvent({ name: 'preset.saved', props: { agents: mix.reduce((s, m) => s + m.count, 0) } })
-      })
+      void wizardClient
+        .savePreset(preset)
+        .then(() => {
+          presets = [...presets, preset]
+          renderPresets()
+          getTelemetry().captureEvent({ name: 'preset.saved', props: { agents: mix.reduce((s, m) => s + m.count, 0) } })
+        })
+        // A rejected save left NO card, NO error and an unhandled rejection: the user pressed
+        // Save and the app did nothing it could explain. Every neighbouring wizard IPC call
+        // catches; these two did not.
+        .catch((error: unknown) => {
+          presetError = error instanceof Error && error.message ? error.message : 'The preset could not be saved.'
+          renderPresets()
+        })
     }
 
     function renderPresets(): void {
       if (!presetsHost) return
       clear(presetsHost)
+      if (presetError) {
+        presetsHost.append(el('span', { class: 'wizard-hint wizard-hint-error', role: 'alert', text: presetError }))
+        presetError = ''
+      }
       if (!presets.length) {
         presetsHost.append(el('span', { class: 'wizard-hint', text: 'Nothing saved yet.' }))
         return
@@ -1647,6 +1690,10 @@ export const wizardFeature: UiFeature = {
                 onClick: () => {
                   applyMix(p.mix)
                   painter.set(gridSpec)
+                  // Third site, same rule: applyMix rewrites the slots and may set customCmd,
+                  // and painter.set fires no onChange — so the palette, the custom input and
+                  // the meter all need the full repaint, not just the roster.
+                  renderAgentControls()
                   renderRoster()
                   getTelemetry().captureEvent({ name: 'preset.applied' })
                 }
@@ -1666,10 +1713,17 @@ export const wizardFeature: UiFeature = {
                 type: 'button',
                 ariaLabel: `Delete preset ${p.name}`,
                 onClick: () => {
-                  void wizardClient.removePreset(p.id).then(() => {
-                    presets = presets.filter((x) => x.id !== p.id)
-                    renderPresets()
-                  })
+                  void wizardClient
+                    .removePreset(p.id)
+                    .then(() => {
+                      presets = presets.filter((x) => x.id !== p.id)
+                      renderPresets()
+                    })
+                    .catch((error: unknown) => {
+                      presetError =
+                        error instanceof Error && error.message ? error.message : 'The preset could not be deleted.'
+                      renderPresets()
+                    })
                 }
               },
               [icon('x', 12)]
@@ -1701,14 +1755,19 @@ export const wizardFeature: UiFeature = {
       const target = s.remote ? '' : s.cwd.trim()
       if (target && target === preflightCwd) return syncIsolate() // already asked about this one
       const token = ++preflightSeq
-      isolatePreflight = null
       preflightCwd = null
-      if (!target || (origin === 'bar' && s.probing)) return syncIsolate() // nothing to ask yet
+      if (!target || (origin === 'bar' && s.probing)) {
+        // A REMOTE target is not "waiting" — no probe will ever run for it, and saying
+        // "Checking…" over a question nobody asked is what left it permanently pending.
+        isolateProbe = s.remote ? { kind: 'not-applicable' } : { kind: 'no-folder' }
+        return syncIsolate()
+      }
+      isolateProbe = { kind: 'pending' }
       preflightCwd = target
       syncIsolate() // paint "checking…" before the round trip
       const settle = (pf: WorktreePreflight): void => {
         if (token !== preflightSeq) return // a newer folder owns the toggle
-        isolatePreflight = pf
+        isolateProbe = { kind: 'answered', preflight: pf }
         syncIsolate()
       }
       void wizardClient
@@ -1717,43 +1776,27 @@ export const wizardFeature: UiFeature = {
         .catch(() => settle({ ok: false, reason: 'unsupported' }))
     }
 
-    /** What each refusal MEANS, in the user's terms — and, where one exists, the button that
-     *  fixes it. Every line here names the real obstacle rather than restating the feature. */
-    /** Short forms (compact pass): the happy path and the wait are near-silent; a refusal
-     *  still names its obstacle — that text is the actionable kind and stays. */
-    function isolationHint(pf: WorktreePreflight | null): { text: string; fix?: 'path' } {
-      if (!cwd.trim()) return { text: 'Needs a git repository.' }
-      if (!pf) return { text: 'Checking…' }
-      switch (pf.reason) {
-        case 'ok':
-          return { text: 'Own branch and folder per agent.' }
-        case 'no-git':
-          // THE case this preflight was written for. Not "install git" — git is usually
-          // already installed and simply arrived after this app started, so the honest fix
-          // is one button, not a download.
-          return { text: 'Git is unreachable — if you installed it recently, it just needs picking up.', fix: 'path' }
-        case 'no-commits':
-          return { text: 'No commits yet — make one first.' }
-        case 'not-writable':
-          return { text: 'Folder is read-only.' }
-        case 'unsupported':
-          return { text: pf.detail ? `Git refused: ${pf.detail}` : 'Git couldn’t prepare this repository.' }
-        default:
-          return { text: 'Not a git repository — run `git init` to enable.' }
-      }
-    }
-
     /** Worktree isolation is only offered when it can actually WORK — and only truly OFF
      *  when the input is really disabled (never `pointer-events: none`). */
     function syncIsolate(): void {
       if (!isolateBox) return
-      const usable = isolatePreflight?.ok === true
-      if (!usable) isolate = false
-      isolateBox.setDisabled(!usable)
-      isolateBox.setChecked(isolate && usable)
-      const { text, fix } = isolationHint(isolatePreflight)
-      isolateHint.textContent = text
-      isolateFix.hidden = fix !== 'path'
+      // Derived, never written back. `if (!usable) isolate = false` put a transient unknown
+      // into durable intent: every folder change nulls the verdict, so switching folders
+      // silently un-ticked the box and returning to a folder that CAN isolate left it off.
+      const view = isolationView({ probe: isolateProbe, want: isolate })
+      isolateBox.setDisabled(!view.enabled)
+      isolateBox.setChecked(view.checked)
+      isolateHint.textContent = view.hint
+      isolateFix.hidden = view.fix === null
+      isolateFixKind = view.fix
+      isolateFix.textContent = view.fix === 'path' ? 'Find Git' : 'Check again'
+    }
+
+    /** Ask the SAME folder again. The verdict is cached per folder, so without this a
+     *  repository that became isolable mid-session stayed refused until the folder changed. */
+    function recheckIsolation(): void {
+      preflightCwd = null
+      probeIsolation('native')
     }
 
     /** The one-click answer to "this app can't reach Git": re-read the live PATH, then ask
@@ -1766,7 +1809,7 @@ export const wizardFeature: UiFeature = {
         .catch(() => undefined)
         .finally(() => {
           isolateFix.disabled = false
-          isolateFix.textContent = 'Find Git'
+          isolateFix.textContent = isolateFixKind === 'path' ? 'Find Git' : 'Check again'
           // Force a re-ask for the SAME folder: the answer may have changed even though
           // the path did not — that is the entire point of the button.
           preflightCwd = null
@@ -2014,7 +2057,8 @@ export const wizardFeature: UiFeature = {
         setGrid: (rows: number, cols: number) => {
           setGridSpec(uniformSpec(Math.max(1, Math.floor(rows)), Math.max(1, Math.floor(cols))))
           painter.set(gridSpec)
-          refreshAgents()
+          renderAgentControls() // same as the Reset-grid handler — this is the path WIZLAYOUT drives
+
           return paneCount
         },
         merge: (r0: number, c0: number, r1: number, c1: number) => painter.mergeRect(r0, c0, r1, c1),

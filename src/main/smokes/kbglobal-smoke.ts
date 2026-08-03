@@ -1,6 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { MOD_KEY_CDP_BIT } from './kit'
 
 // Env-gated GLOBAL-SHORTCUT smoke (MOGGING_KBGLOBAL).
 //
@@ -37,21 +38,46 @@ import { join } from 'node:path'
 //             which never protected it (the app listens in CAPTURE), so `isEditableTarget` is the
 //             only thing standing there. Deleting the guard to "fix" the terminal re-breaks this, and
 //             re-adding a tagName test to fix THIS re-breaks the terminal. The gate refuses both.
+//             That sentence was true of the pane verbs and FALSE of the Board, which listened in the
+//             BUBBLE phase: there the input's stopPropagation() ended the event first, so this half
+//             of the gate passed on Windows without the guard ever being asked, while on macOS the
+//             Board opened mid-rename. Both are fixed at the source — the Board, Brain and dock
+//             toggles capture like everything else, and `shortcutsBlocked` reads the FOCUSED element
+//             as well as the event's target, since a bubble listener only ever sees events whose
+//             target is something other than the field holding the caret. The premise is therefore
+//             re-asserted BETWEEN the chords below: a negative that runs after the caret has left
+//             the field is not the negative this section claims to be.
 // The positive runs FIRST and through the same dispatch, so a gate that passes because the app went
 // deaf — or because the keys never arrived — is impossible.
 
 // CDP modifier bitmask: Alt=1 Ctrl=2 Meta=4 Shift=8. The workspace handler switches on
 // e.key.toLowerCase(); Board and Browser switch on e.code — so every chord carries both, exactly as
 // a real keypress does.
+//
+// MOD is the PLATFORM's modifier bit, not a hardcoded Ctrl. core/commands/chords.ts made the app's
+// modifier the platform's own and never both (⌘ on macOS, Ctrl elsewhere), because `ctrlKey ||
+// metaKey` made the WINDOWS key a modifier — Win+K fired our palette *and* Windows' Cast panel from
+// one press. Pressing Ctrl on a Mac now correctly reaches NOTHING, so a gate that hardcodes Ctrl
+// stops testing the shortcut layer at all and just re-asserts the removed defect. Every chord's
+// name below still reads "Ctrl+…" because that is the Windows/Linux spelling the shortcut sheet
+// prints; on macOS the same row means ⌘.
+//
+// The NEGATIVE section (8) presses these same chords and demands nothing happens. That stays honest
+// under this change — indeed it gets stricter: it now presses the modifier that genuinely WOULD
+// fire the verb (section 1 proves that exact dispatch splits a pane), so a pass there can no longer
+// be a chord the platform was going to ignore anyway.
+const MOD = MOD_KEY_CDP_BIT // Meta(4) on macOS, Ctrl(2) on Windows/Linux — kit.ts owns the choice
+const SHIFT = 8
+const ALT = 1
 const CHORDS = {
-  'Ctrl+Shift+D': { modifiers: 10, key: 'D', code: 'KeyD', vk: 68 },
-  'Ctrl+Shift+Enter': { modifiers: 10, key: 'Enter', code: 'Enter', vk: 13 },
-  'Ctrl+Alt+Right': { modifiers: 3, key: 'ArrowRight', code: 'ArrowRight', vk: 39 },
-  'Ctrl+Shift+G': { modifiers: 10, key: 'G', code: 'KeyG', vk: 71 },
-  'Ctrl+Shift+U': { modifiers: 10, key: 'U', code: 'KeyU', vk: 85 },
-  'Ctrl+T': { modifiers: 2, key: 't', code: 'KeyT', vk: 84 },
-  'Ctrl+1': { modifiers: 2, key: '1', code: 'Digit1', vk: 49 },
-  'Ctrl+2': { modifiers: 2, key: '2', code: 'Digit2', vk: 50 },
+  'Ctrl+Shift+D': { modifiers: MOD | SHIFT, key: 'D', code: 'KeyD', vk: 68 },
+  'Ctrl+Shift+Enter': { modifiers: MOD | SHIFT, key: 'Enter', code: 'Enter', vk: 13 },
+  'Ctrl+Alt+Right': { modifiers: MOD | ALT, key: 'ArrowRight', code: 'ArrowRight', vk: 39 },
+  'Ctrl+Shift+G': { modifiers: MOD | SHIFT, key: 'G', code: 'KeyG', vk: 71 },
+  'Ctrl+Shift+U': { modifiers: MOD | SHIFT, key: 'U', code: 'KeyU', vk: 85 },
+  'Ctrl+T': { modifiers: MOD, key: 't', code: 'KeyT', vk: 84 },
+  'Ctrl+1': { modifiers: MOD, key: '1', code: 'Digit1', vk: 49 },
+  'Ctrl+2': { modifiers: MOD, key: '2', code: 'Digit2', vk: 50 },
   F2: { modifiers: 0, key: 'F2', code: 'F2', vk: 113 },
   Escape: { modifiers: 0, key: 'Escape', code: 'Escape', vk: 27 }
 } as const
@@ -268,9 +294,37 @@ export function runKbGlobalSmoke(win: BrowserWindow): void {
         before: n0.panes,
         after: n1.panes
       })
+      // EACH negative stands on its own field. Chaining them was wrong: a chord's DEFAULT
+      // action can move the caret even when the app correctly declines the chord, and on
+      // macOS one does — after ⌘+Shift+D the caret is on BODY, while the app's own refusal
+      // held (the pane count above is unchanged). The second chord was then no longer being
+      // pressed "while renaming" at all, so it opened the Board correctly and the negative
+      // failed for a reason that has nothing to do with the guard it exists to test.
+      //
+      // So the premise is re-established and re-asserted immediately before every chord,
+      // rather than assumed to survive the previous one. Where the caret went in between is
+      // recorded as diagnosis, not judged: it is the platform's business, not the app's.
+      const caretAfterFirst = { tag: n1.activeTag, cls: n1.activeCls }
+      await press('Escape')
+      await sleep(250)
+      await ES('window.__kb.focusTab()')
+      await sleep(200)
+      await press('F2')
+      const n1b = await snap()
+      check('8 the rename field is re-opened and focused for the next chord', n1b.activeTag === 'INPUT' && n1b.activeCls.includes('ws-rename'), {
+        tag: n1b.activeTag,
+        cls: n1b.activeCls,
+        caretAfterFirst
+      })
       await press('Ctrl+Shift+G')
       const n2 = await snap()
-      check('8 Ctrl+Shift+G while renaming must NOT open the Board', !n2.view.includes('view-board'), n2.view)
+      check('8 Ctrl+Shift+G while renaming must NOT open the Board', !n2.view.includes('view-board'), {
+        view: n2.view,
+        // Where the caret sat when the chord landed: the assertion above only means
+        // anything if the field still had it, and n1b proved it did a moment earlier.
+        caretAtPress: { tag: n1b.activeTag, cls: n1b.activeCls },
+        caretAfter: { tag: n2.activeTag, cls: n2.activeCls }
+      })
       await press('Escape')
       await sleep(300)
 

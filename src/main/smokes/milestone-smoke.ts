@@ -165,10 +165,16 @@ const SCRIPT = `(async () => {
   const idleGaps = await sample(1500)
   const idle = metrics(idleGaps, 1500)
 
+  // heapMB is -1 when performance.memory was unavailable — "we measured nothing", which
+  // used to satisfy the budget clause it sat in. docs/05 states a heap ceiling as a law;
+  // a run that could not weigh the heap has not shown the law holds, so presence is its
+  // own named invariant and an absent measurement reads as an absent measurement.
+  const heapMeasured = heapMB >= 0
   const budgetOk =
     stress.maxGapMs <= B.maxFrameGapMs &&
     stress.avgFps >= B.minAvgFps &&
-    (heapMB === -1 || heapMB <= B.maxHeapMB) &&
+    heapMeasured &&
+    heapMB <= B.maxHeapMB &&
     idle.maxGapMs <= B.maxFrameGapMs
   const pass =
     panes.length === 16 &&
@@ -183,7 +189,7 @@ const SCRIPT = `(async () => {
 
   return {
     pass, budget: B,
-    mounted: panes.length, ticks, stress, idle, heapMB,
+    mounted: panes.length, ticks, stress, idle, heapMB, heapMeasured,
     attention4, flipped, controlState, webglVisible,
     tabRing, warmKept, domHidden, ringAfterFocus, webglBack
   }

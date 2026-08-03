@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { removeTempDirs } from './temp-dir'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -20,7 +21,7 @@ const makeRoot = (files: Record<string, string>): string => {
 }
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+  removeTempDirs(roots)
 })
 
 const byName = (deps: ReturnType<typeof resolveLibraries>, name: string) => deps.find((d) => d.name === name)

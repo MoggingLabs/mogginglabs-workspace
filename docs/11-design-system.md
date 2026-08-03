@@ -9,7 +9,7 @@ AA thresholds used: **4.5:1** for text/icon-grade ink, **3:1** for non-text UI.
 > audit script". *There was no audit script* — `git log -S luminance` finds one
 > commit whose only surviving trace is this prose and a few comments in `global.css`.
 > Every AA number here was a claim re-derived by hand. The math now lives in
-> `src/main/setshell-smoke.ts` (sRGB linearization → relative luminance → contrast,
+> `src/main/smokes/setshell-smoke.ts` (sRGB linearization → relative luminance → contrast,
 > with real alpha compositing up the ancestor chain, because `--accent-weak` is an
 > `rgba()` and measuring it against `transparent` scores it as pure black). It runs
 > in **all four themes** on every text class the Settings shell introduces, and it
@@ -25,7 +25,7 @@ AA thresholds used: **4.5:1** for text/icon-grade ink, **3:1** for non-text UI.
 > `.settings-nav-item:not(.is-active)` and `.settings-nav-item.is-active` as separate
 > nodes: the active item is first in the DOM, so a bare selector measures it twice and
 > silently never checks the other state. When 8.5/06 lifts the probe into
-> `src/main/aa-probe.ts`, the freeze goes with it — **inside** the exported call, so a
+> `src/main/smokes/aa-probe.ts`, the freeze goes with it — **inside** the exported call, so a
 > caller cannot forget what it never had to remember.
 >
 > **The shared probe, and what it caught at the freeze (8.5/09).** SETSHELL, HOMEUX,
@@ -756,12 +756,14 @@ and gallery-verified in both themes (`*-usage-*.png`).
 ### The titlebar gauge — icon states
 
 Two 14×3px tracks (`--surface-3` base, `--accent` fill), stacked (session
-over weekly), inside a standard `.icon-btn`. All state flips are PAINT-ONLY
+over weekly), inside a standard `.icon-btn`. Fill direction is % REMAINING —
+the same grammar as every popover bar (one direction across the whole
+feature; a full track is a full tank). All state flips are PAINT-ONLY
 (class + width), measured 15.6–22.7ms popover open against the 100ms budget.
 
 | State | Treatment |
 |---|---|
-| rest | accent fills at the mirrored plan's percentages |
+| rest | accent fills at the mirrored plan's REMAINING percentages (drains as you use) |
 | `is-warn` | fills flip to `--warning` (verdict = runs-out) |
 | `is-stale` | whole icon at 0.45 opacity (old data, honestly dimmed) |
 | `is-off` | empty outlined tracks (`--text-dim` border) — nothing configured |
@@ -771,16 +773,25 @@ over weekly), inside a standard `.icon-btn`. All state flips are PAINT-ONLY
 
 ### Popover anatomy (the glance)
 
-`.menu` panel (`--bg-elevated`, `--shadow-2`), 300px, ≤70vh scroll. Top to
-bottom: **sticky header** (gauge-mode switcher + the worst runs-out plan's
-label + verdict — surfaces regardless of scroll or manual order) · provider
-groups (severity-ordered, or manual pin order) · plan tiles · the one-line
-switch hint · footer (age + refresh + gear → Settings § Usage). Tiles:
-head (plan label · profile · status chip when non-operational · health
-pill) → window rows (label · track · % · reset line) → verdict line. The
-ACTIVE profile's tile speaks the rail's selection grammar: 4px `--accent`
-left bar + `--accent-weak` wash, paint only. Compact density drops verdict
-lines, keeps pills + bars.
+`.menu` panel (`--bg-elevated`, `--shadow-2`), 320px, ≤78vh scroll. Top to
+bottom: **sticky tab strip** (Overview · one tab per provider, a remaining-
+fill hairline under each label) · provider sections — header (name bold ·
+health/status pills ONLY when news · the **account switcher**: active
+profile name + fold-down chevron; clicking it unfolds the lane list, because
+a name wearing an arrow must switch accounts, not navigate; one lane = plain
+text, no arrow) · the folded lane rows (name · mini remaining bar · pace
+delta; the ACTIVE lane speaks the rail's selection grammar: 4px `--accent`
+left bar + `--accent-weak` wash) · window rows (label · 5px remaining bar
+with the expected-pace tick · "N% left" · signed delta chip whose tooltip
+carries the verdict + risk · reset) · ONE plan-level verdict line (backend
+wording, verbatim) · labeled credits/spend row (cloud spend reads "Billed
+this month" — a real bill; the tooltip says how it is measured) · the cost
+cluster (2×2 grid + 30-day spark, tagged "local estimate"; disclaimer + top
+model ride tooltips; cloud-cli providers get NO cost cluster — their spend
+row is the bill) · one icon-only action row · the one-line switch hint ·
+footer (age + refresh). Per-section age appears only when stale — the foot
+dates the popover. Compact density drops the verdict line, keeps pills +
+bars.
 
 ### Severity inks (one mapping, everywhere)
 

@@ -6,8 +6,8 @@
 // text or user input never becomes a path or branch name (ADR 0002 posture).
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, writeFileSync, existsSync, realpathSync } from 'node:fs'
-import { join, resolve, sep } from 'node:path'
+import { mkdirSync, writeFileSync, existsSync, realpathSync, accessSync, constants as fsConstants } from 'node:fs'
+import { join, resolve, sep, dirname } from 'node:path'
 import type {
   CreateWorktreeResult,
   RemoveWorktreeResult,
@@ -83,12 +83,35 @@ export async function preflightWorktrees(repo: string): Promise<WorktreePrefligh
 
   // The managed root has to be creatable, and finding that out now beats finding it out
   // after the first three worktrees already exist.
+  //
+  // ASKED, not done. This used to mkdir <repo>/.mogging/worktrees — and preflight is the
+  // wizard's "can this folder be isolated?" probe, fired from the folder browser's
+  // selection subscriber. `is-inside-work-tree` is true for every SUBDIRECTORY of a repo,
+  // so merely BROWSING through repo/src/ui created a `.mogging/` in each level on the way,
+  // and typing a path created one per debounce. Nothing ever removed them, and none of them
+  // got the self-ignoring .gitignore that createWorktree writes alongside the real root —
+  // so a read-only question left untracked directories scattered through the user's repo.
+  //
+  // Writability is answered by asking the nearest EXISTING ancestor instead. Advisory
+  // against Windows ACLs, so createWorktree can still fail later — and its error stays the
+  // honest answer when it does.
   try {
-    mkdirSync(worktreesRoot(repo), { recursive: true })
+    accessSync(nearestExistingAncestor(worktreesRoot(repo)), fsConstants.W_OK)
   } catch (e) {
     return refuse('not-writable', String(e).slice(0, 200))
   }
   return { ok: true, reason: 'ok' }
+}
+
+/** The closest ancestor of `p` that exists — where a create would actually be attempted. */
+export function nearestExistingAncestor(p: string): string {
+  let cur = p
+  for (;;) {
+    if (existsSync(cur)) return cur
+    const up = dirname(cur)
+    if (up === cur) return cur // filesystem root: let accessSync give the real error
+    cur = up
+  }
 }
 
 const worktreesRoot = (repo: string): string => join(repo, '.mogging', 'worktrees')
@@ -195,7 +218,10 @@ export async function listWorktrees(repo: string): Promise<WorktreeInfo[]> {
   }
   for (const wt of out) {
     const st = await git(wt.path, ['status', '--porcelain'])
-    wt.dirty = st.ok && st.stdout.trim().length > 0
+    // Unknown reads as DIRTY, the same direction removeWorktree refuses in. A status we
+    // could not read rendered as a clean worktree — the reassuring answer — and clean is
+    // the one the user acts on by deleting it.
+    wt.dirty = !st.ok || st.stdout.trim().length > 0
   }
   return out
 }
@@ -212,10 +238,22 @@ export async function removeWorktree(
     if (!isManaged(repo, path)) return { ok: false, reason: 'not-managed' }
     if (!force) {
       const st = await git(path, ['status', '--porcelain'])
-      if (st.ok && st.stdout.trim().length > 0) return { ok: false, reason: 'dirty' }
+      // A status we could not read is NOT a clean worktree. `st.ok && …` treated a timeout,
+      // a maxBuffer overrun on a huge status, or a git that could not run as "nothing to
+      // lose" — and then deleted the checkout. The whole point of this refusal is that an
+      // agent's uncommitted work is what Phase-3/04 reviews, so the one outcome that must
+      // never happen on an unknown is the destructive one. Unknown refuses, exactly as
+      // dirty does; --force is still the way through, and it is now a decision the user
+      // makes rather than one a slow disk makes for them.
+      if (!st.ok || st.stdout.trim().length > 0) return { ok: false, reason: 'dirty' }
     }
     const args = force ? ['worktree', 'remove', '--force', path] : ['worktree', 'remove', path]
-    const res = await git(repo, args)
+    // Deleting a checkout costs what writing it cost. `worktree add` was given CHECKOUT_MS
+    // for exactly this reason and `remove` was left on the 15s metadata budget — so on the
+    // repos that motivated the add change, a rollback was killed mid-delete and left a
+    // half-removed tree, a live registration and the branch behind (the wizard then says
+    // "needs manual cleanup", which was true and unhelpful).
+    const res = await git(repo, args, CHECKOUT_MS)
     if (!res.ok) return { ok: false, reason: 'error', error: res.error }
     return { ok: true }
   } catch (e) {

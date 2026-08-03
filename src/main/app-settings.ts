@@ -1,7 +1,8 @@
 import { app, dialog, ipcMain } from 'electron'
 import { writeFile } from 'node:fs/promises'
+import { renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { SettingsStore } from '@backend/features/workspace'
+import { SettingsStore, isSqliteCorruption, corruptAsidePath, corruptSidecars } from '@backend/features/workspace'
 import { clearGrant } from '@backend/features/integrations'
 import {
   WorkspaceChannels,
@@ -11,7 +12,7 @@ import {
 } from '@contracts'
 import { maybeFault, persistFault } from './fault-port'
 import { exportPathOverride } from './fixture-port'
-import { noteWorkspaceSave } from './session-restore'
+import { armBootResumeIntentsOnce, noteWorkspaceSave } from './session-restore'
 
 // App-wiring: persist app-level workspace state and non-secret feature desired state via the
 // 03 store mechanism (better-sqlite3), in a main-owned db separate from daemon sessions.
@@ -19,6 +20,48 @@ import { noteWorkspaceSave } from './session-restore'
 
 let store: SettingsStore | null = null
 let storeOpenReason = ''
+/** Where a corrupt store was moved aside, when one was. Recorded rather than swallowed:
+ *  a fresh database opens cleanly, so without this "all my workspaces vanished" has no
+ *  evidence anywhere — and the set-aside file IS the recovery path. */
+let storeResetFrom = ''
+
+/**
+ * Open the settings store, recovering from a CORRUPT file rather than dying on it.
+ *
+ * A throw here used to leave store = null for the whole process lifetime. That is every
+ * workspace, layout, board and profile — persistence simply stopped, permanently, and the
+ * only recovery was deleting the file by hand. The daemon already had this recovery for
+ * its own store (pty-daemon/index.ts); the app, which holds far more of the user's work,
+ * did not.
+ *
+ * Only corruption moves the file, for the reason isSqliteCorruption exists: a lock or a
+ * transient fault can clear, and moving the file on one throws away a healthy store.
+ */
+function openSettingsStore(dbPath: string): SettingsStore {
+  try {
+    return new SettingsStore(dbPath)
+  } catch (e) {
+    if (!isSqliteCorruption(e)) throw e
+    const aside = corruptAsidePath(dbPath, Date.now())
+    try {
+      renameSync(dbPath, aside)
+      // The journal goes with it, or the fresh database inherits the old file's
+      // uncommitted tail — a clean start that carries the corruption forward.
+      for (const side of corruptSidecars(dbPath)) {
+        try {
+          renameSync(side, corruptAsidePath(side, Date.now()))
+        } catch {
+          /* no journal beside it */
+        }
+      }
+    } catch {
+      /* locked or already gone — the fresh open below decides */
+    }
+    console.error('[persistence] settings store was corrupt; set aside at ' + aside)
+    storeResetFrom = aside
+    return new SettingsStore(dbPath)
+  }
+}
 const debugCounters = { loads: 0, saves: 0, exports: 0 }
 
 export function registerAppSettings(): void {
@@ -27,7 +70,7 @@ export function registerAppSettings(): void {
     // port — inert, and injector-free, in the shipped app (finding 41; src/main/fault-port.ts).
     const openFault = persistFault('open')
     if (openFault) throw new Error(openFault)
-    store = new SettingsStore(join(app.getPath('userData'), 'app-settings.db'))
+    store = openSettingsStore(join(app.getPath('userData'), 'app-settings.db'))
     storeOpenReason = ''
   } catch (error) {
     store = null
@@ -42,7 +85,13 @@ export function registerAppSettings(): void {
     const loadFault = persistFault('load')
     if (loadFault) throw new Error(loadFault)
     if (!store) throw new Error(storeOpenReason || 'The workspace store is unavailable.')
-    return store.load()
+    const state = store.load()
+    // The boot restore relaunches every lineup with `resume: true` — arm its
+    // exact-session intents (once per run, intersection-guarded) so a cold-daemon
+    // restart resumes each pane's OWN session instead of the CLI's picker
+    // (session-restore.ts, audit 2026-08-02).
+    armBootResumeIntentsOnce(state)
+    return state
   })
   ipcMain.handle(WorkspaceChannels.saveState, (_e, state: WorkspaceState) => {
     debugCounters.saves++
@@ -109,6 +158,13 @@ export function disposeAppSettings(): void {
   store?.close()
   store = null
   storeOpenReason = ''
+  storeResetFrom = ''
+}
+
+/** The path a corrupt settings store was set aside to this launch, or ''. The user's
+ *  data is in that file; nothing else records where it went. */
+export function settingsStoreResetFrom(): string {
+  return storeResetFrom
 }
 
 /** The shared app-settings store (also backs 06b provider-mix templates). */
@@ -117,6 +173,6 @@ export function getSettingsStore(): SettingsStore | null {
 }
 
 /** Read-only counters for the persistence failure-injection gate. */
-export function appSettingsDebug(): Readonly<typeof debugCounters> {
-  return { ...debugCounters }
+export function appSettingsDebug(): Readonly<typeof debugCounters & { resetFrom: string }> {
+  return { ...debugCounters, resetFrom: storeResetFrom }
 }

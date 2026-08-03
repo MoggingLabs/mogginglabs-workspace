@@ -101,6 +101,23 @@ export async function runSessionPoolSmoke(): Promise<void> {
     const res3 = poolProviderSessions('claude', cwd, B, [B, ''], now)
     r.selfPoolNoop = res3.copied === 0 && res3.skipped === 0 && res3.errors === 0
 
+    // ── AN UNCHANGED SOURCE COPIES NOTHING, TWICE RUNNING ──
+    // The copy preserves the source's mtime so newer-wins survives repeated pools —
+    // but `utimesSync` cannot reproduce a fractional-millisecond mtime, and a copy that
+    // lands a hair OLDER than its source fails `dst >= src` FOREVER. Measured before the
+    // fix: 16 of 40 round-trips landed older, so ~40% of a home's transcripts were
+    // re-copied in full on every launch, permanently. Many files, because the rounding
+    // direction varies per file — one file could pass by luck.
+    const churnCwd = path.join(os.tmpdir(), `mogging-pool-churn-${process.pid}`)
+    const churnSrc = path.join(A, 'projects', claudeProjectDirName(churnCwd))
+    for (let i = 0; i < 25; i++) {
+      mk(path.join(churnSrc, `${'0'.repeat(7)}${i}-1111-2222-3333-444444444444.jsonl`), `line ${i}\n`, 0)
+    }
+    const churn1 = poolProviderSessions('claude', churnCwd, B, [A], now)
+    const churn2 = poolProviderSessions('claude', churnCwd, B, [A], now)
+    r.firstPoolCopies = churn1.copied === 25
+    r.unchangedPoolCopiesNothing = churn2.copied === 0 && churn2.skipped === 25
+
     // ── codex: cwd scoping + the dated path survives the trip ──
     const cUuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     const dated = path.join('sessions', '2026', '07', '14')

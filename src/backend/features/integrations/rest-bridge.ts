@@ -199,10 +199,26 @@ async function fetchWithRetry(
   const timeout = (): AbortSignal => AbortSignal.timeout(svc.timeoutMs ?? 15_000)
   let res = await doFetch(url, { ...init, signal: timeout() })
   if (!res.ok && retryableStatus(res.status, svc.entry.retry)) {
+    // The first response's body is never read on this path. An unread body holds its
+    // connection open until GC gets to it — with a per-tool retry on a hot loop that is a
+    // socket leak against someone else's API, and the first thing they see is us
+    // exhausting their connection limit. Cancelling releases it now.
+    discardBody(res)
     await new Promise((r) => setTimeout(r, retryDelayMs(res.headers, svc.entry.retry, 0, now())))
     res = await doFetch(url, { ...init, signal: timeout() })
   }
   return res
+}
+
+/** Release a response we will never read. Never throws: an already-consumed or already-
+ *  errored body is exactly the state we wanted, and a failure to tidy up must not become
+ *  the caller's error. */
+export function discardBody(res: { body?: { cancel?: () => Promise<unknown> } | null }): void {
+  try {
+    void res.body?.cancel?.()?.catch?.(() => undefined)
+  } catch {
+    /* already consumed, or a fetch impl without a cancellable body */
+  }
 }
 
 /** Execute one curated tool call. Every path out of here is either the shaped
@@ -286,7 +302,10 @@ export async function executeRestTool(
       if (auth?.in === 'query' && auth.queryParam) nextUrl.searchParams.set(auth.queryParam, svc.token)
       try {
         const res = await fetchWithRetry(nextUrl, { method: 'GET', headers }, svc)
-        if (!res.ok) break
+        if (!res.ok) {
+          discardBody(res) // leaving the loop without reading it holds the connection open
+          break
+        }
         page = await res.json().catch(() => null)
       } catch {
         break
@@ -356,4 +375,32 @@ export async function handleRestBridgeRpc(payload: unknown, svc: RestBridgeServi
     default:
       return rpcError(id, -32601, `The ${svc.entry.label} bridge does not speak "${method}".`)
   }
+}
+
+/**
+ * May this caller reach an OAuth-connected upstream through the house proxy at all?
+ *
+ * The REST branch of the connection bridge resolves `writeGranted` from the caller's
+ * pane → workspace → grant, and `resolveWriteAllGranted` returns false for a paneless caller —
+ * fail-closed, as its own comment says. The MCP-proxy branch beside it resolved nothing and
+ * checked nothing: it forwarded arbitrary JSON-RPC upstream with the connection's DECRYPTED
+ * access token attached.
+ *
+ * So any same-user process that could read the 0600 endpoint file could call every tool on
+ * every connected service, as the user, with no workspace and therefore no grant to answer to.
+ *
+ * A caller with no pane has no workspace, so there is no grant to check it against. That is not
+ * "allow by default" — it is "we cannot ask", and the same-shaped hole this whole audit keeps
+ * turning up. Refused.
+ *
+ * NOT gated here: which TOOLS a pane-bound caller may invoke. The proxy has no catalog for an
+ * arbitrary upstream MCP server, so it cannot tell a read from a write — refusing every
+ * `tools/call` when Write tools is off would break read-only use of every connected service.
+ * That scoping is the workspace-tool-plan question, which the contracts still describe as
+ * "CONTEXT hygiene, not a security boundary" while ADR 0014 calls it the boundary. Naming it
+ * is a decision, not a refactor.
+ */
+export function connectionProxyRefusal(caller: { pane?: string }): string | null {
+  if (caller.pane) return null
+  return 'This connection is reachable only from a pane in a workspace that has connected it — the caller here is not bound to one.'
 }

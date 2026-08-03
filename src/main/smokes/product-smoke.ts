@@ -8,6 +8,7 @@ import { createWorktree } from '@backend/features/worktrees'
 import { dockDebug } from '../browser-dock'
 import { capturePaneTokenForSmoke, sh, softFps, softGapMs } from './smoke-shell'
 import { approvalListed, sendApprovalFromPane } from './reviewer-smoke-helper'
+import { MOD_KEY_FIELD } from './kit'
 
 // Env-gated PRODUCT MILESTONE (MOGGING_PRODUCT, Phase-6/07) — the freeze proof.
 // ONE asserted flow: an installer-fresh machine reaches a working swarm + browser,
@@ -214,7 +215,9 @@ export function runProductSmoke(win: BrowserWindow): void {
 
       // ── B. Budgets with EVERYTHING on: board visited, dock still open, 12+
       // panes, torrent + switches — the machine budget must not move. ──────────
-      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { ctrlKey: true, shiftKey: true, code: 'KeyG', bubbles: true }))`)
+      // THIS platform's modifier (⌘ on macOS, Ctrl elsewhere) — chords.ts made it the
+      // platform's own and never both, so a hardcoded Ctrl press opens no Board on a Mac.
+      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { ${MOD_KEY_FIELD}: true, shiftKey: true, code: 'KeyG', bubbles: true }))`)
       await sleep(700)
       await ES(`window.__mogging.workspace.create({ name: 'Torrent' })`)
       await sleep(500)

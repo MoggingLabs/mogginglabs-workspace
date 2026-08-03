@@ -1,4 +1,4 @@
-import { AgentChannels, TerminalChannels, type AgentInfo, type AgentCommandRequest, type AgentCommandResult } from '@contracts'
+import { AgentChannels, TerminalChannels, type AgentInfo, type AgentCommandCommitRequest, type AgentCommandCommitResult, type AgentCommandRequest, type AgentCommandResult } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 
 /**
@@ -23,6 +23,11 @@ export const agentsClient = {
     devSpy('agentCommandCalls')?.push({ paneId: req.paneId, agentId: req.agentId, at: performance.now() })
     return getBridge().invoke(AgentChannels.command, req) as Promise<AgentCommandResult>
   },
+  /** Claim a prefetched build's deferred effects (one-shot overrides, the session
+   *  declaration, the restore intent) at the moment its command is typed. `ok:false`
+   *  means nothing was pending — the caller must rebuild consumingly instead. */
+  commandCommit: (req: AgentCommandCommitRequest): Promise<AgentCommandCommitResult> =>
+    getBridge().invoke(AgentChannels.commandCommit, req) as Promise<AgentCommandCommitResult>,
   launchInto: (paneId: number, command: string): void => {
     devSpy('ptyWrites')?.push({ id: paneId, data: command + '\r', at: performance.now() })
     getBridge().send(TerminalChannels.write, { id: paneId, data: command + '\r' })

@@ -8,8 +8,9 @@
 import * as crypto from 'node:crypto'
 import { spawnPty, type IPty } from '@backend/platform/pty-host'
 import { mergeEnv } from '@backend/platform/env-path'
+import { killPtyTree } from '@backend/platform/process-tree'
 import { paneShellLaunch } from '@backend/platform/shell'
-import { RESTORE_MODE_RESET, SCROLLBACK_CHARS, pickCwd, trimTornStart } from '@backend/features/terminal/pane-shared'
+import { PTY_INPUT_CHUNK_CHARS, RESTORE_MODE_RESET, SCROLLBACK_CHARS, chunkPtyInput, pickCwd, trimTornStart , paneProcessEnv} from '@backend/features/terminal/pane-shared'
 import { aiderLogPath } from '@backend/features/context'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { PANE_CWD_MAX, normalizeRemoteConnection, notifyEventToState } from '@contracts'
@@ -353,6 +354,16 @@ const LAUNCH_DIMS_GRACE_MS = Math.min(
   Math.max(500, Number(process.env.MOGGING_LAUNCH_DIMS_GRACE_MS) || 15_000)
 )
 
+/**
+ * Gap between paced pty input chunks (writePty). The reader is a process blocked in
+ * `read()` — it wakes and drains a chunk in microseconds — so this only has to be longer
+ * than a scheduler hop, never a guess about the shell. It is a CEILING on throughput, and
+ * 512 chars per 8ms is ~64 KB/s: orders of magnitude past any human, and a 4000-character
+ * composed prompt lands in ~56ms. The first chunk is never delayed, so nothing a person
+ * types ever waits on this.
+ */
+const PTY_INPUT_GAP_MS = 8
+
 export interface PaneSubscriber {
   send(data: string): void
   exit(code: number): void
@@ -423,6 +434,9 @@ class PaneSession {
   private readonly hooks: PaneHooks
   /** One breadcrumb per pane when the pty refuses writes — never one per keystroke. */
   private writeFailLogged = false
+  /** Input still owed to the pty, in chunks no larger than its input queue (writePty). */
+  private ptyWriteQueue: string[] = []
+  private ptyWriteTimer?: NodeJS.Timeout
   /** A typed launch waiting for the pane's grid to be CONFIRMED by a client (see
    *  LAUNCH_DIMS_GRACE_MS — the invariant lives on that constant's doc). */
   private pendingLaunch?: { cmd: string; cancelOnInput: boolean }
@@ -529,14 +543,13 @@ class PaneSession {
     // Remote SSH needs the user's ordinary process environment for PATH, HOME and
     // SSH_AUTH_SOCK, but none of the per-pane local env (service keys, profile pointers,
     // local analytics paths, or daemon routing). Direct daemon clients cannot bypass this.
+    // paneProcessEnv, not a spread: spec.env carries `PATH` (daemon-relay ships the app's
+    // live PATH with every spawn) while process.env on Windows spells it `Path`. Spread,
+    // both keys survive and node-pty emits them in order with no folding, so the pane got
+    // the STALE inherited one and every live-PATH repair landed in the losing key.
     const inheritedEnv: NodeJS.ProcessEnv = spec.remote
       ? { ...process.env }
-      : {
-          ...process.env,
-          AIDER_ANALYTICS_LOG: aiderLogPath(this.id),
-          ...extraEnv,
-          ...(spec.env ?? {})
-        }
+      : paneProcessEnv(process.env, { AIDER_ANALYTICS_LOG: aiderLogPath(this.id) }, extraEnv, spec.env)
     const shellLaunch = spec.remote
       ? { args, env: {} }
       : paneShellLaunch(shell, inheritedEnv, `${process.pid}-${this.id}-${this.gen}`)
@@ -776,12 +789,47 @@ class PaneSession {
     this.flushPendingLaunch()
   }
 
-  /** Every byte headed for the pty goes through here. node-pty's write THROWS once the pty is
-   *  tearing down (a race `resize`/`kill` already guard against, but `write` did not) — and in
-   *  the daemon an unguarded throw unwinds through the socket's data pump as an uncaughtException:
-   *  survivable, but it drops the rest of that chunk's messages and leaves only an UNCAUGHT line
-   *  to explain a pane that ate someone's keystrokes. Logged once per pane, not per keystroke. */
+  /**
+   * Every byte headed for the pty goes through here — and no ONE write may be larger than a
+   * pty's input queue, which is a fixed kernel buffer that DROPS what does not fit rather
+   * than blocking (PTY_INPUT_CHUNK_CHARS carries the sizes and the evidence). Anything over
+   * a chunk is paced out instead: the reader is woken by each chunk and drains it long
+   * before the next is due, so the queue never approaches its cap.
+   *
+   * A keystroke is a handful of characters and takes the fast path untouched — pacing must
+   * never cost echo latency. Only a write that could not fit anyway pays a timer, and the
+   * queue keeps every write in the order it was made (an unpaced write jumping a paced one
+   * would splice one command line into another's).
+   */
   private writePty(data: string): void {
+    if (!data) return
+    if (this.ptyWriteQueue.length === 0 && this.ptyWriteTimer === undefined && data.length <= PTY_INPUT_CHUNK_CHARS) {
+      this.writePtyChunk(data)
+      return
+    }
+    for (const chunk of chunkPtyInput(data)) this.ptyWriteQueue.push(chunk)
+    this.drainPtyWrites()
+  }
+
+  /** One chunk now, the rest on the pacing timer. The FIRST chunk is never delayed. */
+  private drainPtyWrites(): void {
+    if (this.ptyWriteTimer !== undefined) return
+    const chunk = this.ptyWriteQueue.shift()
+    if (chunk === undefined) return
+    this.writePtyChunk(chunk)
+    if (this.ptyWriteQueue.length === 0) return
+    this.ptyWriteTimer = setTimeout(() => {
+      this.ptyWriteTimer = undefined
+      this.drainPtyWrites()
+    }, PTY_INPUT_GAP_MS)
+  }
+
+  /** node-pty's write THROWS once the pty is tearing down (a race `resize`/`kill` already
+   *  guard against, but `write` did not) — and in the daemon an unguarded throw unwinds
+   *  through the socket's data pump as an uncaughtException: survivable, but it drops the
+   *  rest of that chunk's messages and leaves only an UNCAUGHT line to explain a pane that
+   *  ate someone's keystrokes. Logged once per pane, not per keystroke. */
+  private writePtyChunk(data: string): void {
     try {
       this.proc.write(data)
     } catch {
@@ -1022,11 +1070,23 @@ class PaneSession {
       clearTimeout(this.launchGraceTimer)
       this.launchGraceTimer = undefined
     }
-    try {
-      this.proc.kill()
-    } catch {
-      /* already gone */
+    // Input still owed to a pty that is about to be gone: dropping it here is the same
+    // outcome writePtyChunk's catch already gives, minus a timer holding the daemon awake.
+    if (this.ptyWriteTimer !== undefined) {
+      clearTimeout(this.ptyWriteTimer)
+      this.ptyWriteTimer = undefined
     }
+    this.ptyWriteQueue.length = 0
+    // The TREE, not the shell. A bare proc.kill() ends the pane's shell and leaves every
+    // descendant running — on Windows the agent keeps going headless with no terminal
+    // attached to it, and there is no surface left in the app that can find it again.
+    // The in-proc backend has always done this (pty.service.ts:353, :368); the DAEMON,
+    // which owns every pane in a normal install and outlives the app itself, never did.
+    // That also breaks daemon-migrate's retire hand-off, which assumes a retired daemon's
+    // agents end with it: they did not, and an update left two live copies of the same
+    // agent behind. killPtyTree keeps proc.kill() as its own last step, so this is strictly
+    // more teardown than before, never less.
+    killPtyTree(this.proc)
   }
 }
 

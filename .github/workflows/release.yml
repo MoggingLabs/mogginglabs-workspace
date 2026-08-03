@@ -329,5 +329,31 @@ jobs:
             echo "::error::the assembled release is missing feed files — staying DRAFT"
             exit 1
           fi
-          gh release edit "$TAG" --draft=false --latest
-          echo "published $TAG to the update feed"
+          # --latest is a CLAIM about the whole repo, not about this tag, and this job
+          # accepts an arbitrary `tag` input — so re-running it to repair an OLD release
+          # (the reason the input exists) used to point /releases/latest back at that old
+          # version. That endpoint is what the updater keys off: every install would be
+          # offered the older build, and pre-release users, who run with allowDowngrade,
+          # would actively downgrade. A repair must never move the feed backwards.
+          # Ask for the published tags as DATA and pick the newest in shell, so a jq
+          # failure cannot be mistaken for "there are none". That distinction is the
+          # whole point: an unreadable answer defaulting to "yes, latest" would restore
+          # exactly the bug below, and silently.
+          if ! PUBLISHED=$(gh release list --limit 100 --json tagName,isDraft,isPrerelease \
+                 -q '.[] | select(.isDraft == false and .isPrerelease == false) | .tagName'); then
+            echo "::error::could not read the published releases — refusing to guess whether $TAG is latest"
+            exit 1
+          fi
+          NEWEST=$(printf '%s\n' "$PUBLISHED" | tr -d '\r' | sed 's/^v//' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
+          THIS="${TAG#v}"
+          # No published semver release at all = this is the first, so it IS the latest.
+          # (Reached only when the query SUCCEEDED and returned none.)
+          if [ -z "$NEWEST" ] || [ "$THIS" = "$NEWEST" ] || \
+             [ "$(printf '%s\n%s\n' "$NEWEST" "$THIS" | sort -V | tail -1)" = "$THIS" ]; then
+            gh release edit "$TAG" --draft=false --latest
+            echo "published $TAG to the update feed (latest)"
+          else
+            gh release edit "$TAG" --draft=false --latest=false
+            echo "published $TAG WITHOUT moving the feed — v$NEWEST is newer and stays latest"
+          fi

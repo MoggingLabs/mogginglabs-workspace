@@ -8,18 +8,37 @@ tmux-grade scriptability from any shell (Phase-3/01). The `mogging` CLI talks to
 
 | Command | Does | Exit codes |
 |---|---|---|
-| `mogging list` | Enumerate live panes: `ID SIZE STATE TITLE` (state = idle/busy/attention; title = the launch label, e.g. `claude`) | `0` ok |
+| `mogging list` | Enumerate live panes: `ID SIZE STATE REMOTE TITLE` (state = idle/busy/attention; title = the launch label, e.g. `claude`) | `0` ok |
 | `mogging send <pane> <text…> [--no-enter]` | Type text into a pane; appends Enter unless `--no-enter`. Completion is confirmed via a pipelined ping (ordered stream). | `0` ok · `1` unknown pane |
 | `mogging send-key <pane> <key>` | Press a **named** key from the allowlist | `0` ok · `1` unknown pane · `2` unknown key |
 | `mogging capture <pane> [--lines N]` | Print the pane's retained scrollback tail (≤ 10000 lines, default 1000) to **stdout** | `0` ok · `1` unknown pane |
 | `mogging cwd [path]` | Declare the current pane's primary checkout/worktree (`.` by default). The next shell prompt retires it. | `0` ok · `1` rejected · `2` invalid/outside pane · `3` unavailable · `4` auth refused |
 | `mogging map [--budget N]` | Print the workspace brain's ranked repo map for the current checkout to **stdout** — file paths + definition signatures under a character budget (200–16000, default 4000), stamped `[repomap: generation N, X/Y files]`. Rides the app endpoint (the brain lives app-side). | `0` ok · `1` no brain for this cwd |
 | `mogging recall [--limit N] <task…>` | Print the team memories ranked against a task's text to **stdout**, one hit per line (`slug` TAB `score` TAB `name — description`, best first, ≤ 20) — the same deterministic `recall_memories` ranking agents get, so scripts and hooks can pre-brief a pane without MCP. Rides the app endpoint. | `0` ok · `1` no brain / no memories for this cwd |
-| `mogging [<dir>]` | Open/focus a workspace for a directory (deep link) | `0` |
+| `mogging [<dir>]` | Open/focus a workspace for a directory (deep link). The directory is stat'd first — a path that is not there is refused rather than announced and cold-started. | `0` ok · `2` not a directory |
 | `mogging notify --event <e>` | Raise the current pane's attention (Phase-2/04; always exits 0 — a hook must never fail its agent) | `0` |
+| `mogging open <dir> [--panes N]` | Open/focus a workspace and lay out N panes | `0` ok |
+| `mogging layout <N>` | Apply an N-pane template to the active workspace | `0` ok |
+| `mogging focus <pane>` | Focus a pane | `0` ok · `1` unknown pane |
+| `mogging expand <pane> [full\|col\|row]` | Expand a pane | `0` ok · `1` unknown pane |
+| `mogging close-pane <pane>` | Close a pane | `0` ok · `1` unknown pane |
+| `mogging mail send [--to <pane>\|all] <text…>` / `mail read [--since <id>] [--json]` | The pane mailbox (Phase-4) | `0` ok |
+| `mogging role <pane> <architect\|worker\|reviewer>` | Assign a swarm role | `0` ok · `1` unknown pane |
+| `mogging claim <pattern>` / `mogging release <pattern\|--all>` / `mogging owners [--json]` | The file-claim ledger (in-pane) | `0` ok · `1` refused |
+| `mogging approve <branch>` / `mogging approvals [--json]` | The reviewer sign-off gate (reviewer pane only) | `0` ok · `1` refused |
+| `mogging usage [cost\|providers\|refresh\|set-key\|clear-key]` | Provider usage and cost, over the APP endpoint | `0` ok · `1` rejected |
+
+Every verb `bin/mogging.mjs` dispatches appears above; scripts/check-docs-citations.mjs
+derives the list from the dispatch and fails if one is missing.
 
 Shared failure codes for the control verbs: `2` usage · `3` no daemon / timeout ·
-`4` auth refused.
+`4` auth refused. An unrecognised verb is `2` — it is never treated as a directory to open.
+
+**Flags are positional, so a flag can also be text.** `--dev` is read only from the leading
+flag region (`mogging --dev send …`); `--no-enter` only from the trailing one; `mail send`'s
+`--to` only at the front. Anywhere else each is payload, and a bare `--` makes everything
+after it literal. This is what lets `mogging send 1 --no-enter` type that literal into a pane
+instead of silently dropping it and the Enter.
 
 ## Provider-neutral working directory
 

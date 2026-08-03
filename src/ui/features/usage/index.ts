@@ -7,15 +7,18 @@ import { clear, el, icon, providerAccent, providerLogo, showToast } from '../../
 import { setActiveView } from '../../core/shell/view-port'
 import { requestSettingsTab } from '../../core/shell/settings-tab-port'
 import { switchActiveProfile } from '../../core/agents/profile-switch'
+import { announceUsageCapped } from '../../core/usage/usage-capped-port'
 import { getTelemetry } from '../../core/telemetry'
 
 /**
  * Usage at a GLANCE (Phase-7/03): a two-bar titlebar gauge (session over
- * weekly, the CodexBar icon grammar) + an anchored popover that answers
- * "can I keep going, and until when?" in one click. The popover opens on the
- * CACHED snapshot synchronously and refreshes in place — never a spinner
- * wall. Verdict strings arrive PRE-FORMATTED from the one backend formatter
- * (7/02) and render verbatim. No usage value enters telemetry (ADR 0005).
+ * weekly; fill = % LEFT, the same remaining-fill grammar as every popover
+ * bar — one direction across the whole feature) + an anchored popover that
+ * answers "can I keep going, and until when?" in one click. The popover opens
+ * on the CACHED snapshot synchronously and refreshes in place — never a
+ * spinner wall. Verdict strings arrive PRE-FORMATTED from the one backend
+ * formatter (7/02) and render verbatim. No usage value enters telemetry
+ * (ADR 0005).
  */
 
 const BADGE_PCT = 90
@@ -65,9 +68,10 @@ const tabDomId = (id: string): string => `usage-tab-${id}`
  * Every width goes through here, INCLUDING the zeroes: the name is part of the
  * paint, so an emptied gauge cannot keep announcing the window it no longer shows.
  *
- * `phrase` names the SEMANTIC of the painted width: the titlebar gauge still
- * paints "% used" (its historical grammar), while the popover rows paint "%
- * left" — the CodexBar fill direction. Whatever is painted is what is said.
+ * `phrase` names the SEMANTIC of the painted width. Since the consistency
+ * pass there is ONE direction everywhere: gauge, tab hairline, window row and
+ * lane tile all paint "% LEFT" (the CodexBar fill direction — a full track is
+ * a full tank). Whatever is painted is what is said.
  */
 const paintBar = (track: HTMLElement, fill: HTMLElement, pct: number, label = '', phrase: 'used' | 'left' = 'used'): void => {
   const v = Math.max(0, Math.min(100, Math.round(pct)))
@@ -94,6 +98,11 @@ export const usageFeature: UiFeature = {
     // 7/10: display prefs — WHICH plan the gauge mirrors, WHAT the icon
     // shows, how resets render. Painted, never decided, on this side.
     let display: UsageDisplayConfig = { ...USAGE_DISPLAY_DEFAULTS }
+    // Declutter pass: which providers' lane lists are unfolded (the header's
+    // account switcher). Session-scoped PAINT state — survives repaints so a
+    // background poll can't fold the list under the user's pointer; never
+    // persisted (an unfolded list is a glance, not a setting).
+    const openLanes = new Set<string>()
 
     /** The active profile id for a provider — order 0, or the seam's 'default'
      *  lane when no profiles exist. */
@@ -209,10 +218,14 @@ export const usageFeature: UiFeature = {
       gauge.dataset.profile = p.profileId
       const s = p.windows[0]?.usedPct ?? 0
       const w = p.windows[1]?.usedPct ?? s
-      paintBar(trackS, barS, s, p.windows[0]?.label ?? p.planLabel)
-      paintBar(trackW, barW, w, p.windows[1]?.label ?? p.windows[0]?.label ?? p.planLabel)
+      // The gauge speaks the POPOVER's grammar — fill = % LEFT, session over
+      // weekly — one direction across every bar this feature paints (a
+      // titlebar that FILLED while the popover DRAINED made the two surfaces
+      // read as different numbers for the same window).
+      paintBar(trackS, barS, 100 - s, p.windows[0]?.label ?? p.planLabel, 'left')
+      paintBar(trackW, barW, 100 - w, p.windows[1]?.label ?? p.windows[0]?.label ?? p.planLabel, 'left')
       glyph.replaceChildren(providerLogo(p.providerId, 13))
-      pctNum.textContent = `${Math.round(s)}%`
+      pctNum.textContent = `${Math.round(100 - s)}%`
       glabel.textContent = p.providerId
       gauge.classList.toggle('is-warn', p.pace?.verdict === 'runs-out')
       gauge.classList.toggle('is-stale', p.health === 'stale')
@@ -267,15 +280,16 @@ export const usageFeature: UiFeature = {
       return g
     }
 
-    // ── The popover, recut to the CodexBar BAR itself (the identical-twin pass on
-    //    08c): a segmented strip (Overview · one tab per provider), then STACKED
-    //    provider sections — header (name · account · age · tier) · windows
-    //    (remaining-fill bars, the CodexBar geometry: fill = % LEFT, tick = where
-    //    the budget line sits) · credits · the cost cluster (2×2 stat grid, the
-    //    30-day spark, quiet notes) — then the action rows and the lane switch.
-    //    The LAYOUT is copied; the DATA is ours — every element is backed by IPC,
-    //    and a slot we can't back (a $ cap, a faked Sonnet meter, in-popover
-    //    add-account) is dropped, not invented. Pace/reset wording stays the ONE
+    // ── The popover, recut to the CodexBar BAR itself (08c) and then TIGHTENED
+    //    by the declutter pass: a segmented strip (Overview · one tab per
+    //    provider, remaining-fill hairlines), then STACKED provider sections —
+    //    header (name · pills only when news · the account SWITCHER) · the
+    //    fold-down lane list · windows (remaining-fill bars, delta chips) · one
+    //    plan-level verdict line · labeled credits/spend · the cost cluster
+    //    (2×2 stat grid + 30-day spark, tagged "local estimate") — then ONE
+    //    icon-only action row. Prose that repeated itself (per-window verdicts,
+    //    risk lines, disclaimers, top-model notes) moved into tooltips; every
+    //    element is still backed by IPC, and pace/reset wording stays the ONE
     //    backend formatter's, verbatim (golden-locked) — only its POSITION moved.
     const paintPop = (): void => {
       clear(pop)
@@ -361,6 +375,9 @@ export const usageFeature: UiFeature = {
         const mine = byProvider.get(id)!
         const lane = mine.find((p) => p.profileId === activeIdFor(id)) ?? mine[0]
         const usedPct = lane?.windows[0]?.usedPct ?? 0
+        // The hairline paints % LEFT like every other bar in the feature — the
+        // consistency pass; it drains with the session and flips hot at ≤10%.
+        const leftPct = Math.max(0, Math.min(100, 100 - usedPct))
         const t = el(
           'button',
           {
@@ -378,7 +395,7 @@ export const usageFeature: UiFeature = {
             ]),
             // The chip's hairline stays a picture ON PURPOSE: role=progressbar here
             // would join the TAB's name-from-content computation and the tab would
-            // announce itself twice ("Claude, Claude 45% used"). The same number is
+            // announce itself twice ("Claude, Claude 45% left"). The same number is
             // voiced by the row bars inside the panel, where it has room to be read.
             el('span', { class: 'usage-tab-track' }, [
               el('span', { class: 'usage-tab-fill' + (usedPct >= BADGE_PCT ? ' is-hot' : '') })
@@ -386,7 +403,7 @@ export const usageFeature: UiFeature = {
           ]
         )
         const tabFill = t.querySelector('.usage-tab-fill') as HTMLElement
-        tabFill.style.width = `${usedPct}%`
+        tabFill.style.width = `${leftPct}%`
         if (usedPct < BADGE_PCT) tabFill.style.background = providerAccent(id)
         t.setAttribute('aria-selected', String(on))
         t.addEventListener('click', () => setDisplay({ mode: 'pinned', pin: id }))
@@ -424,10 +441,22 @@ export const usageFeature: UiFeature = {
       //    Cost overview in § Usage).
       const costCluster = (providerId: string, provLabel: string, accent: string): HTMLElement => {
         const box = el('div', { class: 'usage-cost-sec' })
-        const costRow = el('button', { class: 'usage-cost menu-item', type: 'button', title: 'Local cost scan — opens the Cost overview' }, [
-          el('span', { class: 'usage-cost-text', text: 'Cost…' }),
-          el('span', { class: 'usage-cost-more' }, [icon('chevron-right', 12)])
-        ])
+        // The "local estimate" tag answers the how-is-this-measured question at
+        // a glance; the tooltip spells it out. Distinct vocabulary on purpose:
+        // this block ESTIMATES from logs, a cloud spend row above BILLS.
+        const costRow = el(
+          'button',
+          {
+            class: 'usage-cost menu-item',
+            type: 'button',
+            title: `Estimated from ${provLabel}'s local session logs on this machine — an estimate, never a bill. Opens the full Cost overview.`
+          },
+          [
+            el('span', { class: 'usage-cost-text', text: 'Cost…' }),
+            el('span', { class: 'usage-cost-tag', text: 'local estimate' }),
+            el('span', { class: 'usage-cost-more' }, [icon('chevron-right', 12)])
+          ]
+        )
         costRow.addEventListener('click', goUsage)
         const costLines = el('div', { class: 'usage-cost-lines' })
         box.append(costRow, costLines)
@@ -474,10 +503,11 @@ export const usageFeature: UiFeature = {
             el('div', { class: 'usage-spark-cap', text: `${cur}${Math.round(maxSpend)}` }),
             bars
           ])
-          const notes: HTMLElement[] = []
-          if (scan.models?.length) notes.push(el('div', { class: 'usage-cost-note', text: `Top model: ${scan.models[0].model}` }))
-          notes.push(el('div', { class: 'usage-cost-note', text: `Estimated from local ${provLabel} logs — an estimate, never a bill.` }))
-          costLines.replaceChildren(grid, spark, ...notes)
+          // The note SENTENCES left with the declutter pass: the estimate
+          // disclaimer lives on the row's tooltip + its visible tag, the top
+          // model on the grid's — the numbers stay, the prose goes.
+          if (scan.models?.length) grid.title = `Top model: ${scan.models[0].model}`
+          costLines.replaceChildren(grid, spark)
           costLines.dataset.state = 'stats'
         }
 
@@ -540,135 +570,40 @@ export const usageFeature: UiFeature = {
         return box
       }
 
-      // ── One provider SECTION (steps 2–5) — the CodexBar block grammar:
-      //    header · windows · credits · cost cluster · lanes, hairlines between
-      //    the clusters exactly where the twin draws them (under the header,
-      //    above the cost block, between providers). ──
+      // ── One provider SECTION (steps 2–5) — the CodexBar block grammar,
+      //    tightened by the declutter pass: header (name · pills only when
+      //    news · the ACCOUNT SWITCHER) · the fold-down lane list · windows
+      //    (remaining-fill bars, delta chips) · ONE plan-level verdict line ·
+      //    labeled credits/spend · the cost cluster. Hairlines between the
+      //    clusters exactly where the twin draws them. ──
       const providerSection = (providerId: string): HTMLElement | null => {
         const mine = byProvider.get(providerId) ?? []
         const activeProfileId = activeIdFor(providerId)
         const activePlan = mine.find((p) => p.profileId === activeProfileId) ?? (shown?.providerId === providerId ? shown : null) ?? mine[0]
         if (!activePlan) return null
-        const provLabel = findProvider(providerId)?.label ?? providerId
+        const prov = findProvider(providerId)
+        const provLabel = prov?.label ?? providerId
         const accent = providerAccent(providerId)
 
-        // Provider status (7/08) is per-PROVIDER; it rides the lane tiles below (where
-        // the outage smoke reads it) — not the header, which stays name · account · age · tier.
+        // Provider status (7/08) is per-PROVIDER; it badges the HEADER (still
+        // visible with the lane list folded) AND rides the lane tiles below
+        // (where the outage smoke reads it).
         const provStatus = statuses.find((s) => s.providerId === providerId)
         const outaged = !!provStatus && (provStatus.state === 'degraded' || provStatus.state === 'outage')
 
         const sec = el('section', { class: 'usage-sec', dataset: { provider: providerId } })
 
-        // ── Header (step 2), the CodexBar grammar: line one — name (bold) left,
-        //    the ACCOUNT (active lane) with its drill-in chevron right; line two —
-        //    snapshot age left, plan tier right (quiet text, not a badge). The
-        //    health pill only appears when it is NEWS (stale/error) — a pill that
-        //    always says "fresh" is text with no information in it.
-        const tierText = activePlan.planLabel.replace(new RegExp(`^${provLabel}\\s*`, 'i'), '').replace(/^\((.*)\)$/, '$1')
-        const acctName = activePlan.profileId === 'default' ? '' : nameOf(activePlan.profileId)
-        const acct = el(
-          'button',
-          {
-            class: 'usage-glance-acct',
-            type: 'button',
-            title: display.mode === 'pinned' ? 'Open Usage settings' : `Show only ${provLabel}`,
-            ariaLabel: display.mode === 'pinned' ? `Open Usage settings for ${provLabel}` : `Show only ${provLabel}`
-          },
-          [acctName ? el('span', { class: 'usage-acct-name', text: acctName }) : null, icon('chevron-right', 12)]
-        )
-        acct.addEventListener('click', () => {
-          if (display.mode === 'pinned') goUsage()
-          else setDisplay({ mode: 'pinned', pin: providerId })
-        })
-        sec.append(
-          el('div', { class: 'usage-glance-head' }, [
-            el('div', { class: 'usage-glance-title' }, [
-              providerLogo(providerId, 16),
-              el('span', { class: 'usage-glance-name', text: provLabel }),
-              activePlan.health !== 'fresh' ? el('span', { class: `pill usage-health is-${activePlan.health}`, text: activePlan.health }) : null,
-              acct
-            ]),
-            el('div', { class: 'usage-glance-sub' }, [
-              el('span', { class: 'usage-glance-age', text: fmtAge(activePlan.fetchedAt, now) }),
-              tierText ? el('span', { class: 'usage-glance-tier', text: tierText }) : null
-            ])
-          ])
-        )
-
-        // ── Windows (step 3): a row per UsageWindow in the CodexBar anatomy —
-        //    label on its own line, the full-width 5px bar under it, then the
-        //    stats lines. The bar paints % LEFT (the CodexBar fill direction) in
-        //    the provider's accent; the expected-pace TICK sits at 100 −
-        //    elapsedPct — where the fill would reach if you were exactly on
-        //    budget, so a fill SHORT of the tick reads hotter-than-budget
-        //    without a word. Stats line one: "N% left" | reset (VERBATIM; CSS
-        //    capitalizes the first letter). Line two, on a paceable window:
-        //    .usage-verdict renders pace.text VERBATIM (golden-locked) with the
-        //    signed .usage-pace-delta right — every limit answers "at this
-        //    rate, do I make it?" itself. Both inked sev-${severity}. ──
-        const rows = el('div', { class: 'usage-rows' })
-        for (const w of activePlan.windows) {
-          const leftPct = Math.max(0, Math.min(100, 100 - w.usedPct))
-          const hot = w.usedPct >= BADGE_PCT
-          const fill = el('span', { class: 'usage-fill' + (hot ? ' is-hot' : '') })
-          if (!hot) fill.style.background = accent
-          const track = el('span', { class: 'usage-track usage-track-row' }, [
-            fill,
-            w.pace?.elapsedPct !== undefined ? el('span', { class: 'usage-tick', title: `on budget you'd have ~${Math.round(100 - w.pace.elapsedPct)}% left now` }) : null
-          ])
-          paintBar(track, fill, leftPct, w.label, 'left') // the bar SAYS its number, not just draws it
-          const row = el('div', { class: 'usage-row' }, [
-            el('span', { class: 'usage-row-label', text: w.label }),
-            track,
-            el('span', { class: 'usage-row-stats' }, [
-              el('span', { class: 'usage-pct', text: `${Math.round(leftPct)}% left` }),
-              w.resetText ? el('span', { class: 'usage-reset', text: w.resetText }) : null
-            ])
-          ])
-          const tick = row.querySelector('.usage-tick') as HTMLElement | null
-          if (tick && w.pace?.elapsedPct !== undefined) tick.style.left = `${Math.max(0, Math.min(100, 100 - w.pace.elapsedPct))}%`
-          if (w.resetsAt) row.title = new Date(w.resetsAt).toLocaleString()
-          if (w.pace)
-            row.append(
-              el('span', { class: 'usage-pace' }, [
-                el('span', { class: `usage-verdict sev-${w.pace.severity}`, text: w.pace.text }),
-                el('span', { class: `usage-pace-delta sev-${w.pace.severity}`, text: w.pace.deltaText }),
-                // The risk estimate rides quietly AFTER the verdict, never inside
-                // it (the verdict wording is golden-locked); absent = no noise.
-                w.pace.riskText ? el('span', { class: 'usage-risk', text: w.pace.riskText }) : null
-              ])
-            )
-          rows.append(row)
-        }
-        if (!activePlan.pace && activePlan.reason)
-          rows.append(el('div', { class: 'usage-verdict sev-quiet', text: `${activePlan.reason} — ${fmtAge(activePlan.fetchedAt, now)}` }))
-        sec.append(rows)
-
-        // ── Credits / spend (step 4): Claude's extra-usage box carries its cap
-        //    ("This month: $used / $limit · N% used" — the CodexBar grammar);
-        //    a spend with no cap stays the plain figure it always was. ──
-        if (activePlan.credits)
-          sec.append(el('div', { class: 'usage-credits', text: `${activePlan.credits.remaining} ${activePlan.credits.label}` }))
-        else if (activePlan.spend) {
-          const s = activePlan.spend
-          const cur = s.currency === 'USD' ? '$' : s.currency
-          const text = s.limit
-            ? `Extra usage — this month: ${cur}${fmtMoney(s.amount)} / ${cur}${fmtMoney(s.limit)} · ${Math.round((s.amount / s.limit) * 100)}% used`
-            : `${cur}${fmtMoney(s.amount)}`
-          sec.append(el('div', { class: 'usage-credits', text }))
-        }
-
-        sec.append(costCluster(providerId, provLabel, accent))
-
-        // ── Lane switch (step 5): every profile of this provider as an account
-        //    row — name · remaining bar · its own pace delta (the swap-with-
-        //    projection cue: "which account survives the week?" is answered
-        //    BEFORE switching). Same .usage-tile + data-provider/data-profile
-        //    contract the settings plans-table mirrors; Enter/click drives the
-        //    ONE Phase-4 switch (the popover-wide keydown handler reads
-        //    .usage-tile). ──
+        // ── Lane list (step 5), built FIRST because the header's account
+        //    switcher folds it open: every profile of this provider as an
+        //    account row — name · remaining bar · its own pace delta (the
+        //    swap-with-projection cue: "which account survives the week?" is
+        //    answered BEFORE switching). Same .usage-tile + data-provider/
+        //    data-profile contract the settings plans-table mirrors; Enter/
+        //    click drives the ONE Phase-4 switch (the popover-wide keydown
+        //    handler reads .usage-tile). ──
         const laneOrder = mine.slice().sort((a, b) => severityRank(a) - severityRank(b) || (b.windows[0]?.usedPct ?? 0) - (a.windows[0]?.usedPct ?? 0))
-        const switchRow = el('div', { class: 'usage-switch' })
+        const lanesOpen = openLanes.has(providerId)
+        const switchRow = el('div', { class: 'usage-switch', hidden: !lanesOpen })
         for (const p of laneOrder) {
           const usedPct = p.windows[0]?.usedPct ?? 0
           const laneLeft = Math.max(0, Math.min(100, 100 - usedPct))
@@ -691,7 +626,173 @@ export const usageFeature: UiFeature = {
           tile.addEventListener('click', () => void switchActive(p.providerId, p.profileId, false))
           switchRow.append(tile)
         }
-        sec.append(switchRow)
+
+        // ── Header (step 2), tightened: line one — name (bold) left; the
+        //    health/status pills only when they are NEWS; the ACCOUNT SWITCHER
+        //    right — the active profile's name wearing a fold-down chevron
+        //    that opens the lane list when there is more than one lane. A name
+        //    with an arrow MUST switch accounts (the audit's UX note: the old
+        //    chevron pinned the provider or opened Settings — neither is what
+        //    that affordance promises). Line two only when it says something:
+        //    plan tier right; snapshot age left ONLY when not fresh (the foot
+        //    already dates the popover as a whole).
+        const tierText = activePlan.planLabel.replace(new RegExp(`^${provLabel}\\s*`, 'i'), '').replace(/^\((.*)\)$/, '$1')
+        const acctName = activePlan.profileId === 'default' ? '' : nameOf(activePlan.profileId)
+        let acct: HTMLElement | null = null
+        if (mine.length > 1) {
+          acct = el(
+            'button',
+            {
+              class: 'usage-glance-acct',
+              type: 'button',
+              dataset: { acct: providerId },
+              title: `Switch ${provLabel} account`,
+              ariaLabel: `Switch ${provLabel} account`,
+              attrs: { 'aria-expanded': String(lanesOpen) }
+            },
+            [acctName ? el('span', { class: 'usage-acct-name', text: acctName }) : null, el('span', { class: 'usage-acct-chev' }, [icon('chevron-down', 12)])]
+          )
+          acct.addEventListener('click', () => {
+            if (openLanes.has(providerId)) openLanes.delete(providerId)
+            else openLanes.add(providerId)
+            renderPop()
+          })
+        } else if (acctName) {
+          // One lane: the name is a FACT, not a control — no arrow, no click.
+          acct = el('span', { class: 'usage-glance-acct is-solo' }, [el('span', { class: 'usage-acct-name', text: acctName })])
+        }
+        const showAge = activePlan.health !== 'fresh'
+        sec.append(
+          el('div', { class: 'usage-glance-head' }, [
+            el('div', { class: 'usage-glance-title' }, [
+              providerLogo(providerId, 16),
+              el('span', { class: 'usage-glance-name', text: provLabel }),
+              activePlan.health !== 'fresh' ? el('span', { class: `pill usage-health is-${activePlan.health}`, text: activePlan.health }) : null,
+              outaged && provStatus ? el('span', { class: `pill usage-status is-${provStatus.state}`, text: provStatus.state, title: provStatus.note ?? '' }) : null,
+              acct
+            ]),
+            showAge || tierText
+              ? el('div', { class: 'usage-glance-sub' }, [
+                  el('span', { class: 'usage-glance-age', text: showAge ? fmtAge(activePlan.fetchedAt, now) : '' }),
+                  tierText ? el('span', { class: 'usage-glance-tier', text: tierText }) : null
+                ])
+              : null
+          ]),
+          switchRow
+        )
+
+        // ── Windows (step 3): a row per UsageWindow in the CodexBar anatomy —
+        //    label on its own line, the full-width 5px remaining-fill bar under
+        //    it (provider accent; the expected-pace TICK at 100 − elapsedPct —
+        //    a fill SHORT of the tick reads hotter-than-budget without a word),
+        //    then ONE stats line: "N% left" · the signed pace delta chip (the
+        //    full verdict + risk estimate ride its tooltip) · reset (VERBATIM;
+        //    CSS capitalizes the first letter). The per-window verdict
+        //    SENTENCES collapsed into one plan-level line below the rows —
+        //    same golden-locked wording, said once instead of per row. ──
+        const rows = el('div', { class: 'usage-rows' })
+        for (const w of activePlan.windows) {
+          const leftPct = Math.max(0, Math.min(100, 100 - w.usedPct))
+          const hot = w.usedPct >= BADGE_PCT
+          const fill = el('span', { class: 'usage-fill' + (hot ? ' is-hot' : '') })
+          if (!hot) fill.style.background = accent
+          const track = el('span', { class: 'usage-track usage-track-row' }, [
+            fill,
+            w.pace?.elapsedPct !== undefined ? el('span', { class: 'usage-tick', title: `on budget you'd have ~${Math.round(100 - w.pace.elapsedPct)}% left now` }) : null
+          ])
+          paintBar(track, fill, leftPct, w.label, 'left') // the bar SAYS its number, not just draws it
+          const row = el('div', { class: 'usage-row' }, [
+            el('span', { class: 'usage-row-label', text: w.label }),
+            track,
+            el('span', { class: 'usage-row-stats' }, [
+              el('span', { class: 'usage-pct', text: `${Math.round(leftPct)}% left` }),
+              w.pace
+                ? el('span', {
+                    class: `usage-pace-delta sev-${w.pace.severity}`,
+                    text: w.pace.deltaText,
+                    title: w.pace.riskText ? `${w.pace.text} · ${w.pace.riskText}` : w.pace.text
+                  })
+                : null,
+              w.resetText ? el('span', { class: 'usage-reset', text: w.resetText }) : null
+            ])
+          ])
+          const tick = row.querySelector('.usage-tick') as HTMLElement | null
+          if (tick && w.pace?.elapsedPct !== undefined) tick.style.left = `${Math.max(0, Math.min(100, 100 - w.pace.elapsedPct))}%`
+          if (w.resetsAt) row.title = new Date(w.resetsAt).toLocaleString()
+          rows.append(row)
+        }
+        // ONE verdict line per provider — the plan-level (worst-window) pace,
+        // still the 7/02 formatter's wording VERBATIM (golden-locked); the
+        // risk estimate rides its tooltip instead of a line of its own.
+        if (activePlan.pace)
+          rows.append(
+            el('div', { class: 'usage-pace' }, [
+              el('span', { class: `usage-verdict sev-${activePlan.pace.severity}`, text: activePlan.pace.text, title: activePlan.pace.riskText ?? '' })
+            ])
+          )
+        else if (activePlan.reason)
+          rows.append(el('div', { class: 'usage-verdict sev-quiet', text: `${activePlan.reason} — ${fmtAge(activePlan.fetchedAt, now)}` }))
+        sec.append(rows)
+
+        // ── Credits / spend (step 4), now a LABELED row — a bare figure made
+        //    the cloud sections unreadable ("$3,613.98" of WHAT, measured
+        //    HOW?). Quiet label left, tabular value right, the measurement
+        //    spelled out in the tooltip. Claude's overage keeps its cap as the
+        //    value plus a mini remaining bar (same direction as every bar). ──
+        if (activePlan.credits)
+          sec.append(
+            el('div', { class: 'usage-credits' }, [
+              el('span', { class: 'usage-spend-label', text: activePlan.credits.label }),
+              el('span', { class: 'usage-spend-value', text: String(activePlan.credits.remaining) })
+            ])
+          )
+        else if (activePlan.spend) {
+          const s = activePlan.spend
+          const cur = s.currency === 'USD' ? '$' : s.currency
+          if (s.limit) {
+            const overPct = Math.max(0, Math.min(100, (s.amount / s.limit) * 100))
+            const overHot = overPct >= BADGE_PCT
+            const fill = el('span', { class: 'usage-fill' + (overHot ? ' is-hot' : '') })
+            if (!overHot) fill.style.background = accent
+            const bar = el('span', { class: 'usage-track usage-track-row usage-track-mini usage-spend-bar' }, [fill])
+            paintBar(bar, fill, 100 - overPct, 'Extra usage', 'left')
+            sec.append(
+              el(
+                'div',
+                {
+                  class: 'usage-credits usage-spend',
+                  title: `Pay-as-you-go beyond the plan: ${cur}${fmtMoney(s.amount)} of the ${cur}${fmtMoney(s.limit)} monthly cap used (${Math.round(overPct)}%).`
+                },
+                [
+                  el('span', { class: 'usage-spend-label', text: 'Extra usage' }),
+                  bar,
+                  el('span', { class: 'usage-spend-value', text: `${cur}${fmtMoney(s.amount)} / ${cur}${fmtMoney(s.limit)}` })
+                ]
+              )
+            )
+          } else
+            sec.append(
+              el(
+                'div',
+                {
+                  class: 'usage-credits usage-spend',
+                  title:
+                    prov?.klass === 'cloud-cli'
+                      ? `What ${provLabel} has actually charged this calendar month, read from your own cloud account — a real bill, not an estimate.`
+                      : `${provLabel}-reported spend for the current period.`
+                },
+                [
+                  el('span', { class: 'usage-spend-label', text: prov?.klass === 'cloud-cli' ? 'Billed this month' : 'Spend this period' }),
+                  el('span', { class: 'usage-spend-value', text: `${cur}${fmtMoney(s.amount)}` })
+                ]
+              )
+            )
+        }
+
+        // The local-log cost ESTIMATE makes no sense on a cloud-cli provider —
+        // its spend row above IS the (actual) bill, and a permanent "Cost —"
+        // under it only fed the estimate-vs-bill confusion this pass removes.
+        if (prov?.klass !== 'cloud-cli') sec.append(costCluster(providerId, provLabel, accent))
         return sec
       }
 
@@ -707,13 +808,15 @@ export const usageFeature: UiFeature = {
         return
       }
 
-      // ── Actions (step 5): icon rows, once, under the stacked sections. Add-
-      //    account is dropped (can't add in the popover); the dashboard/gear
-      //    open § Usage, About opens § About; Status Page belongs to the
+      // ── Actions (step 5): ONE row of icon-only buttons, once, under the
+      //    stacked sections (was four full-width text rows — the popover's
+      //    loudest block for its least-used verbs). Every button carries
+      //    title + aria-label, the house icon-only contract. The dashboard/
+      //    gear open § Usage, About opens § About; Status Page belongs to the
       //    provider the gauge mirrors. ──
       const actions = el('div', { class: 'usage-actions' })
       const action = (name: Parameters<typeof icon>[0], label: string, onClick: () => void, cls = ''): HTMLElement => {
-        const b = el('button', { class: 'usage-action menu-item' + (cls ? ' ' + cls : ''), type: 'button' }, [icon(name, 14), document.createTextNode(label)])
+        const b = el('button', { class: 'icon-btn usage-action' + (cls ? ' ' + cls : ''), type: 'button', title: label, ariaLabel: label }, [icon(name, 15)])
         b.addEventListener('click', onClick)
         return b
       }
@@ -758,7 +861,9 @@ export const usageFeature: UiFeature = {
           ? ({ kind: 'tile', provider: active.dataset.provider, profile: active.dataset.profile } as const)
           : active.classList.contains('usage-tab')
             ? ({ kind: 'tab', tab: active.dataset.tab } as const)
-            : null
+            : active.classList.contains('usage-glance-acct')
+              ? ({ kind: 'acct', acct: active.dataset.acct } as const)
+              : null
       paintPop()
       if (!held) return
       const back =
@@ -766,7 +871,9 @@ export const usageFeature: UiFeature = {
           ? [...pop.querySelectorAll<HTMLElement>('.usage-tile')].find(
               (t) => t.dataset.provider === held.provider && t.dataset.profile === held.profile
             )
-          : [...pop.querySelectorAll<HTMLElement>('.usage-tab')].find((t) => t.dataset.tab === held.tab)
+          : held.kind === 'tab'
+            ? [...pop.querySelectorAll<HTMLElement>('.usage-tab')].find((t) => t.dataset.tab === held.tab)
+            : [...pop.querySelectorAll<HTMLElement>('.usage-glance-acct')].find((t) => t.dataset.acct === held.acct)
       back?.focus() // the lane/tab survived the repaint, so the user's next key still means it
     }
 
@@ -804,7 +911,9 @@ export const usageFeature: UiFeature = {
         return
       }
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        const tiles = [...pop.querySelectorAll<HTMLElement>('.usage-tile')]
+        // Folded lane lists are skipped: a tile behind a closed account
+        // switcher can't take focus (offsetParent is null while hidden).
+        const tiles = [...pop.querySelectorAll<HTMLElement>('.usage-tile')].filter((t) => t.offsetParent !== null)
         if (!tiles.length) return
         const at = tiles.findIndex((t) => t === document.activeElement)
         const next = e.key === 'ArrowDown' ? Math.min(tiles.length - 1, at + 1) : Math.max(0, at <= 0 ? 0 : at - 1)
@@ -879,21 +988,28 @@ export const usageFeature: UiFeature = {
         if (seenAlerts.has(a.alertId)) return
         seenAlerts.add(a.alertId)
       }
-      showToast({
-        tone: a.kind === 'reset' ? 'neutral' : a.level === 'warn' || a.kind === 'pace' ? 'attention' : 'info',
-        title: a.title,
-        body: a.body || undefined,
-        timeout: a.level === 'warn' || a.kind === 'pace' ? 15000 : 6000,
-        action: a.failover
-          ? { label: `Fail over to ${a.failover.profileName}`, onClick: () => void switchActive(a.providerId, a.failover!.profileId, true) }
-          : undefined
-      })
+      // A CAPPED lane goes to the pane first (usage-capped port): the agents feature
+      // raises the blurred switch offer on every live pane running that lane, and a
+      // claimed event shows NO toast — the pane overlay is the surface. Unclaimed
+      // (capped from another machine, nothing launched) falls through to the toast.
+      const paneOffered = a.level === 'capped' && announceUsageCapped({ providerId: a.providerId, profileId: a.profileId })
+      if (!paneOffered) {
+        showToast({
+          tone: a.kind === 'reset' ? 'neutral' : a.level === 'warn' || a.level === 'capped' || a.kind === 'pace' ? 'attention' : 'info',
+          title: a.title,
+          body: a.body || undefined,
+          timeout: a.level === 'warn' || a.level === 'capped' || a.kind === 'pace' ? 15000 : 6000,
+          action: a.failover
+            ? { label: `Fail over to ${a.failover.profileName}`, onClick: () => void switchActive(a.providerId, a.failover!.profileId, true) }
+            : undefined
+        })
+      }
       if (a.alertId) void bridge.invoke(UsageChannels.alertAck, a.alertId)
       if (a.confetti) spawnConfetti()
       // Class + booleans ONLY (ADR 0005) — never plan names or numbers.
       getTelemetry().captureEvent({
         name: 'usage.alert',
-        props: { kind: a.kind, level: a.level ?? 'none', failoverOffered: !!a.failover, confetti: !!a.confetti }
+        props: { kind: a.kind, level: a.level ?? 'none', failoverOffered: !!a.failover, confetti: !!a.confetti, paneOffered }
       })
     }
 

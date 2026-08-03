@@ -2,6 +2,7 @@ import { app, type BrowserWindow } from 'electron'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { MOD_KEY_FIELD } from './kit'
 
 // Env-gated explorer-dock smoke (MOGGING_EXPLORER, Phase-11/03). The 02 tree given a
 // home: a right-side dock rooted at the ACTIVE workspace's folder, toggled from the FAR
@@ -61,8 +62,12 @@ export function runExplorerSmoke(win: BrowserWindow): void {
     const active = () => !!btn()?.classList.contains('is-active')
     const names = () => X.rowNames()
   `
+  // Mod+Shift+<code>, pressed with the modifier THIS platform is bound to (⌘ on macOS, Ctrl
+  // elsewhere). The explorer toggle and the rail both gate on isModKey, which
+  // core/commands/chords.ts made the platform's own and never both — `ctrlKey || metaKey` had
+  // made the WINDOWS key a modifier (Win+Shift+E opened this dock *and* Windows' own Win+E).
   const key = (code: string): Promise<unknown> =>
-    ES(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '${code}', code: 'Key${code.toUpperCase()}', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }))`)
+    ES(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '${code}', code: 'Key${code.toUpperCase()}', ${MOD_KEY_FIELD}: true, shiftKey: true, bubbles: true, cancelable: true }))`)
 
   const run = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
@@ -143,7 +148,7 @@ export function runExplorerSmoke(win: BrowserWindow): void {
       const keyboardOk = !afterKbClose.shown && !afterKbClose.active && afterKbOpen.shown && afterKbOpen.active
 
       // ── (a) door 3: the palette command ──────────────────────────────────────
-      await ES(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', ctrlKey: true, bubbles: true, cancelable: true }))`)
+      await ES(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', ${MOD_KEY_FIELD}: true, bubbles: true, cancelable: true }))`)
       await sleep(400)
       await ES(`(() => {
         const i = document.querySelector('.palette-input')

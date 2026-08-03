@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { probeContrastAcrossThemes } from './aa-probe'
 import { getSettingsStore } from '../app-settings'
+import { MOD_KEY_FIELD } from './kit'
 
 // Env-gated Board + palette smoke (MOGGING_BOARDUX, Phase-8.5/07). Fixture board, no
 // agent launch (a card is bound to a fixture pane-id via board:save + attention).
@@ -124,7 +125,9 @@ export function runBoardUxSmoke(win: BrowserWindow): void {
       const deleteConfirmOk = confirmShown && cardKept
 
       // (e) palette: empty-query top-verbs ranking, match highlight, Enter runs + closes.
-      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))`)
+      // The PLATFORM's modifier (⌘ on macOS, Ctrl elsewhere) — the palette gates on isModKey,
+      // which core/commands/chords.ts made the platform's own and never both.
+      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ${MOD_KEY_FIELD}: true, bubbles: true }))`)
       await waitTrue(`document.querySelector('.palette-overlay') && !document.querySelector('.palette-overlay').hidden`)
       const empty = await ES<{ ok: boolean; pri: number[] }>(`(() => {
         const PRI = { Workspace: 6, Board: 5, Integrations: 4, App: 3, Trust: 2, Appearance: 1 }

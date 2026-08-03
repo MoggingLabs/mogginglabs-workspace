@@ -34,11 +34,14 @@ function geminiChatsDir(projectDir: string | null): string | null {
 // THE HARD PART is not reading a number — it is knowing WHICH file is this pane's
 // session. The CLIs never announce it, so the monitor locks on by construction:
 //
-//   lock      a fresh launch accepts only files written AFTER the watch began (the
-//             previous session's log is sitting right there in the same project dir,
-//             recently written, and must not be resurrected); an ADOPTED pane (the
-//             detached daemon kept the agent alive across an app restart) accepts a
-//             recent file — its session began before we did.
+//   lock      a fresh launch accepts only files CREATED after the watch began, that are
+//             also recently written (the previous session's log is sitting right there
+//             in the same project dir, recently written, and must not be resurrected —
+//             and a NEIGHBOUR's still-running session is written every few seconds, so
+//             its mtime passes any floor forever; only its birth time tells it apart.
+//             Found live 2026-08-02: an empty pane wore a concurrent session's 82%).
+//             An ADOPTED pane (the detached daemon kept the agent alive across an app
+//             restart) accepts a recent file — its session began before we did.
 //   exclude   a file another pane has locked is never a candidate — two panes in the
 //             same cwd each find their own session.
 //   migrate   a candidate written STRICTLY LATER than the locked file's last write
@@ -56,12 +59,34 @@ function geminiChatsDir(projectDir: string | null): string | null {
 //             holder unlocks and re-resolves on its next tick. Sharpest claimant wins.
 //   pin       claude only: the pane's own statusline relay names the EXACT transcript
 //             (`transcript_path`), so identity stops being a guess entirely. A pinned
-//             lock ignores mtime migration and cannot be taken over.
+//             lock ignores mtime migration and cannot be taken over. The name decides
+//             even BEFORE the file exists (an unstarted session writes its transcript
+//             with the first prompt): the heuristics stand down and the pane holds its
+//             honest pending "–" rather than guessing a stranger's session.
+//   declare   a resume-by-id launch (ADR 0013) already KNOWS the exact session file its
+//             command continues — claude's --resume reuses the id (forking is opt-in),
+//             so the launcher names it (`expectedFile`) and the watch starts pinned.
+//             This is the one lock no heuristic can reach: a resumed transcript was
+//             CREATED before the watch began, which the birth gate above rightly
+//             refuses. A fresh relay sink naming a different transcript still
+//             supersedes it (a forked resume, or /clear).
 //
-// Known honest gap: two panes launching the same CLI in the same cwd within the same
+// HAND-TYPED claude gets the same exact identity through the GLOBAL SessionStart hook
+// (backend/features/agents/notify-hook.ts, session-start branch; auto-wired into the
+// user's own settings on typed-launch detection, agent-global-hooks.ts): it fires on
+// startup, resume and /clear and writes transcript_path into this pane's sink — so a
+// typed resume, whose transcript was created before the watch (exactly what the birth
+// gate refuses to guess), still pins exactly.
+//
+// Known honest gaps: two panes launching the same CLI in the same cwd within the same
 // poll tick can swap locks (both files appear before either pane locks, both floors
-// equally sharp). Both bars still show real sessions of that repo; a relay pin or the
-// next relaunch heals it.
+// equally sharp) — both bars still show real sessions of that repo; a relay pin or the
+// next relaunch heals it. A typed claude resume with the global hooks opted out /
+// removed / conflicted, or with `node` missing from PATH, has no channel to name its
+// old-born transcript: that pane keeps its honest "–" (or its pre-/resume lock) rather
+// than wear what may be a neighbour's live session. Gemini's resumed-session file
+// behavior is undocumented, so gemini stays on the heuristics alone. Remote panes have
+// no local log at all — no gauge, by design.
 
 export interface ContextSink {
   change(paneId: number, usage: ContextUsage | null): void
@@ -81,6 +106,11 @@ export interface ContextPaneSpec {
    *  minus the detection lag otherwise) — which beats both guesses below: a fresh launch's
    *  slack, and an adopted pane's blind 30-minute window. */
   since?: number
+  /** The exact session log this launch will live in (the `declare` rule in the header):
+   *  named by the launcher — either the session a resume-by-id continues, or the id the
+   *  app ASSIGNED to a fresh launch (`claude --session-id`). Held until the file appears:
+   *  an assigned session has no transcript until the CLI writes one. */
+  expectedFile?: string
 }
 
 interface Track extends ContextPaneSpec {
@@ -99,6 +129,15 @@ interface Track extends ContextPaneSpec {
   /** Locked from the pane's own relay (`transcript_path`) — exact identity, immune
    *  to mtime migration and takeover. */
   pinned?: boolean
+  /** A DECLARED session log that has not been written yet — the app named this pane's
+   *  session before the CLI started (an assigned `--session-id`, or a resume-by-id whose
+   *  transcript predates the watch). The name alone decides identity: while it is held,
+   *  the heuristics stand down rather than guess a neighbour's session. */
+  pendingExpected?: string
+  /** When to stop holding it. A transcript that has not appeared by then means the
+   *  launch never became a session (it failed, or the user never typed a word), and
+   *  falling back to the heuristics is no worse than never having declared. */
+  pendingUntil?: number
   lastSig?: string
 }
 
@@ -108,6 +147,12 @@ const DEFAULT_POLL_MS = 2500
 const ADOPT_LOOKBACK_MS = 30 * 60_000
 /** Fresh-launch slack: the CLI stamps its log a beat around our watchStart. */
 const LAUNCH_SLACK_MS = 5_000
+/** How long a DECLARED-but-unwritten session log is held (see Track.pendingExpected).
+ *  Generous on purpose: an assigned session id names a transcript the CLI only writes
+ *  when the user first speaks, and a pane can sit open for a long time before that —
+ *  holding the name is honest ("no session yet"), guessing a neighbour's is not. Past
+ *  this, the launch never became a session and the heuristics resume. */
+const PENDING_DECLARE_MS = 30 * 60_000
 
 export class ContextMonitor {
   private readonly panes = new Map<number, Track>()
@@ -125,13 +170,33 @@ export class ContextMonitor {
   /** Start (or replace) tracking a pane's agent session. A relaunch is a NEW session:
    *  the old lock and window are deliberately dropped. */
   setPane(paneId: number, spec: ContextPaneSpec): void {
-    this.panes.set(paneId, {
+    const t: Track = {
       ...spec,
       watchStart: this.now(),
       fileMtimeMs: 0,
       lastSize: -1,
       lastMtimeMs: -1
-    })
+    }
+    this.panes.set(paneId, t)
+    // Identity by DECLARATION (the `declare` rule): the launcher resumed a session it
+    // could name, and a resumed transcript is unreachable by the heuristics on purpose
+    // (created before this watch — the birth gate refuses it; its mtime may not even
+    // move until the first new prompt). Pinned like a relay lock; a fresh sink naming
+    // a different transcript still supersedes it (a forked resume, or /clear).
+    if (spec.expectedFile) {
+      try {
+        const st = fs.statSync(spec.expectedFile)
+        this.lock(paneId, t, spec.expectedFile, st.mtimeMs, true)
+      } catch {
+        // Not on disk YET, which is the NORMAL case for an assigned session id: the CLI
+        // writes its transcript with the first message, and a resumed transcript predates
+        // this watch — the birth gate would refuse both. The NAME still decides identity,
+        // so hold it; refresh() locks the moment the file appears, and until then the
+        // heuristics stand down rather than guess a neighbour's session.
+        t.pendingExpected = spec.expectedFile
+        t.pendingUntil = Date.now() + PENDING_DECLARE_MS
+      }
+    }
     this.ensurePolling()
     this.refresh(paneId)
   }
@@ -198,10 +263,23 @@ export class ContextMonitor {
     return a.provider === b.provider && a.home === b.home && pathKey(a.cwd) === pathKey(b.cwd)
   }
 
-  /** Whether pane t may lock the file (owned by `owner`, or unclaimed) at this mtime.
+  /** Whether a candidate file could be a session THIS pane's agent started: created at or
+   *  after the pane's floor. The mtime gate alone cannot say this — a neighbour's
+   *  still-running session in the same cwd is written every few seconds, so its mtime
+   *  passes any floor forever, and an empty pane would lock it and wear a stranger's
+   *  numbers (found live 2026-08-02: a blank pane showing 82%). Waived in exactly two
+   *  places the floor is NOT a session-start bound: an adopted pane without a
+   *  process-start time (its session legitimately predates anything this pane knows),
+   *  and a filesystem that reports no birth time (0 — the mtime gate stands alone). */
+  private bornInWatch(t: Track, birthtimeMs: number, floor: number): boolean {
+    if (t.adopted && !t.since) return true
+    return !(birthtimeMs > 0) || birthtimeMs >= floor
+  }
+
+  /** Whether pane t may lock the file (owned by `owner`, or unclaimed) at these stats.
    *  Encodes the reserve/takeover arbitration from the header: sharpest claimant wins,
    *  a pin always wins. */
-  private mayClaim(t: Track, mtimeMs: number, owner: Track | undefined, others: Track[]): boolean {
+  private mayClaim(t: Track, st: { mtimeMs: number; birthtimeMs: number }, owner: Track | undefined, others: Track[]): boolean {
     if (owner) {
       // Takeover: only an UNLOCKED pane may reclaim, only from a HEURISTIC (unpinned)
       // lock, and only when its own floor is the sharper claim on this file.
@@ -209,12 +287,13 @@ export class ContextMonitor {
     }
     // Reserve: a locked pane weighing a migration must leave a fresh file to any
     // unlocked same-target pane whose sharper floor admits it — that pane's own
-    // session is exactly what a file born inside its watch window looks like.
+    // session is exactly what a file born inside its watch window looks like. A file
+    // that pane could never claim (created before its floor) is not reserved for it.
     if (t.file) {
       for (const o of others) {
         if (o.file || !this.sameTarget(t, o)) continue
         const oFloor = this.floorFor(o)
-        if (oFloor > this.floorFor(t) && mtimeMs >= oFloor) return false
+        if (oFloor > this.floorFor(t) && st.mtimeMs >= oFloor && this.bornInWatch(o, st.birthtimeMs, oFloor)) return false
       }
     }
     return true
@@ -252,16 +331,27 @@ export class ContextMonitor {
         const file = join(dir, name)
         try {
           const st = fs.statSync(file)
-          if (st.mtimeMs >= floor && this.mayClaim(t, st.mtimeMs, lockedByOthers.get(file), others)) {
+          if (
+            st.mtimeMs >= floor &&
+            this.bornInWatch(t, st.birthtimeMs, floor) &&
+            this.mayClaim(t, st, lockedByOthers.get(file), others)
+          ) {
             out.push({ file, mtimeMs: st.mtimeMs })
           }
         } catch {
           /* raced away */
         }
       }
-    } else {
+    } else if (t.provider === 'codex') {
       // codex: day dirs are shared across ALL cwds — match each recent rollout's
       // session_meta cwd to the pane's (cached; a session's cwd never changes).
+      //
+      // ONLY codex. aider and opencode read their usage from their own stores
+      // (readAiderUsage / readOpencodeUsage below) and never lock a transcript, yet they
+      // used to fall in here and walk codex's rollout tree once per pane per 2.5s tick.
+      // That was not merely wasted io: nothing downstream re-checks the provider, and the
+      // rollout match is by CWD alone — so an aider pane sharing a directory with a codex
+      // session could lock that rollout and render codex's numbers on aider's gauge.
       const key = pathKey(t.cwd)
       for (const dir of codexDayDirs(t.home)) {
         let names: string[]
@@ -276,7 +366,8 @@ export class ContextMonitor {
           try {
             const st = fs.statSync(file)
             if (st.mtimeMs < floor) continue // cheap gate before the session_meta read
-            if (!this.mayClaim(t, st.mtimeMs, lockedByOthers.get(file), others)) continue
+            if (!this.bornInWatch(t, st.birthtimeMs, floor)) continue
+            if (!this.mayClaim(t, st, lockedByOthers.get(file), others)) continue
             if (!this.codexCwd.has(file)) {
               if (this.codexCwd.size > 500) this.codexCwd.clear() // bounded, crude, sufficient
               const cwd = readCodexSessionCwd(file)
@@ -331,12 +422,26 @@ export class ContextMonitor {
     //    within its first statusline fire). The floor guard keeps a leftover sink
     //    from a PREVIOUS session out, same as for its numbers.
     const sink = t.provider === 'claude' ? readContextSink(paneId) : null
+    let identityDecided = false
     if (sink && sink.transcriptPath && sink.mtimeMs >= this.floorFor(t) && sink.transcriptPath !== t.file) {
       try {
         const st = fs.statSync(sink.transcriptPath)
         this.lock(paneId, t, sink.transcriptPath, st.mtimeMs, true)
+        t.pendingExpected = undefined // the CLI named its own session — that outranks ours
       } catch {
-        /* named file not on disk (yet) — the heuristics below still apply */
+        // The named file is not on disk YET — an unstarted session writes its
+        // transcript with the first prompt. But the NAME alone decides identity:
+        // any lock on a different file is provably a stranger's session (the
+        // heuristics guessed a concurrent neighbour once — the empty pane wearing
+        // 82%, 2026-08-02), so drop it and hold the honest pending "–" until the
+        // named file lands. The heuristics below stand down for the same reason.
+        identityDecided = true
+        if (t.file) {
+          t.file = undefined
+          t.fileMtimeMs = 0
+          t.pinned = false
+          this.emit(paneId, t, null)
+        }
       }
     }
     if (t.file) {
@@ -349,7 +454,20 @@ export class ContextMonitor {
         this.emit(paneId, t, null)
       }
     }
-    if (!t.pinned) {
+    // Identity by DECLARATION, held until the named file is born (see setPane). The relay
+    // pin above outranks it deliberately: `/clear` and `--fork-session` mint a NEW session
+    // id and abandon the one we assigned, and the sink is the only thing that notices.
+    if (t.pendingExpected && !t.pinned) {
+      try {
+        const st = fs.statSync(t.pendingExpected)
+        this.lock(paneId, t, t.pendingExpected, st.mtimeMs, true)
+        t.pendingExpected = undefined
+      } catch {
+        if (Date.now() > (t.pendingUntil ?? 0)) t.pendingExpected = undefined // never held forever
+        else identityDecided = true
+      }
+    }
+    if (!t.pinned && !identityDecided) {
       const best = this.candidates(paneId, t)[0]
       if (best && (!t.file || (best.file !== t.file && best.mtimeMs > t.fileMtimeMs))) {
         this.lock(paneId, t, best.file, best.mtimeMs, false)

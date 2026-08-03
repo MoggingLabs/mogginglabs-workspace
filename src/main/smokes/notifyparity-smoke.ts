@@ -1,10 +1,11 @@
 import { app } from 'electron'
 import { spawn } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import * as net from 'node:net'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { tmpdir, userInfo } from 'node:os'
+import { dirname, join } from 'node:path'
 import { NOTIFY_HOOK_SOURCE } from '@backend/features/agents'
+import { DAEMON_PROTOCOL_VERSION } from '@contracts'
 import { sleep } from './kit'
 
 // NOTIFYPARITY (MOGGING_NOTIFYPARITY): the two SHIPPED notify artifacts speak one dialect.
@@ -68,7 +69,16 @@ const CORPUS: CorpusCase[] = [
   { name: 'codex-approval', argv: ['--event', '{"type":"approval-requested"}'], expected: 'needs-input' },
   // THE DRIFT again: an unknown Codex type, and an unreadable blob, are guesses too.
   { name: 'codex-unknown-type', argv: ['--event', '{"type":"model-context-window-exceeded"}'], expected: 'notice' },
-  { name: 'codex-malformed-blob', argv: ['--event', '{not json'], expected: 'notice' }
+  { name: 'codex-malformed-blob', argv: ['--event', '{not json'], expected: 'notice' },
+  // The IDENTITY event: sink-write only. Both artifacts must stay SILENT on the wire —
+  // notifyEventToState defaults unknown events to attention, so a frame here would ring
+  // every fresh/resumed pane red. (The sink write itself is asserted separately below.)
+  {
+    name: 'argv-session-start',
+    argv: ['--event', 'session-start'],
+    stdin: JSON.stringify({ hook_event_name: 'SessionStart', source: 'startup', transcript_path: '/fake/p/s.jsonl' }),
+    expected: null
+  }
 ]
 
 interface Fixture {
@@ -118,11 +128,31 @@ function startFixtureEndpoint(dir: string): Promise<Fixture> {
 }
 
 /** Run one artifact for one case; resolve to the wire event it produced (null = silent). */
-function runArtifact(scriptArgs: string[], c: CorpusCase, endpointFile: string, events: string[]): Promise<string | null> {
+function runArtifact(
+  scriptArgs: string[],
+  c: CorpusCase,
+  endpointFile: string,
+  events: string[],
+  extraEnv: Record<string, string> = {}
+): Promise<string | null> {
   const before = events.length
+  // TMP redirected into the fixture dir and the channel pinned: the session-start branch
+  // writes a per-pane context sink at the tmpdir rendezvous, and a smoke must never land
+  // a pane-'7' sink in the live machine's namespace (or in a channel-dependent dir).
+  const hookTmp = dirname(endpointFile)
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    MOGGING_PANE_ID: '7',
+    MOGGING_DAEMON_ENDPOINT: endpointFile,
+    TMP: hookTmp,
+    TEMP: hookTmp,
+    TMPDIR: hookTmp,
+    ...extraEnv
+  }
+  delete env.MOGGING_CHANNEL
   return new Promise((resolve, reject) => {
     const p = spawn('node', [...scriptArgs, ...c.argv], {
-      env: { ...process.env, MOGGING_PANE_ID: '7', MOGGING_DAEMON_ENDPOINT: endpointFile },
+      env,
       stdio: ['pipe', 'ignore', 'ignore'],
       windowsHide: true
     })
@@ -151,7 +181,7 @@ function runArtifact(scriptArgs: string[], c: CorpusCase, endpointFile: string, 
 }
 
 export function runNotifyParitySmoke(): void {
-  setTimeout(() => app.exit(1), 110000) // safety net: 2 artifacts x 16 serial process spawns
+  setTimeout(() => app.exit(1), 110000) // safety net: 2 artifacts x ~19 serial process spawns
   const run = async (): Promise<void> => {
     interface Row {
       name: string
@@ -178,6 +208,35 @@ export function runNotifyParitySmoke(): void {
         const generated = await runArtifact([generatedScript], c, fixture.endpointFile, fixture.events)
         rows.push({ name: c.name, expected: c.expected, cli, generated, ok: cli === c.expected && generated === c.expected })
       }
+      // Sink parity for the identity event: BOTH artifacts must write the same per-pane
+      // context sink (distinct pane ids attribute each write to its artifact). The wire
+      // silence is already covered by the corpus row above.
+      const ss: CorpusCase = {
+        name: 'session-start-sink',
+        argv: ['--event', 'session-start'],
+        stdin: JSON.stringify({ hook_event_name: 'SessionStart', source: 'resume', transcript_path: '/fake/p/s.jsonl' }),
+        expected: null
+      }
+      const ssCli = await runArtifact([cliScript, 'notify'], ss, fixture.endpointFile, fixture.events, { MOGGING_PANE_ID: 'parity-cli' })
+      const ssGen = await runArtifact([generatedScript], ss, fixture.endpointFile, fixture.events, { MOGGING_PANE_ID: 'parity-gen' })
+      const sinkDir = join(dir, `mogging-ctx-${userInfo().username}-v${DAEMON_PROTOCOL_VERSION}`)
+      const sinkTranscript = (pane: string): string | null => {
+        try {
+          return (JSON.parse(readFileSync(join(sinkDir, `${pane}.json`), 'utf8')) as { transcriptPath?: string }).transcriptPath ?? null
+        } catch {
+          return null
+        }
+      }
+      rows.push({
+        name: 'session-start-sink',
+        expected: '/fake/p/s.jsonl', // the sink's transcriptPath; a wire event shows as wire:<event>
+        cli: ssCli !== null ? `wire:${ssCli}` : sinkTranscript('parity-cli'),
+        generated: ssGen !== null ? `wire:${ssGen}` : sinkTranscript('parity-gen'),
+        ok:
+          ssCli === null && ssGen === null &&
+          sinkTranscript('parity-cli') === '/fake/p/s.jsonl' &&
+          sinkTranscript('parity-gen') === '/fake/p/s.jsonl'
+      })
       result = { pass: rows.every((r) => r.ok), rows }
     } catch (e) {
       result = { pass: false, error: String(e) }

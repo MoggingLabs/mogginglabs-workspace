@@ -1,8 +1,7 @@
 import { app, ipcMain, type BrowserWindow } from 'electron'
-import { NoopTelemetry, setTelemetry, getTelemetry } from '@backend'
+import { compositeTelemetry, setTelemetry, getTelemetry } from '@backend'
 import {
   TelemetryChannels,
-  type Breadcrumb,
   type Telemetry,
   type TelemetryConsent,
   type TelemetryEvent,
@@ -24,31 +23,6 @@ import { createPosthogTelemetry } from './posthog-telemetry'
 let sentry: (Telemetry & { setEnabled(on: boolean): void }) | null = null
 let posthog: (Telemetry & { shutdown(): Promise<void> }) | null = null
 
-/** Fan a Telemetry call out to every active adapter. */
-function composite(adapters: Telemetry[]): Telemetry {
-  if (adapters.length === 0) return new NoopTelemetry()
-  return {
-    init(): void {
-      for (const a of adapters) void a.init()
-    },
-    captureError(error: unknown, context?: TelemetryProps): void {
-      for (const a of adapters) a.captureError(error, context)
-    },
-    captureEvent(event: TelemetryEvent): void {
-      for (const a of adapters) a.captureEvent(event)
-    },
-    addBreadcrumb(crumb: Breadcrumb): void {
-      for (const a of adapters) a.addBreadcrumb(crumb)
-    },
-    setContext(key: string, value: TelemetryProps): void {
-      for (const a of adapters) a.setContext(key, value)
-    },
-    async flush(timeoutMs?: number): Promise<void> {
-      await Promise.all(adapters.map((a) => a.flush(timeoutMs)))
-    }
-  }
-}
-
 function rendererConfig(): TelemetryRendererConfig {
   const s = getSettingsStore()?.getTelemetrySettings()
   const dnt = !!process.env.DO_NOT_TRACK
@@ -65,7 +39,10 @@ function applyConsent(): void {
   const cfg = rendererConfig()
   const store = getSettingsStore()
   const installId = store?.getTelemetrySettings().installId ?? ''
-  const active: Telemetry[] = []
+  // Two consents, two lists — see compositeTelemetry(). An adapter appears only under the
+  // permission it was constructed for.
+  const errorAdapters: Telemetry[] = []
+  const analyticsAdapters: Telemetry[] = []
 
   const dsn = process.env.SENTRY_DSN
   if (cfg.errorReporting && dsn) {
@@ -74,7 +51,7 @@ function applyConsent(): void {
       void sentry.init()
     }
     sentry.setEnabled(true)
-    active.push(sentry)
+    errorAdapters.push(sentry)
   } else {
     sentry?.setEnabled(false) // SDK handlers stay; a disabled client sends nothing
   }
@@ -90,13 +67,13 @@ function applyConsent(): void {
         release: cfg.release
       })
     }
-    active.push(posthog)
+    analyticsAdapters.push(posthog)
   } else if (posthog) {
     void posthog.shutdown() // flush + stop — nothing sent after revoke
     posthog = null
   }
 
-  setTelemetry(composite(active))
+  setTelemetry(compositeTelemetry(errorAdapters, analyticsAdapters))
 }
 
 /** Curate a renderer-forwarded event: dot.namespaced name, primitive props only,

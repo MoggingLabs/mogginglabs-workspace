@@ -11,7 +11,7 @@ import {
   type RemoveWorktreeResult,
   type WorktreeInfo
 } from '@contracts'
-import { REMOTE_READY_OSC } from '@contracts'
+import { ALT_SCREEN_ENTER_MAX_PREFIX, ALT_SCREEN_ENTER_RE, REMOTE_READY_OSC, SGR_RE } from '@contracts'
 import '@xterm/xterm/css/xterm.css'
 import {
   Button,
@@ -34,9 +34,19 @@ import {
 } from '../../core/terminal/font-port'
 import { windowsPtyFor } from '../../core/terminal/pty-emulation'
 import { registerPaneInstance, retirePaneInstance } from '../../core/terminal/pane-instance-port'
-import { forgetPane, markPaneLive, markPaneReattached, markPaneRemoteReady, markPaneSpawnSettled } from '../../core/terminal/liveness-port'
+import {
+  isPaneAgentReadyPending,
+  markPaneAgentReady,
+  markPaneLive,
+  markPaneReattached,
+  markPaneRemoteReady,
+  markPaneSpawnSettled,
+  retirePaneLife
+} from '../../core/terminal/liveness-port'
+import { setPaneBufferReader } from '../../core/terminal/pane-buffer-port'
+import { freshPaneLife } from '../../core/terminal/pane-life'
 import { claimSpawnRun, forgetSpawnRun, reportSpawnRunOutcome } from '../../core/terminal/spawn-run-port'
-import { onPaneLabel, getPaneLabel, setPaneLabel } from '../../core/layout/pane-meta'
+import { onPaneLabel, getPaneLabel, setPaneLabel, onPaneUserTitle, getPaneUserTitle, setPaneUserTitle } from '../../core/layout/pane-meta'
 import { setPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { completionsFor } from '../../core/attention/completions'
 import { applyPaneCwdEvent, clearPaneCwd, getPaneCwd, getPaneCwdProjection } from '../../core/layout/pane-cwd'
@@ -56,9 +66,13 @@ import { claimsFor, onClaimsChange, setClaimsForDev, workspaceClaims } from './c
 import { createPaneAnchor, type PaneAnchorHandle } from './pane-anchor'
 import { applyGrid, proposeGrid } from './pane-fit'
 import { onDevicePixelRatioChange } from '../../core/system/dpr-port'
+import { onDaemonReconnected } from '../../core/system/daemon-health-port'
+import { onPanesRevealed } from '../../core/layout/reveal-port'
 import { createPaneHeaderFit, type PaneHeaderFitHandle } from './pane-header-fit'
 import { createPaneScrollbar, type PaneScrollbarHandle } from './pane-scrollbar'
 import { mountPaneDrop } from './pane-drop'
+import { mountPaneOffer } from './pane-offer'
+import { setPaneFailoverOffer } from '../../core/agents/failover-offer-port'
 import { PaneWebglManager } from './pane-webgl'
 import { onFocusedPane } from '../../core/layout/focus'
 import { onPaneGit, getPaneGit, setPaneGit } from '../../core/git/git-port'
@@ -107,9 +121,16 @@ export class TerminalPane {
   /** Tears down the window-scoped drag listeners this pane installs (see mountFileDrop). */
   private readonly dropAbort = new AbortController()
   private devHandle: unknown
-  private liveMarked = false
-  private remoteReadyProbe = ''
-  private remoteReadyMarked = false
+  /** Everything that belongs to THIS session life, in one object so a restart resets all of
+   *  it at once (pane-life.ts). Four latches lived here as separate fields and exactly one
+   *  was re-armed on restart. */
+  private life = freshPaneLife()
+  /** An overlay is covering this pane (failover-offer port): input is refused. */
+  private covered = false
+  /** THIS launch has taken the alternate screen; the cover now waits for its first paint. */
+  private altSeen = false
+  /** Repaints the header from the current label/OSC title — deferred while covered. */
+  private reapplyTitle?: () => void
   private scrollbar?: PaneScrollbarHandle
   private anchor?: PaneAnchorHandle
   private headerFit?: PaneHeaderFitHandle
@@ -145,14 +166,13 @@ export class TerminalPane {
    *  One cleanup tears all of it down when the pane id is retired. */
   private menuCleanup?: () => void
   private blocks?: BlockTracker
-  /** The one session-end capture emission (revision C) — exit and close race;
-   *  whichever fires first sends the ladder, the other finds this latched.
-   *  restart() re-arms it: a respawned pane is a new session life. */
-  private captureEmitted = false
   /** Blocks already captured by a PRIOR life's emission (the ladder spans lives —
    *  scrollback survives restart). Each emission captures only past this mark. */
   private capturedThrough = 0
   private refitTimer?: ReturnType<typeof setTimeout>
+  /** The reconnect re-assert's delayed second pass (see the onDaemonReconnected
+   *  subscription) — cleared on dispose so a closed pane never re-asserts a reused id. */
+  private reassertTimer?: ReturnType<typeof setTimeout>
   private expandStateObs?: MutationObserver
   private refitLeading = true
   private disposed = false
@@ -304,15 +324,36 @@ export class TerminalPane {
     })
 
     mountPaneDrop({ paneId: this.id, body, signal: this.dropAbort.signal, focus: () => this.term.focus() })
+    // The pane-cover overlay (failover-offer port) — the agents feature raises and clears
+    // covers (a usage-limit offer, a profile switch, an agent launch); this pane paints
+    // them and, while one is up, STOPS ACCEPTING INPUT. Shares dropAbort's lifetime.
+    mountPaneOffer({
+      paneId: this.id,
+      body,
+      signal: this.dropAbort.signal,
+      onCoveredChange: (covered) => this.setCovered(covered)
+    })
+
+    // The read-only buffer tail for the agents feature's deterministic interrupt
+    // (pane-buffer-port): it must SEE cmd.exe's "Terminate batch job (Y/N)?" trap
+    // before typing a resume command. Registered here because the pane owns the
+    // xterm; cleared in dispose() with the rest of this pane's port state.
+    setPaneBufferReader(this.id, (lines) => {
+      const b = this.term.buffer.active
+      const from = Math.max(0, b.length - lines)
+      let s = ''
+      for (let i = from; i < b.length; i++) s += (b.getLine(i)?.translateToString(true) ?? '') + '\n'
+      return s
+    })
 
     // Let xterm's incremental parser recognize the private readiness OSC too.
     // The raw-stream probe below covers the pre-paint fast path; this handler
     // covers arbitrary PTY chunk boundaries using the terminal parser itself.
     this.remoteReadyOsc = this.term.parser.registerOscHandler(777, (data) => {
       if (data !== 'mogging-remote-ready') return false
-      if (!this.remoteReadyMarked) {
-        this.remoteReadyMarked = true
-        this.remoteReadyProbe = ''
+      if (!this.life.remoteReadyMarked) {
+        this.life.remoteReadyMarked = true
+        this.life.remoteReadyProbe = ''
         markPaneRemoteReady(this.id)
       }
       return true
@@ -324,21 +365,54 @@ export class TerminalPane {
     this.disposers.push(
       terminalClient.onData((e) => {
         if (e.id === this.id && !this.disposed) {
-          if (!this.remoteReadyMarked) {
-            const probe = this.remoteReadyProbe + e.data
+          if (!this.life.remoteReadyMarked) {
+            const probe = this.life.remoteReadyProbe + e.data
             if (probe.includes(REMOTE_READY_OSC)) {
-              this.remoteReadyMarked = true
-              this.remoteReadyProbe = ''
+              this.life.remoteReadyMarked = true
+              this.life.remoteReadyProbe = ''
               markPaneRemoteReady(this.id)
             } else {
               // OSC sequences are ordinary PTY bytes and may be split at any
               // boundary. Preserve only the possible marker prefix.
-              this.remoteReadyProbe = probe.slice(-(REMOTE_READY_OSC.length - 1))
+              this.life.remoteReadyProbe = probe.slice(-(REMOTE_READY_OSC.length - 1))
             }
           }
-          if (!this.liveMarked) {
-            this.liveMarked = true
+          if (!this.life.liveMarked) {
+            this.life.liveMarked = true
             markPaneLive(this.id) // first PTY output — lineup launches may proceed
+          }
+          // THE LAUNCH OVERLAY'S DISMISSAL — two observations, no clock.
+          //
+          //   1. The TUI TAKES OVER (alternate screen). For claude this is the measured
+          //      moment keystrokes stop being eaten (liveness-port.ts has the numbers).
+          //   2. It PAINTS (any SGR sequence after that). Alt-screen entry lands a beat
+          //      before the first frame, so lifting on it alone hands over a blank
+          //      terminal for a fraction of a second — technically input-ready, visibly
+          //      an intermediate step, which is the thing the cover exists to hide.
+          //
+          // Scanned only while a launch is actually waiting, so this costs nothing in a
+          // steady pane and the user's own vim can never dismiss an overlay that is not
+          // up. `altSeen` resets whenever nothing is pending, which scopes it to ONE
+          // launch: a pane that runs claude, exits, and runs it again waits afresh.
+          // Split-safe like the remote probe above — escape sequences arrive across
+          // arbitrary chunk boundaries.
+          if (isPaneAgentReadyPending(this.id)) {
+            const probe = this.life.altScreenProbe + e.data
+            if (!this.altSeen) {
+              const at = probe.search(ALT_SCREEN_ENTER_RE)
+              if (at >= 0) {
+                this.altSeen = true
+                this.life.altScreenProbe = ''
+                // The first frame can share the chunk that took the screen.
+                if (SGR_RE.test(probe.slice(at))) markPaneAgentReady(this.id)
+              } else {
+                this.life.altScreenProbe = probe.slice(-ALT_SCREEN_ENTER_MAX_PREFIX)
+              }
+            } else if (SGR_RE.test(e.data)) {
+              markPaneAgentReady(this.id)
+            }
+          } else if (this.altSeen) {
+            this.altSeen = false
           }
           this.term.write(e.data)
         }
@@ -353,7 +427,7 @@ export class TerminalPane {
           // No process, no agent: the context bar (and any future session-scoped
           // chrome) must not outlive the pane's process (agent-session port -> the
           // context feature drops every source).
-          clearPaneAgentSession(this.id)
+          clearPaneAgentSession(this.id, 'exited')
         }
       }),
       // Source-aware backend truth (shell/process/explicit agent report) becomes the one
@@ -368,8 +442,16 @@ export class TerminalPane {
     // Input into a dead pane is GATED, not forwarded: the daemon has no session for the
     // id, so the bytes would vanish with zero feedback — the exact "frozen" feel of the
     // dead-pane incident. The banner (markDead) is the affordance that explains why.
+    //
+    // A COVERED pane is gated for the same reason and dropped, not buffered. A CLI still
+    // mounting its TUI silently discards what it is sent, so forwarding would produce the
+    // worse version of this bug: bytes that look delivered and are not. Replaying them
+    // later is no better — they would arrive out of order with whatever the human typed
+    // once the pane came back, in an app that auto-submits continuation prompts. The
+    // app's OWN writes (the launch line, the interrupt, auto-trust's Enter) never come
+    // through onData, so none of them are affected by this gate.
     this.term.onData((data) => {
-      if (!this.dead) terminalClient.write({ id: this.id, data, gen: this.sessionGen })
+      if (!this.dead && !this.covered) terminalClient.write({ id: this.id, data, gen: this.sessionGen })
     })
 
     // ResizeObserver is the one true fit driver: it fires for real resizes AND for
@@ -395,6 +477,31 @@ export class TerminalPane {
     // tick) but the WebGL renderer's device-pixel-floored cell width changes, so the
     // correct grid changes. The dpr port is the event for exactly this (dpr-port.ts).
     this.disposers.push(onDevicePixelRatioChange(() => this.scheduleRefit()))
+
+    // Uncovered by an expand/restore (reveal-port): covered siblings hide via
+    // visibility:hidden, so their boxes never move and NEITHER observer above fires —
+    // by design (grid-layout's expand contract). A grid that drifted while covered has
+    // no future trigger of its own; the reveal is it. Plain refit: an unchanged grid
+    // no-ops before touching xterm, so FLICKER's zero-sibling-resize budget stands.
+    this.disposers.push(onPanesRevealed((ids) => {
+      if (!this.disposed && ids.includes(Number(this.id))) this.refit()
+    }))
+
+    // Daemon reconnected (daemon-health-port): a resize emitted into a dying socket is
+    // swallowed silently (DaemonClient.send), and a fit against a stalled measurement
+    // can leave xterm itself wrong — either way the flap is the moment to re-assert,
+    // because nothing else ever asks again (the grid-drift incident). Twice: the
+    // immediate pass heals the common case; the delayed repeat covers a pane whose
+    // fresh generation main only learns from the replay's spawn reply, so its first
+    // re-assert can be gen-refused at the daemon.
+    this.disposers.push(onDaemonReconnected(() => {
+      this.reassertGrid()
+      if (this.reassertTimer) clearTimeout(this.reassertTimer)
+      this.reassertTimer = setTimeout(() => {
+        this.reassertTimer = undefined
+        this.reassertGrid()
+      }, 2000)
+    }))
 
     // Spawn-run delivery (instant launch, part 2): a fresh template slot's launch command
     // was armed on the spawn-run port BEFORE this pane was constructed. Claim it and wait
@@ -474,7 +581,10 @@ export class TerminalPane {
         else if (agentArmed && (mark === 'D' || mark === 'A') && Date.now() - agentSetAt > 1500) {
           agentSetAt = 0
           agentArmed = false
-          clearPaneAgentSession(this.id)
+          // A GUESS, and labelled as one: this hides the context bar, and the
+          // deterministic interrupt refuses it as grounds to type (interrupt-core's
+          // endProvesAgentGone carries what that cost before it was labelled).
+          clearPaneAgentSession(this.id, 'prompt-guess')
         }
       }
       return false
@@ -507,13 +617,20 @@ export class TerminalPane {
     // holds its own 80×24 default, and sending THAT resized a surviving agent session
     // to the wrong grid on every app restart; absent dims tell the daemon to keep the
     // session's size (attachDims), and the reveal's refit sends the real ones.
-    const measured = proposeGrid(this.term) !== null
+    //
+    // Send the PROPOSAL, not `term.cols`. The measurement used to be taken, reduced to a
+    // boolean, and thrown away — and then the numbers came from xterm's CURRENT grid, which
+    // is a different quantity. The two agree only AFTER a fit has been applied; before the
+    // first one, the pane is perfectly measurable and xterm still holds its 80x24 default, so
+    // the "unmeasured" guard passed and 80x24 went out anyway. That is the very resize this
+    // guard exists to prevent, in a narrower window.
+    const grid = proposeGrid(this.term)
     return terminalClient
       .spawn({
         id: this.id,
         cwd,
-        cols: measured ? this.term.cols : undefined,
-        rows: measured ? this.term.rows : undefined,
+        cols: grid?.cols,
+        rows: grid?.rows,
         workspaceId: workspaceIdForPane(this.id),
         agentId: assignmentForPane(this.id),
         remoteHostId: remote?.hostId,
@@ -540,7 +657,7 @@ export class TerminalPane {
         // persisted scrollback (daemon cold start, or the cross-version update
         // migration) — no agent lives in it, so the lineup must type the resume, or the
         // user gets painted history over a dead conversation. Neither may a DISPOSED pane:
-        // dispose() scrubs this id's marks (forgetPane), and a spawn landing after that
+        // dispose() scrubs this id's marks (retirePaneLife), and a spawn landing after that
         // would re-mark an id whose pane is gone — the NEXT pane to take it would take the
         // adopt branch on restore (agents/index.ts), labelling a session that isn't there
         // instead of typing its resume, and the agent would never come back.
@@ -548,7 +665,7 @@ export class TerminalPane {
         // The reattach verdict above is now DECIDED — release resume lineups waiting on
         // it (whenPaneSpawnSettled). Liveness cannot carry this: a reattach replays
         // scrollback before this reply lands, so "live" precedes "verdict known".
-        // Never after dispose: forgetPane already flushed the waiters for this id, and
+        // Never after dispose: retirePaneLife already flushed the waiters for this id, and
         // a late mark would leak onto the next pane to recycle it.
         if (!this.disposed) markPaneSpawnSettled(this.id)
         // The reattach/restore REPLAY arrives right after this: thousands of scrollback
@@ -581,6 +698,34 @@ export class TerminalPane {
       })
   }
 
+  /**
+   * An overlay covers this pane (or stops covering it). Two layers, in the order the
+   * user asked for — block the input if we can, drop it if we can't:
+   *
+   *   1. xterm reads keystrokes through a hidden helper TEXTAREA. Disabling it takes the
+   *      pane out of the focus path entirely, so the keys never become terminal input in
+   *      the first place — nothing to buffer, nothing to decide about.
+   *   2. `covered` gates onData anyway. The textarea is xterm's private DOM and a version
+   *      bump could rename it; a paste or an IME commit that slips through must still be
+   *      refused rather than typed into a CLI that is not listening yet.
+   *
+   * Focus is restored on uncover only if the pane still owns it — stealing focus back
+   * from wherever the human moved on to would be worse than the small stutter of them
+   * clicking the pane again.
+   */
+  private setCovered(covered: boolean): void {
+    if (this.covered === covered || this.disposed) return
+    this.covered = covered
+    // Titles held back while covered land now, in one repaint (see onTitleChange).
+    if (!covered) this.reapplyTitle?.()
+    const helper = this.term.element?.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')
+    if (!helper) return
+    helper.disabled = covered
+    if (covered) helper.blur()
+    else if (!document.activeElement || this.body?.contains(document.activeElement) || document.activeElement === document.body)
+      this.term.focus()
+  }
+
   /** Bring a dead pane back to life IN PLACE: same id, same slot, prior history kept in
    *  SCROLLBACK (the fresh shell's boot frame repaints the screen area — that is a shell
    *  booting, not a wipe; PANERESTART pins the distinction). The daemon already supports
@@ -591,7 +736,22 @@ export class TerminalPane {
   private restart(): void {
     if (!this.dead || this.disposed) return
     this.dead = false
-    this.captureEmitted = false // a restarted pane is a NEW session life (revision C)
+    // A restarted pane is a NEW session life. Both halves of that, together:
+    //
+    //   the port's marks — live / spawn-settled / remote-ready / reattached — described the
+    //   shell that just died. Left standing, a restarted REMOTE pane read as remote-READY
+    //   before SSH had authenticated, and as already-reattached, which suppresses the
+    //   relaunch a fresh shell needs.
+    //
+    //   this pane's own latches, which exist to make each of those marks fire ONCE. Clearing
+    //   only the port would leave them set and the marks would never be re-raised — "wrongly
+    //   ready" traded for "never ready".
+    retirePaneLife(this.id)
+    this.life = freshPaneLife()
+    // ...and any cover raised over the shell that just died. An offer to continue a
+    // conversation, or a launch overlay waiting on an agent that will never boot now,
+    // describes a process this pane no longer has.
+    setPaneFailoverOffer(this.id as PaneId, null)
     this.deadBanner?.remove()
     this.deadBanner = undefined
     if (this.stateDot && this.stateDot.dataset.state === 'exited') {
@@ -732,6 +892,23 @@ export class TerminalPane {
     }
   }
 
+  /** Re-assert grid agreement after a daemon reconnect. Both halves of a drift, in
+   *  order: refit heals a WRONG XTERM (deduped — a right one costs nothing), then the
+   *  unconditional send heals a WRONG PTY, whose last resize died in the dead socket
+   *  while xterm already applied it — the one case refit's changed-only send can never
+   *  reach. Free when nothing drifted: the daemon drops a same-size resize before
+   *  ConPTY sees it (PaneSession.resize). Measured panes only — re-asserting the
+   *  unmeasured 80×24 default would resize a surviving session wrong, the exact hazard
+   *  spawnPty's dims guard documents. Riding the normal resize IPC also re-banks the
+   *  relay's replay spec, so the NEXT flap replays current dims. */
+  private reassertGrid(): void {
+    if (this.disposed || this.dead) return
+    this.refit()
+    if (proposeGrid(this.term)) {
+      terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows, gen: this.sessionGen })
+    }
+  }
+
   /** Invalidate xterm's cached character metrics (the option must CHANGE to trigger a
    *  re-measure) and refit — run once the document's fonts are fully active. */
   private remeasureFont(): void {
@@ -793,6 +970,11 @@ export class TerminalPane {
     // Meta chords are macOS-only: on Windows `metaKey` is the WINDOWS key, and any
     // Win+C/Win+V combo the OS lets through must not be eaten as copy/paste.
     const cmd = IS_MAC && e.metaKey
+    // DELIBERATELY "either", and NOT a hasModKey/matchChord site. The clipboard chords
+    // below accept ⌘+C *and* Ctrl+Shift+C on a Mac on purpose: ⌘ is the desktop's copy,
+    // Ctrl+Shift+C / Ctrl+Insert are the TERMINAL's, and a Mac user typing in a shell
+    // expects both. The bug chords.ts fixed was accepting the WINDOWS key as a modifier,
+    // which the `IS_MAC &&` above already refuses — so this pair is correct as written.
 
     // COPY. Cmd+C (mac), Ctrl+Shift+C, and Ctrl+Insert — plus BARE Ctrl+C, but only
     // when there is a selection to copy. With no selection, bare Ctrl+C must fall
@@ -968,8 +1150,8 @@ export class TerminalPane {
    * no completed blocks sends nothing.
    */
   private emitSessionCapture(): void {
-    if (this.captureEmitted) return
-    this.captureEmitted = true
+    if (this.life.captureEmitted) return
+    this.life.captureEmitted = true
     const ladder = this.blocks?.list() ?? []
     const blocks = ladder
       .slice(this.capturedThrough)
@@ -1505,7 +1687,8 @@ export class TerminalPane {
     // full-height grabbable rail, and a one-tap return to following the latest output.
     this.scrollbar = createPaneScrollbar(this.term, body, this.anchor)
 
-    // Title precedence: what the agent says it's doing (OSC 0/2 window title) → the
+    // Title precedence: the name the user typed (rename dialog — a decision, so it
+    // pins) → what the agent says it's doing (OSC 0/2 window title) → the
     // launched agent's label → "Terminal N". Every supported CLI feeds this channel
     // with its OWN self-description (backend/features/agents/title.ts is the map:
     // claude topic titles + opencode session titles by default, codex thread-title +
@@ -1516,11 +1699,12 @@ export class TerminalPane {
     const fallback = `Terminal ${displayPaneNumber(this.id)}`
     let oscTitle = ''
     const applyTitle = (): void => {
+      const userTitle = getPaneUserTitle(this.id) ?? ''
       const label = getPaneLabel(this.id) ?? ''
-      const text = oscTitle || label || fallback
+      const text = userTitle || oscTitle || label || fallback
       title.textContent = text
       title.title = text
-      title.classList.toggle('has-label', !!(oscTitle || label))
+      title.classList.toggle('has-label', !!(userTitle || oscTitle || label))
       // A longer name must not cost the branch chip its column — re-fit, and let the
       // name be the thing that ellipsises (its full text stays in the tooltip + ⋯ menu).
       this.headerFit?.schedule()
@@ -1557,8 +1741,16 @@ export class TerminalPane {
         text = paren[1]
       }
       oscTitle = text.trim()
-      applyTitle()
+      // A COVERED pane does not take a new title. The cover exists so the launch's
+      // machinery is not the user's business, and the title is machinery too: cmd.exe
+      // names its window after the command it is running, so a launching pane wore
+      // "cmd.exe - claude --session-id … --settings …" in its header while the body was
+      // dutifully blurred (caught in the screenshot walkthrough). The text is still
+      // RECORDED, so the moment the cover lifts the header shows whatever the CLI has
+      // titled itself by then — which is its own session name, not our command line.
+      if (!this.covered) applyTitle()
     })
+    this.reapplyTitle = applyTitle
     // An agent's goal must not outlive the agent: when this pane's session ends
     // (process truth from typed-launch detection, or the OSC-133 exit guess above),
     // the title falls back to the pane's identity label instead of wearing the last
@@ -1588,7 +1780,10 @@ export class TerminalPane {
       }
       const input = document.createElement('input')
       input.className = 'input pane-title-input'
-      input.value = getPaneLabel(this.id) ?? ''
+      // The typed name only — never the launch label or the agent's task title, so
+      // saving the dialog untouched cannot pin words the user didn't choose.
+      input.value = getPaneUserTitle(this.id) ?? ''
+      input.placeholder = title.textContent ?? ''
       input.setAttribute('aria-label', 'Pane name')
 
       const field = document.createElement('label')
@@ -1607,8 +1802,12 @@ export class TerminalPane {
       })
       this.renameModal = modal
       const commit = (): void => {
-        setPaneLabel(this.id, input.value.trim())
-        oscTitle = '' // a manual name takes over from the agent's task title
+        // A typed name PINS: it outranks the agent's task title for as long as it
+        // stands (applyTitle's precedence), not just until the next OSC write —
+        // the old clear-oscTitle-once approach lost the name to the very next
+        // title the CLI emitted. oscTitle keeps updating underneath, so erasing
+        // the name returns the pane to the agent's live title, not a stale one.
+        setPaneUserTitle(this.id, input.value.trim())
         applyTitle()
         getTelemetry().captureEvent({ name: 'pane.renamed' }) // never the text
         modal.close()
@@ -1749,6 +1948,9 @@ export class TerminalPane {
     }))
     this.disposers.push(onPaneLabel((paneId, text) => {
       if (paneId === this.id) applyLabel(text)
+    }))
+    this.disposers.push(onPaneUserTitle((paneId) => {
+      if (paneId === this.id) applyTitle()
     }))
     this.disposers.push(onPaneGit((paneId, status) => {
       if (paneId === this.id) applyGit(status)
@@ -2071,6 +2273,25 @@ export class TerminalPane {
         )
       }
     }
+    // Switch-profile entries are the LAUNCH entries' complement: they exist only when a
+    // session IS up (they interrupt it and resume under the named profile — agents
+    // feature, switchPaneProfile). Recognized by hint + this provider's id prefix; the
+    // string filter is the same no-imports bridge the launch entries ride.
+    const switches =
+      session && !this.dead
+        ? allCommands().filter((c) => c.hint === 'Switch profile' && c.id.startsWith(`agent:switch:${session.provider}:`))
+        : []
+    if (switches.length) {
+      menu.append(separator())
+      for (const cmd of switches) {
+        menu.append(
+          item('circle-user', cmd.title.replace('Switch focused pane to', 'Switch to'), () => {
+            this.term.focus() // make THIS the focused pane, then switch it
+            cmd.run()
+          })
+        )
+      }
+    }
   }
 
   /** Dev-only debug handle so tooling/smoke can inspect the real terminal. Guarded by
@@ -2280,9 +2501,14 @@ export class TerminalPane {
       clearTimeout(this.refitTimer)
       this.refitTimer = undefined
     }
+    if (this.reassertTimer) {
+      clearTimeout(this.reassertTimer)
+      this.reassertTimer = undefined
+    }
     clearPaneState(this.id)
     clearPaneCwd(this.id) // stops the backend git watch for this pane (git feature unwatches)
-    forgetPane(this.id) // live/reattached marks die with the pane, not with the id
+    retirePaneLife(this.id) // marks describe a SHELL, not an id
+    setPaneBufferReader(this.id, null) // a recycled id must not read a dead xterm
     forgetSpawnRun(this.id) // armed builds/outcomes too — a recycled id must start clean
     if (this.selectionCopyTimer) clearTimeout(this.selectionCopyTimer) // a pane closed mid-drag must not copy after death
     this.dropAbort.abort() // drop the window-scoped drag listeners
@@ -2301,9 +2527,14 @@ export class TerminalPane {
     // never reaches the renderer (the relay tombstones it), so without these the NEXT
     // pane to take this id mounted wearing the dead one's agent session (provider chip +
     // context gauge), launch-profile note, and label.
-    clearPaneAgentSession(this.id)
+    clearPaneAgentSession(this.id, 'pane-gone') // the pty is killed below — nothing survives this
     setPaneProfile(this.id, undefined)
     setPaneLabel(this.id, '')
+    setPaneUserTitle(this.id, '')
+    // ...including any cover. The offer port REPLAYS on subscribe, so an offer left
+    // behind here would repaint itself over the next pane to take this id — a stale
+    // "Continue on <profile>" button wired to callbacks that close over a dead pane.
+    setPaneFailoverOffer(this.id, null)
     this.visObs?.disconnect()
     this.expandStateObs?.disconnect()
     this.gl.release()

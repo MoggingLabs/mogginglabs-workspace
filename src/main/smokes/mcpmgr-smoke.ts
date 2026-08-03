@@ -2,7 +2,7 @@ import { app, type BrowserWindow } from 'electron'
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { findWriter, removeStoredServer, saveServer, sha256, validateServerEntry, type CliHomes, type GrantKv } from '@backend/features/integrations'
-import { houseServerEntry, mgrApply, mgrRemoveFrom, mgrStatus, refreshManagedHouseRuntime } from '../mcp-manager'
+import { houseServerEntry, mgrApply, mgrRemoveFrom, mgrStatus, refreshManagedRuntimePaths } from '../mcp-manager'
 import { getSettingsStore } from '../app-settings'
 import { getCliRuntime } from '../cli-runtime'
 
@@ -228,12 +228,63 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
         writeFileSync(file, writer.upsert(readFileSync(file, 'utf8'), legacyHouse), 'utf8')
         settings?.setSetting(`integrations.mgr.hash.${cli}.mogging`, sha256(writer.canonical(legacyHouse)))
       }
-      const runtimeRefreshed = refreshManagedHouseRuntime(homes)
+      const runtimeRefreshed = refreshManagedRuntimePaths(homes)
       const protocolUpgradeSafe =
         runtimeRefreshed.length === 3 &&
         readFileSync(claudeFile, 'utf8') === claudeAfter &&
         readFileSync(codexFile, 'utf8') === codexAfter &&
         readFileSync(geminiFile, 'utf8') === geminiAfter
+
+      // A CONNECTION row goes stale exactly the same way the house row does — it names a
+      // launcher under run/v<N>, and the protocol bump deletes that whole directory. The refresh
+      // used to hard-code 'mogging', so those rows were written once and never repaired: a user
+      // who configured a connection under protocol 10 had it silently stranded by the 10->11
+      // bump, with the CLI reporting only "server failed to start".
+      //
+      // Both rows are planted in the SAME claude config on purpose. That is the ordinary case
+      // (house + a connection), and it is what a refresh that reads the file once per writer
+      // instead of once per row gets wrong: the first repair moves the bytes, and the second
+      // then looks like a concurrent edit and is skipped — while the run still reports success.
+      const connId = 'conn-stale-runtime'
+      const connEntry = {
+        id: connId,
+        label: 'Stale Connection',
+        transport: 'stdio' as const,
+        command: runtime.executable,
+        args: [runtime.connectionEntry, '--connection', connId]
+      }
+      const connKv: GrantKv = { get: (k) => settings?.getSetting(k) ?? null, set: (k, v) => settings?.setSetting(k, v) }
+      saveServer(connKv, connEntry)
+      const claudeWriter = findWriter('claude-code')
+      if (!claudeWriter) throw new Error('missing claude-code writer')
+      // The pre-bump shape: the version-pinned shim under run/v<N>/bin, which the sweep deletes.
+      const legacyConn = { ...connEntry, command: runtime.executable, args: [runtime.connectionShim, '--connection', connId] }
+      const legacyHouseAgain = { ...house, args: [runtime.mcpTarget], env: { ELECTRON_RUN_AS_NODE: '1' } }
+      let claudeBoth = readFileSync(claudeFile, 'utf8')
+      claudeBoth = claudeWriter.upsert(claudeBoth, legacyHouseAgain)
+      claudeBoth = claudeWriter.upsert(claudeBoth, legacyConn)
+      writeFileSync(claudeFile, claudeBoth, 'utf8')
+      settings?.setSetting(`integrations.mgr.hash.claude-code.mogging`, sha256(claudeWriter.canonical(legacyHouseAgain)))
+      settings?.setSetting(`integrations.mgr.hash.claude-code.${connId}`, sha256(claudeWriter.canonical(legacyConn)))
+
+      const bothRefreshed = refreshManagedRuntimePaths(homes)
+      const claudeRepaired = JSON.parse(readFileSync(claudeFile, 'utf8')) as {
+        mcpServers?: Record<string, { command?: string; args?: string[] }>
+      }
+      const repairedConn = claudeRepaired.mcpServers?.[connId]
+      const repairedHouse = claudeRepaired.mcpServers?.mogging
+      const connectionRowRefreshed =
+        // the connection row is repaired at all — this is the generalization
+        bothRefreshed.some((r) => r.cli === 'claude-code' && r.serverId === connId) &&
+        repairedConn?.args?.[0] === runtime.connectionEntry &&
+        repairedConn.args[0] !== runtime.connectionShim &&
+        // ...and so is the house row in the same file, in the same pass — this is the re-read
+        bothRefreshed.some((r) => r.cli === 'claude-code' && r.serverId === 'mogging') &&
+        repairedHouse?.args?.[0] === runtime.mcpEntry &&
+        // no stranded row may name a protocol-versioned path afterwards
+        !/[/\\]v\d+[/\\]/.test(JSON.stringify(claudeRepaired.mcpServers ?? {}))
+      removeStoredServer(connKv, connId)
+      writeFileSync(claudeFile, claudeAfter, 'utf8')
 
       // A third-party config can be temporarily unreadable or even replaced by a directory.
       // Boot-time best-effort refresh must isolate that writer rather than abort app startup.
@@ -245,7 +296,7 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
       mkdirSync(join(homesUnreadable.home, '.claude.json'), { recursive: true })
       let unreadableConfigSafe = false
       try {
-        refreshManagedHouseRuntime(homesUnreadable)
+        refreshManagedRuntimePaths(homesUnreadable)
         unreadableConfigSafe = true
       } catch {
         unreadableConfigSafe = false
@@ -358,7 +409,7 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
       const collisionExplained = /not managed|already/i.test(String(codexCollision.reason ?? ''))
 
       const pass =
-        secretRefused && envRefAccepted && runtimeExact && protocolUpgradeSafe && unreadableConfigSafe && migrationRaceRefused && invalidByteRaceRefused &&
+        secretRefused && envRefAccepted && runtimeExact && protocolUpgradeSafe && connectionRowRefreshed && unreadableConfigSafe && migrationRaceRefused && invalidByteRaceRefused &&
         modesPreservedAfterApply && modesPreservedAfterRemove && applied && dialectClaude && dialectCodex && dialectGemini &&
         httpQuirkOk && statusApplied && backupsExist && driftDetected &&
         removed && bytesClaude && bytesCodex && bytesGemini && statusGone && vintageBOk &&
@@ -369,6 +420,7 @@ export function runMcpMgrSmoke(win: BrowserWindow, mode?: string): void {
         envRefAccepted,
         runtimeExact,
         protocolUpgradeSafe,
+        connectionRowRefreshed,
         unreadableConfigSafe,
         migrationRaceRefused,
         invalidByteRaceRefused,

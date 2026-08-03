@@ -1,4 +1,4 @@
-# 18 — Accounts, entitlements & hardening
+# 19 — Accounts, entitlements & hardening
 
 > **Status: the book of the phase-accounts pack** (2026-07-16). Everything written
 > here is SHIPPED and gated; what is not written here does not exist yet. Grounding:

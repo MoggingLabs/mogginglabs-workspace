@@ -75,7 +75,16 @@ export const AgentChannels = {
   setupChanged: 'agents:setupChanged', // main -> renderer: AgentSetupState
   // Sign-in happens AFTER the terminals exist — the app types the provider's own command
   // into a pane the user is watching and handles no credential (ADR 0002).
-  signIn: 'agents:signIn' // (agentId) -> AgentSignInTarget | null
+  signIn: 'agents:signIn', // (agentId) -> AgentSignInTarget | null
+  // A prefetched build's deferred effects, applied when its command is finally typed
+  // (AgentCommandRequest.consume === false). Resume/switch launches build DURING their
+  // waits this way instead of after them.
+  commandCommit: 'agents:commandCommit', // (AgentCommandCommitRequest) -> AgentCommandCommitResult
+  // Per-workspace auto-failover opt-in (4/04, persisted — audit F6: the in-memory map
+  // silently reset to OFF every run, exactly wrong for the overnight-run use case).
+  // Settings-store key main-side; the renderer only ever names a workspace id.
+  failoverGet: 'agents:failoverGet', // (workspaceId) -> boolean
+  failoverSet: 'agents:failoverSet' // ({ workspaceId, on }) -> { ok: boolean } (honest write — browser-dock consent pattern)
 } as const
 
 export const AgentConfigChannels = {
@@ -216,10 +225,15 @@ export const ExplorerChannels = {
   // Dock CHROME state (11/03), persisted in the app's own KV — the `browser.width`
   // precedent. NOT a write verb in ADR 0010's sense: these reach the settings store,
   // never a mutating fs API on the user's files. The read-only custody stance holds.
-  init: 'explorer:init', // -> ExplorerDockInit (open + width + showHidden, read before first paint)
+  init: 'explorer:init', // -> ExplorerDockInit (open + width + showHidden + followPinned, read before first paint)
   setOpen: 'explorer:setOpen', // renderer -> main: { open } (persists explorer.open)
   setWidth: 'explorer:setWidth', // renderer -> main: { width } (persists explorer.width; renderer debounces)
   setShowHidden: 'explorer:setShowHidden', // renderer -> main: { showHidden } (persists explorer.showHidden)
+  setFollowPin: 'explorer:setFollowPin', // renderer -> main: { pinned } (persists explorer.followPin)
+  // Follow-the-pane rooting (11/07): the worktree root CONTAINING a pane's cwd — a pure
+  // filesystem walk for a `.git` entry (findRepoRoot), NEVER a git spawn. Read-only: it
+  // answers a containment question and touches nothing.
+  resolveRoot: 'explorer:resolveRoot', // (abs path) -> ExplorerResolveRootResult
   // Phase-11/06 — DELEGATION, not execution. These hand a path to the OS and step back;
   // there is STILL no verb here that writes, renames, moves, deletes, or runs anything.
   root: 'explorer:root', // renderer -> main: (path) the folder on screen — the ACTION GUARD's boundary

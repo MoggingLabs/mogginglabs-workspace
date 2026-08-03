@@ -117,3 +117,43 @@ export function saveServer(kv: GrantKv, raw: unknown): { ok: boolean; reason?: s
 export function removeStoredServer(kv: GrantKv, id: string): void {
   kv.set(KV_SERVERS, JSON.stringify(listStoredServers(kv).filter((s) => s.id !== String(id))))
 }
+
+/** The two fields of a CLI runtime a stored server entry may name. Structural on purpose —
+ *  this module is Electron-free and must not import main's CliRuntime. */
+export interface EntryRuntime {
+  /** The standalone helper binary. */
+  readonly executable: string
+  /** A PROTOCOL-NEUTRAL launcher path — one that survives a protocol bump. */
+  readonly launcher: string
+}
+
+/**
+ * Build a stored server entry that names a stable launcher.
+ *
+ * A CLI config entry outlives the release that wrote it: the file sits in the user's own
+ * `~/.claude.json` (or equivalent) and nothing rewrites it on update. So the command it names
+ * must be protocol-neutral.
+ *
+ * The house row has always done this — `{command: executable, args: [mcpEntry]}`, where
+ * mcpEntry is a stable launcher under `run/mcp`. The connection row hand-built its own shape
+ * and named `connectionShim`, which lives in the VERSION-PINNED `run/v<N>/bin`. After a
+ * protocol bump that path is gone and every connection a user had configured stops resolving —
+ * silently, in their CLI, with no app involved.
+ *
+ * `env` is never set. The entry validator refuses any env value that is not a `${VAR}`
+ * reference, deliberately, so no credential literal can reach a CLI config; a builder that
+ * cannot express env cannot be talked into one.
+ */
+export function serverEntryFor(
+  runtime: EntryRuntime,
+  spec: { id: string; label: string; args?: readonly string[]; builtIn?: boolean }
+): McpServerEntry {
+  return {
+    id: spec.id,
+    label: spec.label,
+    transport: 'stdio',
+    command: runtime.executable,
+    args: [runtime.launcher, ...(spec.args ?? [])],
+    ...(spec.builtIn ? { builtIn: true } : {})
+  }
+}

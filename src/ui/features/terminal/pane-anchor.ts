@@ -1,5 +1,41 @@
 import type { Terminal } from '@xterm/xterm'
 
+/** Chords that MOVE the viewport on purpose, and the subset that moves it upward. */
+const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'])
+const UP_KEYS = new Set(['PageUp', 'Home', 'ArrowUp'])
+/** Keys that are a MODIFIER being held, not a keystroke. */
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'NumLock', 'ScrollLock'])
+
+/**
+ * What a keydown means to the anchor. Pure and exported so it can be tested — the bug it
+ * fixes was invisible to the gate precisely because the gate synthesised composed chords
+ * and never sent the keys a real keyboard sends.
+ *
+ * A real Shift+PageUp is TWO keydowns: `Shift` on its own (already carrying shiftKey:true),
+ * then `PageUp`. The first one matched no scroll chord and fell through to the typing
+ * branch, which re-pins the pane to the bottom. So from a scrolled-up viewport, every
+ * attempt to page further up first slammed back to the prompt — keyboard scrollback could
+ * not get past one page, and shift-click selection in history broke the same way.
+ *
+ * Alt+Arrow is the block-jump chord (terminal-pane), which is a deliberate viewport move
+ * and so a gesture, not typing.
+ */
+export function classifyAnchorKey(e: {
+  key: string
+  shiftKey?: boolean
+  ctrlKey?: boolean
+  metaKey?: boolean
+  altKey?: boolean
+}): 'ignore' | 'gesture-up' | 'gesture-down' | 'typing' {
+  if (MODIFIER_KEYS.has(e.key)) return 'ignore'
+  if ((e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) && SCROLL_KEYS.has(e.key)) {
+    return UP_KEYS.has(e.key) ? 'gesture-up' : 'gesture-down'
+  }
+  // A modified key that is not a scroll chord is a shortcut, not typing at the prompt.
+  if (e.ctrlKey || e.metaKey || e.altKey) return 'ignore'
+  return 'typing'
+}
+
 /**
  * The pane scroll ANCHOR: a pane follows its newest output unless the USER chose
  * otherwise. Nothing else — not a replay, not a refit, not a reveal — may move the
@@ -220,11 +256,17 @@ export function createPaneAnchor(term: Terminal, body: HTMLElement): PaneAnchorH
   // Keys: the scroll chords are a gesture (they may leave the bottom deliberately);
   // every other key is TYPING, which means the user is talking to the agent at the
   // prompt — xterm's own scrollOnUserInput already jumps there, so re-arm with it.
-  const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'])
-  const UP_KEYS = new Set(['PageUp', 'Home', 'ArrowUp'])
   const onKey = (e: KeyboardEvent): void => {
-    if ((e.shiftKey || e.ctrlKey || e.metaKey) && SCROLL_KEYS.has(e.key)) noteGesture(UP_KEYS.has(e.key))
-    else if (!e.ctrlKey && !e.metaKey && !e.altKey) stick() // typing = back to the prompt
+    switch (classifyAnchorKey(e)) {
+      case 'gesture-up':
+        return noteGesture(true)
+      case 'gesture-down':
+        return noteGesture(false)
+      case 'typing':
+        return stick() // typing = back to the prompt
+      case 'ignore':
+        return
+    }
   }
   body.addEventListener('keydown', onKey, true)
 

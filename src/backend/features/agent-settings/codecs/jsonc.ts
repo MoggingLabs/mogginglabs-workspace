@@ -15,8 +15,7 @@ import {
   assertSafeKey,
   detectEol,
   readJsonPath,
-  splitBom
-} from './common'
+  splitBom, readManyFrom } from './common'
 import type { ConfigCodec, JsonValue } from './types'
 
 const PARSE_OPTIONS = { allowTrailingComma: true, disallowComments: false, allowEmptyContent: false }
@@ -97,6 +96,10 @@ export const jsoncCodec: ConfigCodec = {
     assertPath(path)
     if (text === null) return { present: false }
     return readJsonPath(parseJsonc(text).value, path)
+  },
+
+  readMany(text, paths) {
+    return readManyFrom((t) => parseJsonc(t).value, text, paths)
   },
 
   set(text, path, value) {

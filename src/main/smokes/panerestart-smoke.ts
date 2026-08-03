@@ -93,10 +93,18 @@ export function runPaneRestartSmoke(win: BrowserWindow): void {
       // ── death: real PTY exit; the epitaph must NAME the code, the banner must offer
       //    Restart, and the pane must hold the dead fact itself ────────────────────────
       await until(`(() => { const p = ${pane(paneId)}; if (!p) return false; p.write('exit\\r'); return true })()`)
+      // THE DEAD FACT FIRST, then the epitaph — both are written by the one `onExit`
+      // handler, the epitaph a line before markDead, so once the pane knows it is dead the
+      // text is already in its buffer. Asserted the other way round these three arms each
+      // got their OWN budget from a shared event, and only the FIRST could expire: on a
+      // loaded runner the shell's exit arrived past the epitaph's poll, which failed, while
+      // `dead` and the banner passed on fresh budgets a moment later. That is a race in the
+      // gate's ordering, not a product fact — the windows sweep red said exactly this
+      // (exitCodeShown false, deadFact and bannerShown true).
+      const deadFact = await until(`(() => { const p = ${pane(paneId)}; return !!p && p.dead() })()`)
       const exitCodeShown = await until(
         `(() => { const p = ${pane(paneId)}; return !!p && /\\[process exited \\(code \\d+\\)\\]/.test(${joined(paneId)}) })()`
       )
-      const deadFact = await until(`(() => { const p = ${pane(paneId)}; return !!p && p.dead() })()`)
       const bannerShown = await until(
         `(() => { const b = document.querySelector('.layout-slot[data-pane-id="${paneId}"] .pane-dead-banner'); ` +
         `return !!b && !!b.querySelector('.pane-dead-restart') })()`

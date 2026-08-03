@@ -132,8 +132,10 @@ export interface UsageAlert {
   /** threshold = a % crossing · pace = the PROJECTION flipped to runs-out
    *  (predictive — can fire well under the thresholds) · reset = fresh window. */
   kind: 'threshold' | 'pace' | 'reset'
-  /** threshold alerts only: which shoulder-tap this is. */
-  level?: 'quiet' | 'warn'
+  /** threshold alerts only: which shoulder-tap this is. `capped` = the window
+   *  reached 100% — the lane is spent NOW, which is the pane-failover trigger,
+   *  not just a warning. */
+  level?: 'quiet' | 'warn' | 'capped'
   providerId: string
   profileId: string
   planLabel: string
@@ -143,8 +145,9 @@ export interface UsageAlert {
   title: string
   /** The 7/02 formatter's verdict line when the plan paces; else a plain state line. */
   body: string
-  /** 7/09 failover feed: present ONLY when the ACTIVE plan crossed `warn` and
-   *  a sibling profile sits under 50% — a suggestion, never an auto-switch. */
+  /** 7/09 failover feed: present ONLY when the ACTIVE plan crossed `warn` (or
+   *  `capped`) and a sibling profile sits under 50% on its LIVE windows — a
+   *  suggestion, never an auto-switch. */
   failover?: { profileId: string; profileName: string }
   /** Reset alerts only: the user opted into the flourish. */
   confetti?: boolean

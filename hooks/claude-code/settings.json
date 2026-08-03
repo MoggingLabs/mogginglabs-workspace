@@ -69,6 +69,16 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mogging notify --event session-start"
+          }
+        ]
+      }
     ]
   }
 }

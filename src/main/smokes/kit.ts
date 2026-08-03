@@ -61,3 +61,26 @@ export function processImagePath(pid: number): string {
 /** Path equality under the platform's case rules (Windows paths compare case-blind). */
 export const samePath = (a: string, b: string): boolean =>
   process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+
+// ── The platform modifier, for gates that PRESS a chord ─────────────────────────────
+//
+// ui/core/commands/chords.ts made the app's modifier the platform's OWN and never both
+// (Ctrl on Windows/Linux, ⌘ on macOS), because `ctrlKey || metaKey` made the WINDOWS key
+// a modifier — Win+K fired our palette *and* Windows' Cast panel from one press. Every
+// gate that presses an app chord therefore has to press the key that platform is bound
+// to, or it asserts the defect that was just removed.
+//
+// It is one exported constant rather than `process.platform === 'darwin' ? …` written
+// out at each gate, for exactly the reason chords.ts exists: the rule spelled longhand
+// at each site is the rule that drifts. NEGATIVE controls are the deliberate exception —
+// a "must not fire" assertion may press BOTH modifiers, since neither may act.
+
+/** The KeyboardEvent init field for this platform's modifier: `metaKey` on macOS, else `ctrlKey`. */
+export const MOD_KEY_FIELD: 'ctrlKey' | 'metaKey' = process.platform === 'darwin' ? 'metaKey' : 'ctrlKey'
+
+/** The same choice as a `{ ctrl, meta }` pair, for IPC payloads that carry booleans. */
+export const MOD_KEY_FLAGS: { ctrl: boolean; meta: boolean } =
+  process.platform === 'darwin' ? { ctrl: false, meta: true } : { ctrl: true, meta: false }
+
+/** CDP `Input.dispatchKeyEvent` modifier bit for this platform's modifier (Ctrl=2, Meta=4). */
+export const MOD_KEY_CDP_BIT: number = process.platform === 'darwin' ? 4 : 2

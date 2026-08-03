@@ -186,7 +186,18 @@ function wireFingerprint() {
 // re-pin above. An old daemon parses the frame fine and routes the unknown type to
 // notice() (degraded, never broken); the build stamp — not a version burn — is what
 // retires stale daemon code in place. Nothing an old daemon cannot SPEAK moved.
-const PINNED = { version: 11, fingerprint: 'f5aae626da80d5eb' }
+// Re-pinned WITHOUT a bump (2026-08-02, the additive-tolerant arm): claimsOverlap and
+// normalizeClaimPattern MOVED OUT of protocol.ts into src/contracts/daemon/claims.ts. Nothing
+// crosses the socket differently — those two are predicates the daemon applies to strings that
+// already rode the wire, not shapes on it.
+//
+// The move exists because this gate hashes every declaration in the file, while its own header
+// above says the fingerprint "covers the WIRE SHAPE and nothing else". A pure behaviour fix to
+// claimsOverlap — treating `?` and `[…]` as wildcards, which its docstring always promised —
+// tripped a WIRE gate. That is the gate crying wolf on its own stated scope, and the fourth
+// "byte-different body, identical wire" re-pin in this file's history. Splitting the predicates
+// out is the same move gen.ts made, and it retires that class of false alarm.
+const PINNED = { version: 11, fingerprint: '3f91289ea9f4e362' }
 
 const actualWire = wireFingerprint()
 if (actualWire !== PINNED.fingerprint) {

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { statSync, accessSync, lstatSync, constants as fsConstants } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 
@@ -48,10 +48,41 @@ export interface LivePath {
 
 /** Windows compares path entries case-insensitively; POSIX does not. */
 const fold = (value: string): string =>
-  process.platform === 'win32' ? value.replace(/[\\/]+$/, '').toLocaleLowerCase('en-US') : value.replace(/\/+$/, '')
+  process.platform === 'win32' ? foldWindows(value) : value.replace(/\/+$/, '')
 
 export function pathEntries(value: string | undefined): string[] {
   return (value ?? '').split(delimiter).filter(Boolean)
+}
+
+// ── Windows PATH data, read on ANY host ──────────────────────────────────────────────
+//
+// `pathEntries` splits on `path.delimiter` and `fold` branches on `process.platform` —
+// both describe the host DOING the reading. A value out of the Windows registry is not
+// host data: it is always ';'-separated and always compared case-insensitively, whoever
+// happens to be parsing it. Using the host-shaped helpers on it is only accidentally
+// right, and only on Windows.
+//
+// On a macOS or Linux runner the host delimiter is ':', so `pathEntries` cuts every
+// Windows entry in half at its DRIVE LETTER — 'C:\a;C:\b' reads as ['C', '\a;C', '\b'] —
+// and nothing afterwards can match a real directory again. That is not hypothetical: it
+// made planWindowsPathWrite plan a duplicate WRITE over a dir the machine PATH already
+// carried, on every non-Windows CI runner, while passing on the author's Windows box.
+//
+// Same treatment `mergeEnvFolding` already gives its fold: the platform decision is a
+// property of the DATA, stated at the seam, not read from the ambient process. Windows-
+// only behaviour that cannot be driven from a test is behaviour no non-Windows runner
+// can defend.
+export function windowsPathEntries(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(';')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+}
+
+/** Compare two Windows path entries the way Windows itself does: case-insensitively, and
+ *  ignoring a trailing separator of either slash. */
+export function foldWindows(value: string): string {
+  return value.replace(/[\\/]+$/, '').toLocaleLowerCase('en-US')
 }
 
 /** Order-preserving de-dupe under the platform's own comparison rules. */
@@ -77,14 +108,33 @@ function isDir(candidate: string): boolean {
   }
 }
 
-function run(file: string, args: string[], timeout = 6000): Promise<string | null> {
+/** What a command actually did. `ok` means it RAN and exited 0 — never "the answer is
+ *  empty". `code` is the exit status, or null when the process never started (spawn
+ *  failure) or was killed (our own timeout). */
+export interface RunOutcome {
+  ok: boolean
+  code: number | null
+  stdout: string
+}
+
+// Distinguishing "failed" from "empty" is the whole job of this type. Collapsing both to
+// null is what let persistWindows read a timed-out `reg query` as "the user has no PATH"
+// and then overwrite the real one — see the refusal in persistWindows below. The same
+// rule is stated in setup.ts's capture(): an empty string from a command that failed
+// means "we do not know", not "the answer is empty".
+function run(file: string, args: string[], timeout = 6000): Promise<RunOutcome> {
   return new Promise((resolve) => {
     try {
-      execFile(file, args, { encoding: 'utf8', windowsHide: true, timeout, maxBuffer: 1024 * 1024 }, (err, stdout) =>
-        resolve(err ? null : String(stdout))
-      )
+      execFile(file, args, { encoding: 'utf8', windowsHide: true, timeout, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+        const out = String(stdout ?? '')
+        if (!err) return resolve({ ok: true, code: 0, stdout: out })
+        // execFile reports a non-zero EXIT as a numeric `code`, but a spawn failure as a
+        // string errno ('ENOENT') and a timeout as a signal with no usable code at all.
+        const code = typeof (err as { code?: unknown }).code === 'number' ? ((err as { code: number }).code) : null
+        resolve({ ok: false, code, stdout: out })
+      })
     } catch {
-      resolve(null)
+      resolve({ ok: false, code: null, stdout: '' })
     }
   })
 }
@@ -98,13 +148,29 @@ function run(file: string, args: string[], timeout = 6000): Promise<string | nul
 const REG_USER = ['HKCU\\Environment', '/v', 'Path']
 const REG_MACHINE = ['HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment', '/v', 'Path']
 
-/** Pull `Path`'s raw value + its type out of one `reg query` dump. */
-export function parseRegPath(stdout: string | null): { value: string; kind: string } | null {
-  if (!stdout) return null
-  const match = /^[ \t]*Path[ \t]+(REG_(?:EXPAND_)?SZ)[ \t]+(.*)$/im.exec(stdout)
-  if (!match) return null
-  return { kind: match[1], value: match[2].replace(/\r$/, '').trim() }
+/** A `reg query` for one value has THREE answers, and conflating the last two is how a
+ *  PATH gets destroyed:
+ *    - the value, when the read succeeded and the dump held a `Path` row;
+ *    - 'absent',  when the read succeeded and it did not (a fresh profile has no HKCU
+ *      Path — writing a fresh one there is correct);
+ *    - 'unknown', when the read itself failed (timeout, policy, EDR, spawn failure).
+ *      Nothing may be written on this answer: we do not know what we would destroy. */
+export type RegRead = { value: string; kind: string } | 'absent' | 'unknown'
+
+/** Pull `Path`'s raw value + its type out of one `reg query` outcome. */
+export function parseRegPath(res: RunOutcome | null): RegRead {
+  if (!res) return 'unknown'
+  const match = /^[ \t]*Path[ \t]+(REG_(?:EXPAND_)?SZ)[ \t]+(.*)$/im.exec(res.stdout)
+  if (match) return { kind: match[1], value: match[2].replace(/\r$/, '').trim() }
+  // A clean exit with no Path row means the value genuinely is not there. `reg query`
+  // also exits 1 for "unable to find" — but it exits 1 for other refusals too, so that
+  // code alone is not proof; the caller disambiguates by reading the KEY (see regReadUserPath).
+  return res.ok ? 'absent' : 'unknown'
 }
+
+/** The value a RegRead carries, or '' for both no-value answers — for the read-only
+ *  paths where an unknown and an absent PATH lead to the same fallback anyway. */
+const regValue = (r: RegRead): string => (typeof r === 'string' ? '' : r.value)
 
 /** Expand `%NAME%` against the live environment (case-insensitive, like Windows). */
 export function expandWindowsVars(value: string, env: NodeJS.ProcessEnv = process.env): string {
@@ -121,12 +187,17 @@ async function windowsRegistryPath(): Promise<string[] | null> {
   const [machine, user] = await Promise.all([run('reg', ['query', ...REG_MACHINE]), run('reg', ['query', ...REG_USER])])
   const parsedMachine = parseRegPath(machine)
   const parsedUser = parseRegPath(user)
-  if (!parsedMachine && !parsedUser) return null
+  // This path is READ-only, so an unknown and an absent value both degrade the same way
+  // (to process PATH plus the well-known dirs) — the distinction only binds on the write.
+  if (typeof parsedMachine === 'string' && typeof parsedUser === 'string') return null
   // Windows composes the effective PATH as system-then-user; keep that order so a user
   // override of a system tool keeps losing here exactly as it does in a real console.
+  // Registry values again — ';'-separated by definition. Identical to `pathEntries` here,
+  // because this function only ever runs on win32, but stated rather than relied upon: the
+  // same helper on the same data in planWindowsPathWrite WAS host-dependent and did break.
   return dedupe([
-    ...pathEntries(expandWindowsVars(parsedMachine?.value ?? '')),
-    ...pathEntries(expandWindowsVars(parsedUser?.value ?? ''))
+    ...windowsPathEntries(expandWindowsVars(regValue(parsedMachine))),
+    ...windowsPathEntries(expandWindowsVars(regValue(parsedUser)))
   ])
 }
 
@@ -145,7 +216,9 @@ async function loginShellPath(): Promise<string[] | null> {
   // `-l` loads the profile (the whole point); `-i` is deliberately NOT passed — an
   // interactive shell can block on a prompt and some rc files refuse to run headless.
   const out = await run(shell, ['-lc', `printf '%s' "${FENCE}$PATH${FENCE}"`], 8000)
-  const match = out ? new RegExp(`${FENCE}([^]*?)${FENCE}`).exec(out) : null
+  // The fence is the real check — a shell that printed the pair told us the truth even
+  // if some rc file on the way exited non-zero. Read-only, so a miss just degrades.
+  const match = out.stdout ? new RegExp(`${FENCE}([^]*?)${FENCE}`).exec(out.stdout) : null
   if (!match) return null
   const entries = dedupe(pathEntries(match[1]))
   return entries.length ? entries : null
@@ -265,7 +338,12 @@ export function addToProcessPath(dir: string): boolean {
   const current = pathEntries(process.env.PATH)
   if (current.some((entry) => fold(entry) === fold(dir))) return false
   process.env.PATH = [...current, dir].join(delimiter)
-  cached = null // the cached union is stale the instant the process PATH moves
+  // BOTH caches. `cached` is the settled union; `inFlight` is a refresh that snapshotted
+  // process.env.PATH BEFORE this line ran and will assign its whole snapshot back when it
+  // resolves — silently dropping the dir a setup step just created. Clearing only `cached`
+  // left that window open, which is exactly when setup steps run.
+  cached = null
+  inFlight = null
   return true
 }
 
@@ -282,8 +360,21 @@ export function mergeEnv(
   base: NodeJS.ProcessEnv,
   ...overlays: (Record<string, string | undefined> | undefined)[]
 ): NodeJS.ProcessEnv {
+  return mergeEnvFolding(process.platform === 'win32', base, ...overlays)
+}
+
+/** mergeEnv with the case-folding decision made by the CALLER rather than read from the
+ *  ambient platform — the same treatment wellKnownBinDirs and resolveOnPath already give
+ *  `home` and `env`. Windows-only behavior that cannot be driven from a test is behavior
+ *  no non-Windows runner can defend, and this fold is exactly that: the bug it prevents
+ *  (an inherited `Path` stacked beside a repaired `PATH`) is invisible on macOS and Linux. */
+export function mergeEnvFolding(
+  foldCase: boolean,
+  base: NodeJS.ProcessEnv,
+  ...overlays: (Record<string, string | undefined> | undefined)[]
+): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = { ...base }
-  const insensitive = process.platform === 'win32'
+  const insensitive = foldCase
   for (const overlay of overlays) {
     if (!overlay) continue
     for (const [key, value] of Object.entries(overlay)) {
@@ -307,6 +398,41 @@ export function mergeEnv(
  * Deliberately a filesystem scan, not `where`/`which`: no subprocess, no shell, and it answers
  * the same question `execFile` will ask a moment later.
  */
+/**
+ * Can the OS run this path?
+ *
+ * `statSync(p).isFile()` asks a different question, and on Windows it gets the wrong answer
+ * for an entire class of program. A WindowsApps **App Execution Alias** — how winget,
+ * python, and every Store-delivered CLI appear on PATH — is a zero-length reparse point that
+ * `stat` cannot follow: it throws EACCES. Measured on this machine:
+ *
+ *     statSync(…\WindowsApps\winget.exe)  -> throws EACCES
+ *     accessSync(same, X_OK)              -> ok
+ *     execFile('winget', ['--version'])   -> v1.29.280
+ *
+ * So resolveOnPath answered null for a program that runs perfectly well, and one-click setup
+ * told every Windows user without Node that "winget isn't available on this PC" — on a
+ * machine where winget was installed and working.
+ *
+ * lstat (not stat) answers "is this a directory?" without following the reparse point;
+ * accessSync(X_OK) answers the executability question directly, which is also the right
+ * question on POSIX, where it checks the executable bit rather than mere existence. The
+ * directory test is required because a directory IS X_OK on POSIX (that is traversal).
+ */
+export function isRunnableEntry(candidate: string): boolean {
+  try {
+    if (lstatSync(candidate).isDirectory()) return false
+  } catch {
+    return false // nothing there
+  }
+  try {
+    accessSync(candidate, fsConstants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function resolveOnPath(bin: string, env: NodeJS.ProcessEnv = process.env): string | null {
   // PATHEXT FIRST on Windows, the bare name last. npm ships BOTH `npm` (a bash script, which
   // CreateProcess cannot run) and `npm.cmd` (which it can) in the same directory — and so does
@@ -319,7 +445,7 @@ export function resolveOnPath(bin: string, env: NodeJS.ProcessEnv = process.env)
     for (const ext of exts) {
       const candidate = join(dir, bin + ext)
       try {
-        if (!statSync(candidate).isFile()) continue
+        if (!isRunnableEntry(candidate)) continue
         return candidate
       } catch {
         /* missing or unreadable — keep looking */
@@ -369,29 +495,75 @@ export async function persistUserPathEntries(dirs: readonly string[]): Promise<P
   return process.platform === 'win32' ? persistWindows(wanted) : persistPosix(wanted)
 }
 
-async function persistWindows(wanted: readonly string[]): Promise<PersistPathResult> {
-  const existing = parseRegPath(await run('reg', ['query', ...REG_USER]))
-  // A machine entry already covers it — appending a duplicate to the user value would
-  // only make every future PATH longer for no gain.
-  const machine = parseRegPath(await run('reg', ['query', ...REG_MACHINE]))
-  const covered = new Set(
-    [...pathEntries(expandWindowsVars(existing?.value ?? '')), ...pathEntries(expandWindowsVars(machine?.value ?? ''))].map(fold)
-  )
-  const added = wanted.filter((dir) => !covered.has(fold(dir)))
-  if (!added.length) return { ok: true, added: [], target: 'HKCU\\Environment\\Path' }
+/** Read HKCU's `Path`, and when it reads as absent PROVE the absence before anyone acts
+ *  on it. `reg query` exits 1 both for "that value is not there" and for refusals we must
+ *  never mistake for it, so an absent answer is confirmed by reading the KEY: if the key
+ *  itself is readable, the value really is missing; if it is not, we know nothing. */
+async function regReadUserPath(): Promise<RegRead> {
+  const first = parseRegPath(await run('reg', ['query', ...REG_USER]))
+  if (first !== 'absent') return first
+  const key = await run('reg', ['query', 'HKCU\\Environment'])
+  return key.ok ? 'absent' : 'unknown'
+}
 
-  const raw = existing?.value ?? ''
-  const next = safeForRegAdd([...(raw ? [raw.replace(/;+$/, '')] : []), ...added].join(';'))
-  if (next === null) {
-    return { ok: false, added: [], error: 'Your PATH contains a quote character, so it cannot be updated safely. Add the folder by hand in System › Environment Variables.' }
+/** What persistWindows should do, decided from the two reads alone. Pure, so the one
+ *  property that matters — a read we could not perform NEVER becomes a write — is
+ *  provable without spawning reg.exe. */
+export type WindowsPathPlan =
+  | { action: 'refuse'; error: string }
+  | { action: 'noop'; added: readonly string[] }
+  | { action: 'write'; value: string; kind: string; added: readonly string[] }
+
+export function planWindowsPathWrite(existing: RegRead, machine: RegRead, wanted: readonly string[]): WindowsPathPlan {
+  // THE refusal. `reg add ... /f` overwrites, so acting on a read we could not perform
+  // would replace the user's whole persisted PATH with just our new dirs — and then
+  // broadcast it to every process that starts afterwards. There is no undo. A failed
+  // read is not an empty PATH; when we do not know, we do not write.
+  if (existing === 'unknown') {
+    return {
+      action: 'refuse',
+      error: 'Windows would not report your current PATH, so it was left untouched. The folder still works inside this app.'
+    }
   }
-  const kind = existing?.kind ?? 'REG_EXPAND_SZ'
-  const wrote = await run('reg', ['add', 'HKCU\\Environment', '/v', 'Path', '/t', kind, '/d', next, '/f'], 10_000)
-  if (wrote === null) {
+  // A machine entry already covers it — appending a duplicate to the user value would
+  // only make every future PATH longer for no gain. (An unreadable MACHINE value is safe
+  // to treat as empty: it only ever adds a dir we did not strictly need.)
+  // windowsPathEntries/foldWindows, NOT pathEntries/fold: these are registry values, and
+  // the host reading them may not be Windows (this planner is pure and unit-tested on
+  // every runner). See the note on windowsPathEntries.
+  const covered = new Set(
+    [
+      ...windowsPathEntries(expandWindowsVars(regValue(existing))),
+      ...windowsPathEntries(expandWindowsVars(regValue(machine)))
+    ].map(foldWindows)
+  )
+  const added = wanted.filter((dir) => !covered.has(foldWindows(dir)))
+  if (!added.length) return { action: 'noop', added: [] }
+
+  const raw = regValue(existing) // '' only when the value is PROVEN absent — a real fresh write
+  const value = safeForRegAdd([...(raw ? [raw.replace(/;+$/, '')] : []), ...added].join(';'))
+  if (value === null) {
+    return {
+      action: 'refuse',
+      error: 'Your PATH contains a quote character, so it cannot be updated safely. Add the folder by hand in System › Environment Variables.'
+    }
+  }
+  return { action: 'write', value, kind: existing === 'absent' ? 'REG_EXPAND_SZ' : existing.kind, added }
+}
+
+async function persistWindows(wanted: readonly string[]): Promise<PersistPathResult> {
+  const existing = await regReadUserPath()
+  const machine = parseRegPath(await run('reg', ['query', ...REG_MACHINE]))
+  const plan = planWindowsPathWrite(existing, machine, wanted)
+  if (plan.action === 'refuse') return { ok: false, added: [], error: plan.error }
+  if (plan.action === 'noop') return { ok: true, added: [], target: 'HKCU\\Environment\\Path' }
+
+  const wrote = await run('reg', ['add', 'HKCU\\Environment', '/v', 'Path', '/t', plan.kind, '/d', plan.value, '/f'], 10_000)
+  if (!wrote.ok) {
     return { ok: false, added: [], error: 'Windows refused the environment update. The folder still works inside this app.' }
   }
   await broadcastEnvironmentChange()
-  return { ok: true, added, target: 'HKCU\\Environment\\Path' }
+  return { ok: true, added: [...plan.added], target: 'HKCU\\Environment\\Path' }
 }
 
 /** The rc file a login shell of this flavour actually reads. */
@@ -411,8 +583,11 @@ const BLOCK_CLOSE = '# <<< MoggingLabs Workspace PATH <<<'
 /** The managed block, rebuilt whole each time — so this is idempotent no matter how often
  *  a setup runs, and a user who deletes the block gets it back rather than a second copy. */
 export function rcBlock(dirs: readonly string[], flavour: 'posix' | 'fish'): string {
+  // APPEND, on both platforms. A prepend lets a dir this app manages SHADOW a tool the user
+  // already had — the opposite of the module's stated law, and the opposite of what
+  // planWindowsPathWrite does. `fish_add_path -g -a` is fish's append.
   const lines = dirs.map((dir) =>
-    flavour === 'fish' ? `fish_add_path -g ${JSON.stringify(dir)}` : `export PATH=${JSON.stringify(dir)}:"$PATH"`
+    flavour === 'fish' ? `fish_add_path -g -a ${JSON.stringify(dir)}` : `export PATH="$PATH":${JSON.stringify(dir)}`
   )
   return [BLOCK_OPEN, '# Added so the CLIs this app installed are on your PATH. Safe to delete.', ...lines, BLOCK_CLOSE].join('\n')
 }
@@ -436,7 +611,12 @@ async function persistPosix(wanted: readonly string[]): Promise<PersistPathResul
       start >= 0 && end > start
         ? body.slice(0, start) + block + body.slice(end + BLOCK_CLOSE.length)
         : `${body.replace(/\n*$/, '')}\n\n${block}\n`
-    if (next !== body) writeFileSync(file, next, 'utf8')
+    if (next === body) {
+      // Nothing changed on disk. Reporting `added` here is how "your own terminals will see
+      // it too" got printed over a write that never happened — the caller has no other signal.
+      return { ok: true, added: [], target: file }
+    }
+    writeFileSync(file, next, 'utf8')
     return { ok: true, added: [...wanted], target: file }
   } catch (err) {
     return { ok: false, added: [], error: err instanceof Error ? err.message : String(err) }

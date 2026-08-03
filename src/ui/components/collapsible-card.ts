@@ -1,3 +1,4 @@
+import { createRaiseLatch } from '../core/raise-latch'
 import { el } from './dom'
 import { icon } from './icons'
 
@@ -119,14 +120,28 @@ export function createCollapsibleCard(opts: CollapsibleCardOpts, children: Node[
 
   toggle.onclick = (): void => setOpen(!open) // a hand-toggle always persists
 
+  /** The auto-open fires on the transition INTO attention, not while it is held. */
+  const attentionRose = createRaiseLatch()
+
   function setAttention(node: Node | null): void {
     attnSlot.replaceChildren()
     root.classList.toggle('has-attention', !!node)
-    if (!node) return
+    if (!node) {
+      attentionRose(false) // cleared: the next raise may insist again
+      return
+    }
     attnSlot.append(node)
-    // Attention beats persistence — but never overwrites it. Collapse it again and
-    // THAT is stored; the section only insists on being seen the first time.
-    if (!open && opts.attentionOpens !== false) setOpen(true, { persist: false })
+    // Attention beats persistence — but never overwrites it. Collapse it again and THAT is
+    // stored; the section only insists on being seen the first time.
+    //
+    // It had no way to know which time it was. setAttention is called on every push, and a
+    // hot plan or an expired connection keeps attention RAISED — so each poll tick re-ran
+    // this and re-opened a card the user had just collapsed by hand. Disclosure persistence
+    // was reliable except while attention was active, which is precisely when the user is
+    // most likely to be tidying the section away.
+    //
+    // The chip renders either way; only the auto-open is latched.
+    if (attentionRose(true) && !open && opts.attentionOpens !== false) setOpen(true, { persist: false })
   }
 
   apply(read(key) ?? opts.defaultOpen ?? false)

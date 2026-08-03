@@ -5,6 +5,7 @@ import { clear } from '../components'
 import { onViewChange } from '../core/shell/view-port'
 import { getWorkspaces, onWorkspacesChange } from '../core/workspace/workspace-info-port'
 import { applyCalmMotion } from '../core/a11y/motion-port'
+import { isModKey } from '../core/commands/shortcuts'
 import { createTitlebar } from './titlebar'
 
 const RAIL_COLLAPSED_KEY = 'mogging.railCollapsed'
@@ -119,12 +120,15 @@ export function createAppShell(root: HTMLElement): ShellContext {
     railAnimTimer = window.setTimeout(railAnimEnd, 400) // width runs --dur-rail 260ms; reduced motion ~0
   }).observe(app, { attributes: true, attributeFilter: ['class'] })
 
-  // Ctrl/Cmd+Shift+B toggles the rail. Shift is required on purpose: plain Ctrl+B is a
-  // real terminal keystroke (tmux prefix, readline cursor-back) and must reach the PTY.
+  // Ctrl+Shift+B (⌘+Shift+B on macOS) toggles the rail. Shift is required on purpose:
+  // plain Ctrl+B is a real terminal keystroke (tmux prefix, readline cursor-back) and
+  // must reach the PTY. isModKey is the ONE place that decides which modifier — it is
+  // the platform's own, never both, because `ctrlKey || metaKey` made the WINDOWS key a
+  // modifier here (Win+Shift+B).
   window.addEventListener(
     'keydown',
     (e) => {
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.shiftKey && e.key.toLowerCase() === 'b') {
+      if (isModKey(e) && !e.altKey && e.shiftKey && e.key.toLowerCase() === 'b') {
         e.preventDefault()
         e.stopPropagation()
         toggleRail()

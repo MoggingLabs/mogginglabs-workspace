@@ -4,7 +4,7 @@ import { AddressInfo } from 'node:net'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { McpPreset, ProviderEntry } from '@contracts'
-import { planHasServerForCli } from '@contracts'
+import { isConnectionBridgeEntry, planHasServerForCli } from '@contracts'
 import { MCP_PRESETS, handleRestBridgeRpc, injectProviderEntryForSmoke } from '@backend/features/integrations'
 import {
   disconnect,
@@ -210,7 +210,8 @@ export function runRestMilestoneSmoke(win: BrowserWindow): void {
 
       // ── The one-paste law: the slot reads saved on the CLI route ───────────
       const slotSaved = serviceKeyNames().includes('RESTMILE_KEY')
-      const bridgeRows = listServers().filter((s) => Array.isArray(s.args) && s.args[0] === '--connection')
+      // The shared predicate, never a positional read (see restcards-smoke).
+      const bridgeRows = listServers().filter(isConnectionBridgeEntry)
       const rowsRegistered = ['milefam-a', 'milefam-b'].every((id) => bridgeRows.some((s) => s.id === id))
 
       // ── Identity lands from the catalog profile ────────────────────────────

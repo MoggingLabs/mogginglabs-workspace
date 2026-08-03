@@ -24,7 +24,8 @@ import {
   type AgentConfigSetRequest,
   type AgentConfigSnapshotRequest,
   type AgentConfigTarget,
-  type AgentConfigValue
+  type AgentConfigValue,
+  type AgentProfile
 } from '@contracts'
 import { getSettingsStore } from './app-settings'
 
@@ -95,6 +96,8 @@ function scopeOptions(provider: AgentConfigProviderId, selected: AgentConfigTarg
   const supported = new Set<AgentConfigScope>(definition.config.scopes)
   const out: AgentConfigScopeOption[] = []
   const local = { kind: 'local' } as const
+  // One remote read for the whole walk — it used to run per workspace × per host.
+  const remotes = store?.listRemotes() ?? []
 
   if (supported.has('user')) out.push(option({ scope: 'user', targetId: 'default', execution: local }, 'All projects', 'The provider user configuration on this machine.', true, selected))
   for (const workspace of state?.workspaces ?? []) {
@@ -103,7 +106,7 @@ function scopeOptions(provider: AgentConfigProviderId, selected: AgentConfigTarg
     if (supported.has('session')) out.push(option({ scope: 'session', targetId: workspace.id, execution: local }, `${workspace.name} — next launch`, 'An app-launched session overlay; provider files stay untouched.', true, selected))
     const remoteIds = new Set((workspace.remotes ?? []).map((remote) => remote?.hostId).filter((id): id is string => !!id))
     for (const hostId of remoteIds) {
-      const remote = store?.listRemotes().find((candidate) => candidate.id === hostId)
+      const remote = remotes.find((candidate) => candidate.id === hostId)
       if (supported.has('project')) out.push(option(
         { scope: 'project', targetId: workspace.id, execution: { kind: 'ssh', hostId } },
         `${workspace.name} on ${remote?.name ?? hostId}`,
@@ -179,6 +182,12 @@ async function resolveContext(provider: AgentConfigProviderId, target: AgentConf
     const hostId = target.execution.hostId
     if (!store.listRemotes().some((remote) => remote.id === hostId)) throw new Error('The selected SSH host no longer exists.')
   }
+  // `scopes` is LAZY: the launch path (reconcileLaunch -> reconcileRows) resolves a
+  // context per row and reads only `paths`, while scopeOptions walks every workspace,
+  // profile and remote host — a full store fan-out per row for an answer only the
+  // settings PANEL ever looks at. Memoized so a panel caller that reads it twice pays
+  // once, and computed against the same store snapshot it always was.
+  let scopesMemo: AgentConfigScopeOption[] | undefined
   return {
     paths: {
       home: isolatedSettingsHome ?? app.getPath('home'),
@@ -189,14 +198,18 @@ async function resolveContext(provider: AgentConfigProviderId, target: AgentConf
       profile: target.scope === 'profile',
       execution: target.execution
     },
-    scopes: scopeOptions(provider, target)
+    get scopes(): AgentConfigScopeOption[] {
+      return (scopesMemo ??= scopeOptions(provider, target))
+    }
   }
 }
 
 async function providerInstallation(provider: AgentCliId, force = false): Promise<{ installed: boolean; version?: string }> {
   const cached = versionCache.get(provider)
   if (!force && cached && Date.now() - cached.at < 60_000) return cached
-  const installed = detectAgents().find((agent) => agent.id === provider)?.installed ?? false
+  // A FORCED refresh is the post-install/post-setup verdict — it must see the disk as
+  // it is now, never detectAgents' briefly-cached answer from before the install.
+  const installed = detectAgents(force ? { maxAgeMs: 0 } : undefined).find((agent) => agent.id === provider)?.installed ?? false
   if (!installed) {
     const result = { at: Date.now(), installed: false }
     versionCache.set(provider, result)
@@ -256,12 +269,20 @@ export interface PreparedAgentConfigLaunch extends PreparedAgentSessionOverlay {
 
 const launchReconcileTimeoutMs = 8_000
 
-export async function prepareAgentConfigLaunch(req: AgentCommandRequest): Promise<PreparedAgentConfigLaunch> {
+/** `resolvedProfile` is the launch's already-resolved profile row — the caller looked
+ *  it up from the same store on the same tick (src/main/agents.ts LaunchContext), so
+ *  re-querying here was a second identical SQL read per launch. Omit it and this
+ *  resolves its own (the settings-panel callers and any future caller). */
+export async function prepareAgentConfigLaunch(
+  req: AgentCommandRequest,
+  resolvedProfile?: AgentProfile
+): Promise<PreparedAgentConfigLaunch> {
   const empty: PreparedAgentSessionOverlay = { runtime: {}, tui: {}, args: [], env: {}, settingIds: [], issues: [] }
   if (req.execution?.kind === 'ssh') return { ok: true, ...empty }
   if (!settings) return { ok: false, ...empty, reason: 'Provider settings are not ready; retry the launch.' }
   const profile = req.profileId
-    ? getSettingsStore()?.listProfiles().find((candidate) => candidate.id === req.profileId && candidate.provider === req.agentId)
+    ? (resolvedProfile ??
+        getSettingsStore()?.listProfiles().find((candidate) => candidate.id === req.profileId && candidate.provider === req.agentId))
     : undefined
   const pointer = findAgentCliDefinition(req.agentId)?.config.pointerEnv
   let timer: ReturnType<typeof setTimeout> | undefined

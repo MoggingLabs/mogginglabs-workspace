@@ -214,7 +214,9 @@ export function runBrainDocsSmoke(win: BrowserWindow): void {
         registry!.once('error', reject)
         registry!.listen(0, '127.0.0.1', () => resolve((registry!.address() as { port: number }).port))
       })
-      process.env.MOGGING_BRAIN_REGISTRY_NPM = `http://127.0.0.1:${port}`
+      // A PARAMETER, not an env var: ADR 0016 forbids an environment read choosing an
+      // origin, and a gate must not need the very bypass the product refuses to ship.
+      brainDebug().setRegistries({ npm: `http://127.0.0.1:${port}` })
 
       // ── The world: ONE workspace, pane 1 = MCP bridge, pane 2 = the shell ──
       await ES(`window.__mogging.workspace.create({ name: 'BrainDocs', cwd: ${JSON.stringify(F.repo)}, paneCount: 2 })`)
@@ -361,7 +363,7 @@ export function runBrainDocsSmoke(win: BrowserWindow): void {
     } catch {
       /* already down */
     }
-    delete process.env.MOGGING_BRAIN_REGISTRY_NPM
+    brainDebug().setRegistries({})
     brainDebug().dispose()
     try {
       if (fx) rmSync(fx.base, { recursive: true, force: true })

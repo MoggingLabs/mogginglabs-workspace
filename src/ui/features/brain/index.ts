@@ -63,14 +63,26 @@ export const brainFeature: UiFeature = {
       }
     ])
 
+    // Ctrl+Shift+M captures, for the reason the Board's does (features/board/index.ts):
+    // in the bubble phase a text field's stopPropagation() decided this instead of the
+    // guard, so the guard only ever saw events whose target was NOT the focused field.
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        if (shortcutsBlocked(e.target)) return
+        if (isModKey(e) && e.shiftKey && !e.altKey && e.code === 'KeyM') {
+          e.preventDefault()
+          toggle()
+        }
+      },
+      true
+    )
     window.addEventListener('keydown', (e) => {
       if (shortcutsBlocked(e.target)) return
-      if (isModKey(e) && e.shiftKey && !e.altKey && e.code === 'KeyM') {
-        e.preventDefault()
-        toggle()
-      } else if (e.key === 'Escape' && activeView() === 'brain') {
+      if (e.key === 'Escape' && activeView() === 'brain') {
         // Back — unless an overlay above the view owns the keystroke (those
-        // handle Escape in capture and never let it reach here).
+        // handle Escape in capture and never let it reach here). Escape stays in the
+        // BUBBLE phase precisely so those overlays keep first refusal on it.
         e.preventDefault()
         goBack()
       }

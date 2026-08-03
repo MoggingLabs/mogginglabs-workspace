@@ -2,7 +2,7 @@ import type { UiFeature } from '../../core/registry/feature-registry'
 import type { AgentState, PaneId } from '@contracts'
 import { showToast } from '../../components'
 import { onPaneStateTransition } from '../../core/attention/attention-port'
-import { getPaneLabel } from '../../core/layout/pane-meta'
+import { getPaneLabel, getPaneUserTitle } from '../../core/layout/pane-meta'
 import { activeView } from '../../core/shell/view-port'
 import {
   getWorkspaces,
@@ -71,7 +71,8 @@ export const notifyFeature: UiFeature = {
         for (const [id, t] of lastToast) if (now - t > COOLDOWN_MS) lastToast.delete(id)
       }
 
-      const label = getPaneLabel(paneId) || `Terminal ${paneId % 100 || paneId}`
+      // Same identity the pane header shows: a typed name outranks the launch label.
+      const label = getPaneUserTitle(paneId) || getPaneLabel(paneId) || `Terminal ${paneId % 100 || paneId}`
       getTelemetry().captureEvent({ name: blocked ? 'attention.toast_shown' : 'finished.toast_shown' })
       showToast({
         tone: blocked ? 'attention' : 'success',

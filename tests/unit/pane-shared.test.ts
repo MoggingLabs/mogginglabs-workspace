@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { RESTORE_MODE_RESET, trimTornStart } from '@backend/features/terminal/pane-shared'
+import { sourceOf } from './source-body'
+import {
+  PTY_INPUT_CHUNK_CHARS,
+  RESTORE_MODE_RESET,
+  chunkPtyInput,
+  trimTornStart
+} from '@backend/features/terminal/pane-shared'
 
 // The tear trimmer guards BOTH blind suffix cuts (the live ring's slice(-SCROLLBACK_CHARS)
 // and the persisted tail consumed by the daemon's restore()): a cut that lands mid escape
@@ -45,10 +51,83 @@ describe('trimTornStart', () => {
 
 describe('RESTORE_MODE_RESET', () => {
   it('grounds the modes a dead TUI can leak into a restored pane', () => {
-    for (const seq of ['?1049l', '?1000l', '?1006l', '?2004l', '?25h']) {
+    for (const seq of ['?1000l', '?1002l', '?1003l', '?1006l', '?2004l', '?25h']) {
       expect(RESTORE_MODE_RESET).toContain(seq)
     }
     // Never a full reset: \x1bc would ERASE the replayed history it follows.
     expect(RESTORE_MODE_RESET).not.toContain('\x1bc')
+  })
+
+  // THE defect this string had. It is appended directly after the replayed history, so any
+  // sequence in it that moves the cursor paints the fresh prompt over row 0 of the history it
+  // was meant to follow. Two of them did.
+  //
+  // The row above previously asserted `?1049l` — it pinned the bug. Replaced, not extended.
+  it('leaves the alt screen WITHOUT homing the cursor', () => {
+    // ?1049l calls restoreCursor; with no prior DECSC — and there is none, the history came
+    // from a process that is gone — that restores to (0,0). ?1047l is the same exit without
+    // the cursor move, which is why both codes exist.
+    expect(RESTORE_MODE_RESET).toContain('[?1047l')
+    expect(RESTORE_MODE_RESET, '?1049l homes the cursor over the replayed history').not.toContain('[?1049l')
+  })
+
+  it('brackets the scroll-region reset in DECSC/DECRC', () => {
+    // A default `ESC [ r` homes the cursor too, per DECSTBM. Saved and restored around it.
+    expect(RESTORE_MODE_RESET).toContain('\x1b7\x1b[r\x1b8')
+    expect(RESTORE_MODE_RESET, 'a bare region reset homes the cursor').not.toMatch(/[^7]\x1b\[r/)
+  })
+
+  it('restores the region BEFORE clearing SGR', () => {
+    // DECRC restores SGR as well as the position, so `ESC 8` after `ESC [ m` would undo it.
+    expect(RESTORE_MODE_RESET.indexOf('\x1b8')).toBeLessThan(RESTORE_MODE_RESET.indexOf('\x1b[m'))
+  })
+
+  it('every sequence is written from escapes, never a raw control byte', () => {
+    // The clipboard-port rule, applied here: a literal ESC in a source file is invisible in a
+    // diff and survives a copy-paste into somewhere it must not go.
+    const src = sourceOf('src/backend/features/terminal/pane-shared.ts')
+    // The pattern is BUILT FROM A STRING for the same reason: writing it as a regex literal
+    // would require putting the very byte being refused into this file.
+    const RAW_CONTROL = new RegExp('[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]')
+    expect(RAW_CONTROL.test(src), 'a raw control byte in the source').toBe(false)
+  })
+})
+
+// A pty's input queue is a fixed kernel buffer that DROPS what does not fit — Darwin caps it
+// at 1024 bytes where Linux holds 4096 — and the app types a whole composed first prompt into
+// a pane in one write (REPOMAP_DEFAULT_BUDGET alone is 4000 characters). The truncation is
+// silent on both sides, and a fenced ```repomap block that loses part of its closing fence
+// leaves the pane's shell at a PS2 continuation prompt swallowing every later command.
+describe('chunkPtyInput', () => {
+  it('leaves anything that already fits the smallest input queue alone', () => {
+    expect(chunkPtyInput('echo hi')).toEqual(['echo hi'])
+    const exact = 'x'.repeat(PTY_INPUT_CHUNK_CHARS)
+    expect(chunkPtyInput(exact)).toEqual([exact])
+  })
+
+  it('writes nothing for nothing', () => {
+    expect(chunkPtyInput('')).toEqual([])
+  })
+
+  it('caps every chunk at the smallest input queue and loses not one character', () => {
+    const prompt = '```repomap\n' + 'sig line\n'.repeat(500) + '```\n\nTASK\r'
+    const chunks = chunkPtyInput(prompt)
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(PTY_INPUT_CHUNK_CHARS)
+    expect(chunks.join('')).toBe(prompt)
+  })
+
+  it('never splits a surrogate pair (each chunk is encoded on its own)', () => {
+    // The pair straddles the boundary: filler puts its HIGH half at index CHUNK-1.
+    const pair = '\u{1F600}'
+    const data = 'a'.repeat(PTY_INPUT_CHUNK_CHARS - 1) + pair + 'b'.repeat(10)
+    const chunks = chunkPtyInput(data)
+    expect(chunks.join('')).toBe(data)
+    for (const c of chunks) {
+      const first = c.charCodeAt(0)
+      const last = c.charCodeAt(c.length - 1)
+      expect(first >= 0xdc00 && first <= 0xdfff, 'a chunk opening on a lone low surrogate').toBe(false)
+      expect(last >= 0xd800 && last <= 0xdbff, 'a chunk ending on a lone high surrogate').toBe(false)
+    }
   })
 })

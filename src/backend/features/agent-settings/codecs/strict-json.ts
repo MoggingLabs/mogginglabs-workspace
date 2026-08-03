@@ -20,6 +20,10 @@ export const strictJsonCodec: ConfigCodec = {
     if (text !== null) validateStrictJson(text)
     return jsoncCodec.read(text, path)
   },
+  readMany(text, paths) {
+    if (text !== null) validateStrictJson(text)
+    return jsoncCodec.readMany(text, paths)
+  },
   set(text, path, value) {
     if (text !== null) validateStrictJson(text)
     const result = jsoncCodec.set(text, path, value)

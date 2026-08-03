@@ -14,6 +14,7 @@ import { openWorkspaceFromTemplate } from '../../core/workspace/open-service'
 import { openWizard } from '../../core/workspace/wizard-port'
 import { getWorkspaces, requestWorkspaceSwitch } from '../../core/workspace/workspace-info-port'
 import { onPaneAgentSession } from '../../core/agents/agent-session-port'
+import { whenPaneUncovered } from '../../core/agents/failover-offer-port'
 import { composeFirstPrompt } from '../agents/launch'
 import { paneInstance } from '../../core/terminal/pane-instance-port'
 import { setActiveView } from '../../core/shell/view-port'
@@ -172,7 +173,13 @@ export async function startOnCard(
     if (fallback) clearTimeout(fallback)
     fallback = undefined
     if (settle) clearTimeout(settle)
-    settle = setTimeout(hand, 800) // it is up; give it a beat to paint a prompt to type into
+    // The process exists; the TUI it is drawing may not accept input yet. Where the app
+    // KNOWS that moment it waits for it — a launch cover is up over this pane precisely
+    // until the agent is usable, and typing under one goes to a CLI that discards it.
+    // Where it does not (every provider but claude — see agents/launch-readiness.ts),
+    // the historical beat stands: an unmeasured guess is still better than typing into a
+    // pane whose first frame has not painted, and it is what the board gates pin.
+    settle = setTimeout(() => void whenPaneUncovered(paneId as PaneId, 20_000).then(hand), 800)
   })
   fallback = setTimeout(() => {
     if (handed) return

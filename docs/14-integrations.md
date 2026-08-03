@@ -82,7 +82,7 @@ sections below; the UI speaks outcomes.
 > answer when you want a CLI to own its own auth.
 
 > New here? The end-to-end proof that all five compose in one fixture world is
-> `MOGGING_INTEGMILESTONE` (`src/main/integmilestone-smoke.ts`). This page is the
+> `MOGGING_INTEGMILESTONE` (`src/main/smokes/integmilestone-smoke.ts`). This page is the
 > map; that smoke is the territory.
 
 ## The REST bridge — a global API key becomes curated tools (ADR 0021)
@@ -340,7 +340,7 @@ Two different scopes, two different jobs. Don't conflate them.
 
 A plan **narrows what exists**; a grant **gates what a tool may do**. A plan of
 `{sentry for claude}` materializes exactly `{mogging, sentry}` — the global
-`posthog` is absent. A grant of `'all'` makes the six writes appear in
+`posthog` is absent. A grant of `'all'` makes the eighteen writes appear in
 `tools/list` and work; `'none'` makes them vanish and a direct call is refused
 *naming the grant*. Grants are **workspace-scoped**: workspace A on `'all'`
 never grants workspace B, and a human session (no pane identity) sees zero

@@ -8,6 +8,7 @@ import { setAgentConsent, setDrivingForSmoke } from '../browser-dock'
 import { emitBridgeEvent, saveWebhook } from '../event-bridge'
 import { getUsageService } from '../usage'
 import { BUDGET } from './milestone-smoke'
+import { MOD_KEY_FIELD } from './kit'
 
 // Env-gated UX MILESTONE smoke (MOGGING_UXMILESTONE, Phase-8.5/09). The freeze gate:
 // one fixture world, ZERO network, the whole revamp asserted as a SYSTEM. Not a new
@@ -291,7 +292,9 @@ export function runUxMilestoneSmoke(win: BrowserWindow): void {
       const boardOk = chipRow.ok && countsOk
 
       stage = 'c-palette'
-      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))`)
+      // The PLATFORM's modifier (⌘ on macOS, Ctrl elsewhere) — the palette gates on isModKey,
+      // which core/commands/chords.ts made the platform's own and never both.
+      await ES(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ${MOD_KEY_FIELD}: true, bubbles: true }))`)
       await waitTrue(`document.querySelector('.palette-overlay') && !document.querySelector('.palette-overlay').hidden`)
       const emptyRank = await ES<{ ok: boolean; pri: number[] }>(`(() => {
         const PRI = { Workspace: 6, Board: 5, Integrations: 4, App: 3, Trust: 2, Appearance: 1 }

@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { BrowserChannels, DEFAULT_SEARCH_TEMPLATE } from '@contracts'
+import { MOD_KEY_FLAGS } from './kit'
 
 // Env-gated browser-CHROME smoke (MOGGING_BROWSERUX, Wave 3): the renderer-side
 // "feels like Comet" surface, driven through the dock's own controls.
@@ -171,13 +172,17 @@ export function runBrowserUxSmoke(win: BrowserWindow): void {
       await ES(`document.body.click()`)
 
       // ── 7. Shortcut relay (F12): a chord "in the guest" toggles the dock ──
+      // The relay carries the guest's REAL modifier state, and the renderer asks it the same
+      // question every other listener asks: the platform's own modifier, never both
+      // (core/commands/chords.ts — `ctrl || meta` had made the WINDOWS key a modifier). So the
+      // payload must claim the key this platform is actually bound to, or main is relaying a
+      // chord no user could have pressed.
       const openBefore = await ES<boolean>(`${B}.isOpen()`)
       win.webContents.send(BrowserChannels.guestChord, {
         workspaceId: wsId,
         code: 'KeyU',
         key: 'u',
-        ctrl: true,
-        meta: false,
+        ...MOD_KEY_FLAGS,
         shift: true,
         alt: false
       })

@@ -7,8 +7,10 @@ import {
   type WorkspaceStateMeta
 } from '@contracts'
 import { getSettingsStore } from './app-settings'
+import { assignedSessionFor } from './assigned-sessions'
 import { paneSessionLog } from './context'
 import { maybeFault } from './fault-port'
+import { bootIntentsFor, paneIdForSlot, type SnapshotPaneSession, type StoredSnapshot } from './session-restore-rules'
 
 // App-wiring: the LAST WORKING SESSION snapshot behind Home's "Restore last working
 // session" card.
@@ -41,22 +43,6 @@ import { maybeFault } from './fault-port'
 
 const KEY = 'lastSession'
 
-/** One slot's recorded agent session: provider + the locked log + the uuid-shaped
- *  resume id derived from the log's NAME (session-pool.ts) — ids and paths only. */
-interface SnapshotPaneSession {
-  provider: string
-  file: string
-  sessionId?: string
-}
-
-type SnapshotWorkspace = WorkspaceStateMeta & { paneSessions?: (SnapshotPaneSession | null)[] }
-
-interface StoredSnapshot {
-  savedAt: number
-  activeId: string | null
-  workspaces: SnapshotWorkspace[]
-}
-
 /** RESUME-gate seam (the setAgentDetectOverrideForSmoke pattern): lets the gate hand a
  *  pane a locked session log without running a real CLI. Inert until called — nothing
  *  in production ever calls it. */
@@ -74,32 +60,41 @@ function lockedSessionLog(paneId: number): { provider: string; file: string } | 
   return sessionLogOverrides?.get(paneId) ?? paneSessionLog(paneId)
 }
 
-/** The pane id a workspace slot restores to — the same resolution the renderer's
- *  paneIdForSlot applies (ui/features/workspace/model.ts): a pane MOVED here keeps its
- *  own id (it IS the daemon session key); everything else follows ordinal*100+slot. */
-function paneIdForSlot(meta: WorkspaceStateMeta, slot: number): number {
-  const moved = meta.paneIds?.[slot - 1]
-  return typeof moved === 'number' && moved >= 1 ? moved : meta.ordinal * 100 + slot
-}
-
-/** Per-slot session capture for one workspace, while its panes are alive. Slots whose
- *  pane has no locked log (a plain shell, a CLI the monitor can't read) record null. */
+/**
+ * Per-slot session capture for one workspace, while its panes are alive. Slots whose pane
+ * has no session at all (a plain shell, a CLI the monitor can't read) record null.
+ *
+ * TWO sources, because a locked log is not the only way to know a session. The monitor's
+ * lock is the DISCOVERED identity — it needs a transcript on disk, so it cannot exist
+ * until the user has actually prompted the agent. The pane's ASSIGNED id is the identity
+ * the app chose at launch (`claude --session-id`), and it is knowable from the first
+ * millisecond. Without the second source, a snapshot taken between "claude launched" and
+ * "user typed something" recorded null and the pane came back from a restart into a bare
+ * `--resume` picker — precisely the gap assigning ids exists to close. The lock still
+ * wins where both answer: it is the one that tracks claude's own `/clear`.
+ */
 function paneSessionsFor(meta: WorkspaceStateMeta): (SnapshotPaneSession | null)[] | undefined {
   const slots = Math.max(meta.paneCount, meta.assignments?.length ?? 0, meta.paneIds?.length ?? 0)
   const sessions: (SnapshotPaneSession | null)[] = []
   let any = false
   for (let slot = 1; slot <= slots; slot++) {
-    const log = lockedSessionLog(paneIdForSlot(meta, slot))
-    if (!log) {
+    const paneId = paneIdForSlot(meta, slot)
+    const log = lockedSessionLog(paneId)
+    // Assigned ids are claude's alone (agents.ts assigns nowhere else); the slot's own
+    // assignment is the check that keeps a recycled pane id from lending one to another
+    // provider — bootIntentsFor would drop the mismatch anyway, but not recording it is
+    // better than recording it and relying on the reader to disbelieve it.
+    const assigned = meta.assignments?.[slot - 1] === 'claude' ? assignedSessionFor(paneId) : undefined
+    if (!log && !assigned) {
       sessions.push(null)
       continue
     }
     any = true
-    sessions.push({
-      provider: log.provider,
-      file: log.file,
-      sessionId: resumeSessionIdFromFile(log.provider, log.file) ?? undefined
-    })
+    sessions.push(
+      log
+        ? { provider: log.provider, file: log.file, sessionId: resumeSessionIdFromFile(log.provider, log.file) ?? assigned }
+        : { provider: 'claude', sessionId: assigned }
+    )
   }
   return any ? sessions : undefined
 }
@@ -177,11 +172,49 @@ function armResumeIntents(snapshot: StoredSnapshot): void {
 }
 
 /**
+ * Arm resume intents for the ordinary APP-BOOT restore — once per app run, at the first
+ * workspace:loadState (app-settings.ts calls this with the state it is about to return).
+ * The boot lineup has always relaunched with `resume: true`, but its exact ids lived
+ * only in the snapshot and nothing armed them — so every cold-daemon restart (normal
+ * quit AND crash) typed the bare `--resume` and dropped the user into the CLI's session
+ * picker, while Home's card (the zero-workspace path) resumed exactly (audit
+ * 2026-08-02). Intersected with the state being restored (bootIntentsFor): shrink-hold
+ * keeps OLD workspace sets in the snapshot on purpose, and a stale intent must never
+ * name a session for a pane id that now belongs to something else. Best-effort: the
+ * restore proceeds bare without it.
+ */
+let bootIntentsArmed = false
+export function armBootResumeIntentsOnce(current: WorkspaceState | null): void {
+  if (bootIntentsArmed) return
+  bootIntentsArmed = true
+  try {
+    if (!current?.workspaces?.length) return
+    const snapshot = loadSnapshot()
+    if (!snapshot) return
+    const intents = bootIntentsFor(snapshot, current)
+    if (!intents.length) return
+    resumeIntents.clear()
+    resumeIntentsArmedAt = Date.now()
+    for (const { paneId, session } of intents) resumeIntents.set(paneId, session)
+  } catch {
+    /* arming is a courtesy — the restore proceeds with the bare flag without it */
+  }
+}
+
+/**
  * The exact-session id a restored launch should resume, or undefined. Consumed once.
  * Read by src/main/agents.ts AFTER the context monitor's live lock (the live lock is
  * fresher — it exists whenever the pane already ran this provider in this app run).
  */
-export function consumeRestoreResumeSessionId(paneId: number, provider: string): string | undefined {
+export function peekRestoreResumeSessionId(paneId: number, provider: string): string | undefined {
+  return readRestoreResumeSessionId(paneId, provider, false)
+}
+
+/** The consuming read (the launch really happening) and the PEEK (a prefetch build that
+ *  may yet be discarded) differ by exactly one thing: whether the shelf is cleared. A
+ *  prefetch must be able to name the same session without spending the intent, because
+ *  a pane that turns out to be daemon-reattached types nothing at all. */
+function readRestoreResumeSessionId(paneId: number, provider: string, consume: boolean): string | undefined {
   if (resumeIntents.size && Date.now() - resumeIntentsArmedAt > RESUME_INTENT_TTL_MS) {
     resumeIntents.clear()
     return undefined
@@ -189,8 +222,14 @@ export function consumeRestoreResumeSessionId(paneId: number, provider: string):
   const intent = resumeIntents.get(paneId)
   if (!intent) return undefined
   if (intent.provider !== provider) return undefined
-  resumeIntents.delete(paneId)
-  return intent.sessionId ?? (resumeSessionIdFromFile(intent.provider, intent.file) ?? undefined)
+  if (consume) resumeIntents.delete(paneId)
+  // An assigned id is recorded WITHOUT a file (its transcript may not exist yet), so the
+  // derive-from-name fallback only applies where a locked log was captured.
+  return intent.sessionId ?? (intent.file ? (resumeSessionIdFromFile(intent.provider, intent.file) ?? undefined) : undefined)
+}
+
+export function consumeRestoreResumeSessionId(paneId: number, provider: string): string | undefined {
+  return readRestoreResumeSessionId(paneId, provider, true)
 }
 
 /** RESUME-gate peeks: the stored snapshot verbatim, and the armed intent set. */

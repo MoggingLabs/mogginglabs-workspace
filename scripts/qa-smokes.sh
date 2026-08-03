@@ -9,7 +9,7 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 207 gates: 32 static (AUDIT · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 175 app-boot
+# 215 gates: 37 static (AUDIT · LEDGER · VERDICT · SATELLITE · CLIGRAM · DOCSCITE · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 178 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -177,12 +177,44 @@ run_static() {
   if "$@" >"$TMPBASE/$name.log" 2>&1; then
     RESULTS+=("$name PASS"); echo "  PASS"
   else
-    RESULTS+=("$name FAIL"); echo "  FAIL"
+    # A gate whose SCRIPT died is not a gate that found a violation — same
+    # distinction run_smoke draws with BOOTFAIL, one level down. Node exits 1 for
+    # both, so the log is the only witness. Saying FAIL here sends you hunting a
+    # product regression that never existed; worse, a gate renamed out from under
+    # its own require() would read as a real finding forever.
+    local v="FAIL"
+    if grep -qE 'MODULE_NOT_FOUND|Cannot find module|^SyntaxError|^ReferenceError|node:internal/modules' \
+         "$TMPBASE/$name.log" 2>/dev/null; then
+      v="SCRIPTFAIL"
+    fi
+    RESULTS+=("$name $v"); echo "  $v"
     echo "  ── $name diagnostics ──"
     sed 's/^/  /' "$TMPBASE/$name.log" | tail -25
   fi
 }
 run_static AUDIT   node scripts/check-audit.mjs
+# The 2026-08 sweep's ~490 findings. AUDIT above grades the 8.5 pack only (it is
+# called with no argument, so it reads prompts/phase-8.5/AUDIT.md); nothing routed
+# the newer ones, and a finding nobody can watch age is a finding that ages.
+run_static LEDGER  node scripts/check-findings-ledger.mjs
+# A gate over the GATES: no smoke's budget clause may be satisfied by the ABSENCE of the
+# measurement it bounds (`x === -1 || x <= budget`). Three of those shipped, including the
+# echo budget docs/07 says is never relaxed.
+run_static VERDICT node scripts/check-smoke-verdict.mjs
+# The installed CLI is assembled from a hand-written file list in src/main/cli-runtime.ts.
+# A helper reachable by import but missing from that list runs fine in the repo and dies with
+# ERR_MODULE_NOT_FOUND in every installed copy — a break that cannot be reproduced by running
+# what you just edited. This walks the real import graph instead.
+run_static SATELLITE node scripts/check-cli-satellites.mjs
+# The CLI's observable contract against the REAL binary: exit codes, which stream carries
+# which output, and that a half-written endpoint.json never becomes a node:net stack trace on
+# an agent's stderr. bin/ had no coverage of any kind.
+run_static CLIGRAM  node scripts/check-cli-grammar.mjs
+# DOCSREFS asserts a cited path EXISTS. This asserts the doc says the RIGHT thing about it:
+# an ADR link labelled 0015 pointing at 0016, a "scripting reference" listing 8 of 21 verbs, a
+# column header the CLI stopped printing, a write-tool count the catalog contradicts. Every
+# expected value is derived from a repo artifact; prose is only ever what is checked.
+run_static DOCSCITE node scripts/check-docs-citations.mjs
 run_static SPACING node scripts/check-spacing.mjs --max 0
 run_static PTYSEAM node scripts/check-pty-seam.mjs
 run_static PROTOVER node scripts/check-protocol-version.mjs
@@ -360,6 +392,9 @@ run_smoke MILESTONE   MOGGING_MILESTONE 1 300 milestone
 run_smoke FLICKER     MOGGING_FLICKER   1 240 flicker
 run_smoke PANESCROLL  MOGGING_PANESCROLL 1 300 panescroll
 run_smoke PANEFIT     MOGGING_PANEFIT   1 240 panefit
+# The drift incident's two missing heal moments: a covered pane's reveal and a daemon
+# reconnect must each re-assert xterm/PTY grid agreement (neither has a box change coming).
+run_smoke GRIDHEAL    MOGGING_GRIDHEAL  1 240 gridheal
 run_smoke REATTACHFIT MOGGING_REATTACHFIT 1 120 reattachfit
 # The dims invariant (smeared-restore root cause): restore respawns at the persisted
 # grid; a typed resume waits for a MEASURED attach (dims-less spawns neither resize nor
@@ -418,6 +453,7 @@ run_smoke SWARM       MOGGING_SWARM     1 240 swarm
 run_smoke LEDGER      MOGGING_LEDGER    1 240 ledger
 run_smoke GATE        MOGGING_GATE      1 240 gate
 run_smoke PROFILES    MOGGING_PROFILES  1 240 profiles
+run_smoke PROFSWITCH  MOGGING_PROFSWITCH 1 240 profswitch
 run_smoke LOGINTRUTH  MOGGING_LOGINTRUTH 1 240 logintruth
 run_smoke REMOTE      MOGGING_REMOTE    1 300 remote
 run_smoke SWARMMILESTONE MOGGING_SWARMMILESTONE 1 300 swarmmilestone
@@ -459,6 +495,11 @@ run_smoke PERWS        MOGGING_PERWS     1 240 perws
 run_smoke PERWSAGENT   MOGGING_PERWSAGENT 1 240 perwsagent
 run_smoke VAULTKEYS    MOGGING_VAULTKEYS 1 240 vaultkeys
 run_smoke WSCLOSE      MOGGING_WSCLOSE   1 240 wsclose
+# PANECLOSE: pane close now soft-closes with the same undo grace a workspace gets — the
+# pane parks ALIVE (echo-proven) under its own slots-port source for exactly the toast's
+# lifetime; Undo re-adopts it (exact arrangement, or beside the focused pane if the
+# layout changed meanwhile); the grace lapsing is the only thing that kills the PTY.
+run_smoke PANECLOSE    MOGGING_PANECLOSE 1 240 paneclose
 # KILLFLASH: pane teardown stays windowless (2026-07-18) — the console-less daemon
 # (detached: libuv job-escape, measured survival-load-bearing) must force windowsHide on
 # every child it spawns, or node-pty's per-pane kill fork flashes one visible terminal
@@ -651,6 +692,31 @@ echo ""
 echo "══ SWEEP RESULTS ══"
 printf '%s\n' "${RESULTS[@]}"
 BAD=$(printf '%s\n' "${RESULTS[@]}" | grep -cv ' PASS$' || true)
+
+# THE verdict, derived exactly once, written where the CI gate step reads it.
+# check-sweep-log.sh asserts over this file — it does not re-derive from the log.
+# A second derivation carrying its own token list is precisely how a BOOTFAIL
+# certified as "ALL GATES PASS" on every linux and macos sweep: the list had
+# FAIL and MISSING in it, and BOOTFAIL matched neither. One derivation means the
+# next verdict token invented needs no patch anywhere else.
+mkdir -p out
+printf '%s\n' "${RESULTS[@]}" | node -e '
+  const fs = require("fs")
+  const rows = fs.readFileSync(0, "utf8").trim().split("\n").filter(Boolean).map((l) => {
+    const i = l.lastIndexOf(" ")
+    return { gate: l.slice(0, i), verdict: l.slice(i + 1) }
+  })
+  const bad = rows.filter((r) => r.verdict !== "PASS")
+  const filter = process.env.MOGGING_GATES || ""
+  fs.writeFileSync("out/sweep-summary.json", JSON.stringify({
+    total: rows.length,
+    bad: bad.length,
+    failed: bad.map((r) => r.gate + " " + r.verdict),
+    coverage: filter ? "PARTIAL" : "COMPLETE",
+    gatesFilter: filter,
+    rows
+  }, null, 1))
+'
 echo ""
 if [ "$BAD" -eq 0 ]; then
   echo "ALL ${#RESULTS[@]} GATES PASS"

@@ -1,4 +1,5 @@
 import { ipcMain, shell, type BrowserWindow } from 'electron'
+import { httpsOrLoopbackUrl } from '@backend/core/net/url-guard'
 import { createServer, type Server } from 'node:http'
 import { AddressInfo } from 'node:net'
 import {
@@ -11,7 +12,6 @@ import {
   type ConnectionAuthKind,
   type ConnectionsAttention,
   type McpPreset,
-  type McpServerEntry,
   type OAuthClientRecord,
   type VerifyCause
 } from '@contracts'
@@ -39,6 +39,7 @@ import {
   resolveClient,
   sanitizeUserClient,
   saveServer,
+  serverEntryFor,
   userClientRecord,
   oauthQuirksFor,
   runVerificationProbe,
@@ -350,15 +351,9 @@ const clientStore: ClientStore = {
 /** A connection URL: https anywhere, or plain http strictly on loopback — a
  *  self-hosted n8n on this very machine is a real development setup, and the
  *  registry's route-B rule already allows exactly the same exception. */
-const validConnectionUrl = (url: string): boolean => {
-  try {
-    const u = new URL(url)
-    if (u.protocol === 'https:') return true
-    return u.protocol === 'http:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost')
-  } catch {
-    return false
-  }
-}
+/** The pasted-URL check. Delegates rather than restating: three near-identical copies of this
+ *  rule existed and none guarded the sinks that actually hand a string to the OS. */
+const validConnectionUrl = (url: string): boolean => httpsOrLoopbackUrl(url) !== null
 
 /** The connections-count gate (phase-accounts/05): a NEW connection past the plan's
  *  cap refuses with a visible upgrade reason; reconnecting or repairing a service the
@@ -515,7 +510,10 @@ export async function connect(serviceId: string, baseUrl?: string): Promise<{ ok
     }, 5 * 60_000)
   }
 
-  await shell.openExternal(
+  // Re-asserted at the sink. The metadata was checked on arrival; this is the line that
+  // actually hands a string to the OS, and a predicate checked only once is only correct
+  // until someone adds a second caller.
+  const authorizeUrl = httpsOrLoopbackUrl(
     buildAuthorizeUrl({
       metadata,
       clientId: client.client.clientId,
@@ -526,6 +524,12 @@ export async function connect(serviceId: string, baseUrl?: string): Promise<{ ok
       scopes
     })
   )
+  if (!authorizeUrl) {
+    endFlow()
+    setState(serviceId, { state: 'error', lastError: 'This provider asked us to open a link we will not follow.' })
+    return { ok: false, reason: 'badauthorizeurl' }
+  }
+  await shell.openExternal(authorizeUrl)
   return { ok: true }
 }
 
@@ -582,7 +586,8 @@ async function beginDeviceFlow(
   // `verification_uri_complete` pre-fills the code (§3.3.1); the card still shows
   // the code because the browser may land on a different account.
   try {
-    await shell.openExternal(grant.verificationUriComplete ?? grant.verificationUri)
+    const deviceUrl = httpsOrLoopbackUrl(grant.verificationUriComplete ?? grant.verificationUri)
+    if (deviceUrl) await shell.openExternal(deviceUrl)
   } catch {
     /* the card carries the URL and the code; a failed hand-off is not a failed flow */
   }
@@ -1256,16 +1261,15 @@ export function registerConnectionServer(serviceId: string): { ok: boolean; reas
   if (!store || !preset) return { ok: false, reason: 'store not ready' }
   const runtime = getCliRuntime()
   const kv: GrantKv = { get: (k) => store.getSetting(k), set: (k, v) => store.setSetting(k, v) }
-  // NO `env`. The shim sets ELECTRON_RUN_AS_NODE itself, because the entry validator
-  // refuses any env value that is not a `${VAR}` reference — see CliRuntime.connectionShim.
-  // What lands in the CLI's config is a command and a service id, and nothing else.
-  const entry: McpServerEntry = {
-    id: serviceId,
-    label: preset.label,
-    transport: 'stdio',
-    command: runtime.connectionShim,
-    args: ['--connection', serviceId]
-  }
+  // The PROTOCOL-NEUTRAL launcher, not the version-pinned shim. connectionShim lives in
+  // run/v<N>/bin, so after a protocol bump every connection a user had configured stopped
+  // resolving — silently, in their CLI, with no app involved. Same builder as the house row,
+  // so the two shapes cannot diverge again; it cannot express `env`, which is the rule that
+  // keeps a credential literal out of a CLI config.
+  const entry = serverEntryFor(
+    { executable: runtime.executable, launcher: runtime.connectionEntry },
+    { id: serviceId, label: preset.label, args: ['--connection', serviceId] }
+  )
   const saved = saveServer(kv, entry)
   if (!saved.ok) {
     // NEVER silent. A refusal here means the connection is live but no CLI can reach

@@ -64,14 +64,19 @@ export function runUsageUiSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.usage.close()`)
 
       // 1 ── gauge presence + fills. Default mode is MERGED (7/10): the gauge
-      // mirrors the highest-severity plan — exhausted, 100/100.
+      // mirrors the highest-severity plan — exhausted, 100/100 used — and it
+      // paints the POPOVER's remaining-fill grammar (the consistency pass), so
+      // both bars are EMPTY (0% left) and their aria SAYS "left".
       const gaugeOk = await ES<boolean>(
         `!!document.querySelector('.titlebar-right .usage-gauge') && document.querySelector('.usage-gauge').getAttribute('aria-expanded') === 'false'`
       )
       const fills = await ES<string>(
         `[...document.querySelectorAll('.usage-gauge .usage-fill')].map(f => f.style.width).join('|')`
       )
-      const fillsOk = fills === '100%|100%'
+      const fillsLeft = await ES<boolean>(
+        `[...document.querySelectorAll('.usage-gauge .usage-track')].every(t => (t.getAttribute('aria-label') || '').endsWith('% left'))`
+      )
+      const fillsOk = fills === '0%|0%' && fillsLeft
 
       // 2 ── the CLICK path opens the popover (aria-expanded flips)
       await ES(`document.querySelector('.usage-gauge').click()`)

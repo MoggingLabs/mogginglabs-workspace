@@ -9,7 +9,7 @@ ecosystems. Companion to `docs/RELEASING.md` (the mechanics of cutting a release
 | | Windows | macOS | Linux |
 |---|---|---|---|
 | **Built in CI** | NSIS x64 + blockmap | dmg + zip, arm64 (x64 deferred†) | AppImage + deb, x64 |
-| **Swept (207 gates)** | local (windows-sweep CI = Phase-6/03) | `macos-sweep` nightly + dispatch | `linux-sweep` nightly + dispatch |
+| **Swept (215 gates)** | local (windows-sweep CI = Phase-6/03) | `macos-sweep` nightly + dispatch | `linux-sweep` nightly + dispatch |
 | **Signed today** | no — config READY, cert pending | no — config READY (hardened runtime + entitlements + notarize wired), cert pending | n/a (GPG sums optional, later) |
 | **Auto-update** | GitHub releases feed (electron-updater) | feed wired, **inert until signed** — Squirrel.Mac refuses unsigned updates | AppImage via feed; deb manual |
 | **Install channels** | GitHub release · winget (manifest in `packaging/winget/`, not yet submitted) | GitHub release · homebrew cask (`packaging/homebrew/`, not yet submitted) | GitHub release |
@@ -84,8 +84,14 @@ dual-arch where the toolchain works.
 
 Packaged builds check the signed GitHub Releases feed
 (`electron-builder.yml` `publish`) on launch and every 6 hours via
-`electron-updater`, which verifies each update's signature — an
-unsigned/tampered build is rejected. A newer build downloads in the
+`electron-updater`. Every update is integrity-checked against the sha512 the
+feed publishes, over HTTPS. **Signature** verification is per-platform and is
+not fully on yet: Squirrel.Mac refuses an unsigned update on its own, while
+`NsisUpdater` verifies Authenticode **only when `win.publisherName` is set** —
+it is not, because builds are still unsigned (setting it now would make the
+updater reject the very updates we ship). Pinning it is part of enabling
+signing, and `scripts/verify-signing-readiness.mjs` says so on every run.
+A newer build downloads in the
 background; `src/main/updater.ts` pushes the lifecycle
 (`checking → available → downloading(%) → ready → error`) to the renderer over
 `UpdateChannels.state`.
@@ -160,7 +166,7 @@ CI validates both continuously where the tooling exists (`winget validate` on
 windows-latest, `brew style` on macos-latest) so submission day is a
 copy-paste PR.
 
-**v0.16.0 status:** the committed manifests pin the shipped v0.16.0 artifacts —
+**v0.17.0 status:** the committed manifests pin the shipped v0.17.0 artifacts —
 sha256s regenerated from the uploaded release bytes (the command above), win-x64
 `.exe` and mac-arm64 `.dmg` verified against the assets on the release. The cask
 stays arm64-only (Intel deferred — see the matrix footnote). Neither is submitted

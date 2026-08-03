@@ -34,9 +34,13 @@ env). Use this to verify packaging only; a real release must be signed (CI).
 
 ## Auto-update
 `electron-updater` checks the GitHub Releases feed (`electron-builder.yml` `publish`) on launch
-(packaged builds only — see `src/main/updater.ts`), downloads a newer **signed** build in the
-background, and installs it on quit. It verifies the update signature, so an unsigned/tampered
-build is rejected.
+(packaged builds only — see `src/main/updater.ts`), downloads a newer build in the background,
+and installs it on quit. Every update is integrity-checked against the feed's sha512 over HTTPS.
+Signature verification is not yet on for Windows: `NsisUpdater` checks Authenticode only when
+`win.publisherName` is set, and it is not — builds are still unsigned, so setting it would make
+the updater reject our own updates. macOS differs: Squirrel.Mac refuses an unsigned update by
+itself. Pin `publisherName` in the same change that enables signing —
+`scripts/verify-signing-readiness.mjs` prints that reminder on every run.
 
 ## Telemetry (opt-in — ADR 0005)
 Sourcemaps are emitted (`electron.vite.config.ts`) and uploaded on release. The real Sentry

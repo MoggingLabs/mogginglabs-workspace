@@ -20,6 +20,7 @@ import { runPerWsSmoke } from './smokes/perws-smoke'
 import { runPerWsAgentSmoke } from './smokes/perwsagent-smoke'
 import { runVaultKeysSmoke } from './smokes/vaultkeys-smoke'
 import { runWsCloseSmoke } from './smokes/wsclose-smoke'
+import { runPaneCloseSmoke } from './smokes/paneclose-smoke'
 import { runKillFlashSmoke } from './smokes/killflash-smoke'
 import { runRailfoldSmoke } from './smokes/railfold-smoke'
 import { runChromePressSmoke } from './smokes/chromepress-smoke'
@@ -106,6 +107,7 @@ import { runMilestoneSmoke } from './smokes/milestone-smoke'
 import { runFlickerSmoke } from './smokes/flicker-smoke'
 import { runPaneScrollSmoke } from './smokes/panescroll-smoke'
 import { runPaneFitSmoke } from './smokes/panefit-smoke'
+import { runGridHealSmoke } from './smokes/gridheal-smoke'
 import { runReattachFitSmoke } from './smokes/reattachfit-smoke'
 import { runRestoreDimsSmoke } from './smokes/restoredims-smoke'
 import { runAppScrollSmoke } from './smokes/appscroll-smoke'
@@ -165,6 +167,7 @@ import { runSwarmSmoke } from './smokes/swarm-smoke'
 import { runLedgerSmoke } from './smokes/ledger-smoke'
 import { runGateSmoke } from './smokes/gate-smoke'
 import { runProfilesSmoke } from './smokes/profiles-smoke'
+import { runProfSwitchSmoke } from './smokes/profswitch-smoke'
 import { runLoginTruthSmoke } from './smokes/logintruth-smoke'
 import { runRemoteSmoke } from './smokes/remote-smoke'
 import { runSwarmMilestoneSmoke } from './smokes/swarmmilestone-smoke'
@@ -219,16 +222,16 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERUX', 'MOGGING_BROWSERTABS', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_LOCKDOWN', 'MOGGING_FIRSTRUN',
   'MOGGING_PRODUCT', 'MOGGING_PRODMILESTONE', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI',
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
-  'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_KILLFLASH', 'MOGGING_RAILFOLD', 'MOGGING_CHROMEPRESS', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
+  'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_PANECLOSE', 'MOGGING_KILLFLASH', 'MOGGING_RAILFOLD', 'MOGGING_CHROMEPRESS', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_WIZARDISO', 'MOGGING_WIZCD', 'MOGGING_WIZLAYOUT', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
   'MOGGING_FOLDERPICK', 'MOGGING_SETSHELL', 'MOGGING_SETAGENTCFG', 'MOGGING_SETINTEG', 'MOGGING_CONNLIVE', 'MOGGING_TOOLPULSE', 'MOGGING_TOOLWHO', 'MOGGING_TOOLCARDS', 'MOGGING_RESTCARDS', 'MOGGING_RESTMILESTONE', 'MOGGING_TOOLFIX', 'MOGGING_TOOLSMILESTONE', 'MOGGING_LIBRARYUX', 'MOGGING_SETUSAGE', 'MOGGING_HOMEUX', 'MOGGING_RESUME',
   'MOGGING_BOARDUX', 'MOGGING_FEEDBACKUX', 'MOGGING_CHROMEUX', 'MOGGING_DOCKUX', 'MOGGING_RESPONSIVE', 'MOGGING_KBAPG', 'MOGGING_EQUALIZE', 'MOGGING_UXMILESTONE',
   'MOGGING_USAGE', 'MOGGING_ATTENTION', 'MOGGING_CLIPBOARD', 'MOGGING_BLOCKS', 'MOGGING_GIT', 'MOGGING_CWD',
   'MOGGING_NOTIFY', 'MOGGING_MILESTONE', 'MOGGING_FLICKER', 'MOGGING_CONPTY', 'MOGGING_PANEOPS', 'MOGGING_MOVEPANE',
-  'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL', 'MOGGING_PANEFIT', 'MOGGING_REATTACHFIT', 'MOGGING_RESTOREDIMS',
+  'MOGGING_PANESCROLL', 'MOGGING_APPSCROLL', 'MOGGING_PANEFIT', 'MOGGING_GRIDHEAL', 'MOGGING_REATTACHFIT', 'MOGGING_RESTOREDIMS',
   'MOGGING_CONTROL', 'MOGGING_CONTROL2', 'MOGGING_RUNTIMESPLIT', 'MOGGING_PERCEPTION', 'MOGGING_WORKTREE', 'MOGGING_REVIEW', 'MOGGING_REVIEWSNAP',
   'MOGGING_BOARD', 'MOGGING_BOARDFAIL', 'MOGGING_BOARDRENDER', 'MOGGING_BOARDV2', 'MOGGING_BOARDMCP', 'MOGGING_BOARDGH', 'MOGGING_BOARDQUEUE', 'MOGGING_BRAINCORE', 'MOGGING_BRAINPARSE', 'MOGGING_BRAINGRAPH', 'MOGGING_BRAINFRESH', 'MOGGING_BRAINMCP', 'MOGGING_BRAINMAP', 'MOGGING_BRAINWRITE', 'MOGGING_BRAINDOCS', 'MOGGING_MEMGRAPH', 'MOGGING_BRAINSEM', 'MOGGING_BRAINPROPS', 'MOGGING_BRAINCAP', 'MOGGING_BRAINRECALL', 'MOGGING_BRAINUX', 'MOGGING_BRAINMILESTONE', 'MOGGING_PERSISTHEALTH', 'MOGGING_UPDATEFAIL', 'MOGGING_UPDATEOFFLINE', 'MOGGING_A11YMODAL', 'MOGGING_ASYNCSTATE', 'MOGGING_ROLERACE', 'MOGGING_AGENTREGISTRY', 'MOGGING_PLAINMENU', 'MOGGING_PANERESTART', 'MOGGING_ORCHESTRATION', 'MOGGING_SWARM', 'MOGGING_LEDGER', 'MOGGING_GATE',
-  'MOGGING_PROFILES', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
+  'MOGGING_PROFILES', 'MOGGING_PROFSWITCH', 'MOGGING_LOGINTRUTH', 'MOGGING_REMOTE', 'MOGGING_SWARMMILESTONE',
   // Typed-launch detection + the context gauge (the v6 pack).
   'MOGGING_TYPED', 'MOGGING_TYPEDCOST', 'MOGGING_CTXACCURACY',
   // Phase 11 — Files: the explorer's seven.
@@ -583,6 +586,8 @@ function afterWindow(win: BrowserWindow): void {
     runChromePressSmoke(win) // env-gated native-chrome-press smoke (title-bar press dismisses popovers)
   } else if (process.env.MOGGING_WSCLOSE) {
     runWsCloseSmoke(win) // env-gated workspace-close smoke: confirm on live work + 5s undo grace (UX audit WS-01)
+  } else if (process.env.MOGGING_PANECLOSE) {
+    runPaneCloseSmoke(win) // env-gated pane-close undo smoke: the pane parks ALIVE for the toast's grace and undo restores it
   } else if (process.env.MOGGING_KILLFLASH) {
     runKillFlashSmoke(win) // env-gated pane-teardown quiet smoke: console-less daemon + zero visible console windows through a 16-pane kill storm
   } else if (process.env.MOGGING_KBSHORTCUTS) {
@@ -725,6 +730,8 @@ function afterWindow(win: BrowserWindow): void {
     runFlickerSmoke(win) // env-gated terminal-artifact smoke: churn without flicker
   } else if (process.env.MOGGING_PANEFIT) {
     runPaneFitSmoke(win) // env-gated pane-fit smoke: the terminal fills its pane against the ACTIVE renderer's metrics
+  } else if (process.env.MOGGING_GRIDHEAL) {
+    runGridHealSmoke(win) // env-gated grid-heal smoke: reveal + daemon-reconnect re-assert xterm/PTY agreement
   } else if (process.env.MOGGING_PANESCROLL) {
     runPaneScrollSmoke(win) // env-gated pane scroll-anchor + overlay slide-bar smoke
   } else if (process.env.MOGGING_APPSCROLL) {
@@ -793,6 +800,8 @@ function afterWindow(win: BrowserWindow): void {
     runGateSmoke(win) // env-gated reviewer-gate smoke (Phase-4/03)
   } else if (process.env.MOGGING_PROFILES) {
     runProfilesSmoke(win) // env-gated profiles + usage-limit failover smoke (Phase-4/04)
+  } else if (process.env.MOGGING_PROFSWITCH) {
+    runProfSwitchSmoke(win) // env-gated pane profile-switch smoke (audit F1/F2/F4)
   } else if (process.env.MOGGING_LOGINTRUTH) {
     runLoginTruthSmoke(win) // env-gated login-truth smoke: label vs the home's REAL login (profiles pt 3)
   } else if (process.env.MOGGING_REMOTE) {

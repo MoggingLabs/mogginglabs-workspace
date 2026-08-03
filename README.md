@@ -53,7 +53,7 @@ npm run dev        # launch the app in dev mode
 > **Status.** All roadmap phases through 12 (the Workspace Brain — `docs/20-brain.md`) have
 > shipped, plus the accounts pack (the optional Pro tier, hardened — `docs/19-accounts.md`);
 > the current release is the version in `package.json`. The `qa-smokes.sh`
-> sweep now runs **207 gates** across three OSes. Per-phase receipts and measured numbers
+> sweep now runs **215 gates** across three OSes. Per-phase receipts and measured numbers
 > live where they were written: the docs each roadmap bullet below links, and the
 > `prompts/phase-*/REPORT.md` process records.
 
@@ -154,7 +154,7 @@ docs/
   02-mvp-and-roadmap.md
   03-research-synthesis.md      full competitive + open-source research report
   04-adding-a-feature.md        the parallel-work playbook
-  adr/                          decision records (0001–0004)
+  adr/                          decision records (numbered, one per decision)
 ```
 
 **Layer boundaries** (aliases `@contracts` / `@backend` / `@ui`): `contracts`

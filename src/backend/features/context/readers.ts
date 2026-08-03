@@ -173,6 +173,14 @@ export function parseClaudeHead(head: string): TailReading | null {
 // runs in main, so the rendezvous is a WELL-KNOWN path neither has to be told:
 // tmpdir + username + runtime segment + pane id. Counts and a model id only — never content.
 //
+// THREE writers share the sink, one reader (this module): the statusline relay
+// (numbers + transcript_path, every update), the notify hook's session-start branch
+// (transcript_path only, at startup/resume//clear — the channel that reaches a
+// HAND-TYPED claude via the global hooks), and `mogging notify --event session-start`
+// (the manual-wiring twin, bin/mogging.mjs). All three write atomically via rename
+// and derive the same dir; the identity-only shape is `{at, usedPct: null,
+// transcriptPath}` — exactly what an unstarted session's relay write looks like.
+//
 // The segment is runtimeSegment(channelFromEnv()) — the SAME channel/version namespace the
 // socket, lock and endpoint use (src/pty-daemon/lifecycle.ts). Pane ids are per-app, so a dev
 // build and an installed release both have a pane 1: keyed by username alone, their two relays

@@ -4,7 +4,8 @@ import { getBridge } from '../../core/ipc/bridge'
 import { getPaneRemote } from '../../core/layout/pane-meta'
 import { getPaneCwd } from '../../core/layout/pane-cwd'
 import { clipboardEnv, recordDrop } from '../../core/clipboard/clipboard-port'
-import { planPaneInsert, REMOTE_INSERT_TOAST } from '../../core/terminal/pane-insert'
+import { planFallbackInsert,
+  planPaneInsert, REMOTE_INSERT_TOAST } from '../../core/terminal/pane-insert'
 import { terminalClient } from './terminal.client'
 
 // The pane's drag-and-drop target — extracted from TerminalPane along the same seam as
@@ -166,9 +167,14 @@ async function insertExplorerPath(paneId: PaneId, raw: string, quotedFallback: s
     // A marker with no payload (an older drag, or a synthetic one). The text/plain half
     // was quoted by the explorer's own quoter — control-character-free — type it as-is:
     // the raw path is gone, so a remote pane cannot be re-quoted, only told the truth.
-    if (quotedFallback) {
+    // Through the planner, not verbatim. This branch skipped the quoter that every other
+    // insert path goes through, so a CR in the payload forged an Enter and the shell ran
+    // whatever preceded it. A refused fallback types nothing, which is the honest outcome
+    // when the raw path is gone and the quoted half cannot be trusted.
+    const fallback = planFallbackInsert(quotedFallback)
+    if (fallback) {
       if (remote) showToast(REMOTE_INSERT_TOAST)
-      terminalClient.write({ id: paneId, data: ' ' + quotedFallback + ' ' })
+      terminalClient.write({ id: paneId, data: fallback.data })
       focus()
     }
     return

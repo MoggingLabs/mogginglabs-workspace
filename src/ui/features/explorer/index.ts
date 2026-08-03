@@ -42,11 +42,14 @@ import { explorerOpen, explorerReveal, setActionRoot } from './explorer.client'
 import { getWorkspaces, onWorkspacesChange, type WorkspaceInfo } from '../../core/workspace/workspace-info-port'
 import { getFocusedPane, onFocusedPane } from '../../core/layout/focus'
 import { setCommands } from '../../core/commands/command-port'
+import { isModKey } from '../../core/commands/shortcuts'
 import { getTelemetry } from '../../core/telemetry'
 import {
   explorerInit,
   explorerList,
+  explorerResolveRoot,
   onExplorerChanged,
+  persistFollowPin,
   persistOpen,
   persistShowHidden,
   persistWidth,
@@ -152,6 +155,18 @@ export const explorerFeature: UiFeature = {
     const memory = new Map<string, WsMemory>()
     const listCalls: string[] = [] // DEV spy (the smoke proves laziness + zero-cost-closed)
 
+    // ── Follow-the-pane rooting (11/07) ──
+    // The dock roots at the CHECKOUT the focused pane is standing in. Per workspace we
+    // remember which worktree that is ('' = the workspace's own folder), so switching
+    // back re-roots straight to it — no wasted listing of the workspace root first.
+    // `followPinned` freezes the CURRENT root (retargeting stops; nothing snaps back).
+    let followPinned = false
+    const followByWs = new Map<string, string>() // wsId -> worktree root to follow ('' = ws folder)
+    let lastFocusPaneId = '' // a pane SWITCH retargets at once; a cd inside one pane debounces
+    let retargetTimer: number | undefined
+    let retargetGeneration = 0
+    const FOLLOW_DEBOUNCE_MS = 300 // outlives the cwd state machine's mid-command flickers
+
     // ── Git decoration state (11/05) ──
     let gitRoot = '' // '' = not a repo (or not yet known) — and then NO git traffic happens at all
     let gitFiles: GitFileState[] = []
@@ -203,6 +218,12 @@ export const explorerFeature: UiFeature = {
     const rootLabel = el('div', { class: 'explorer-root' })
     const title = el('div', { class: 'explorer-dock-title' }, [el('div', { class: 'explorer-ws' }, [wsDot, wsName]), rootLabel])
 
+    const pinBtn = IconButton({
+      icon: 'pin',
+      label: 'Pin explorer root',
+      title: 'Pin the current root (stop following the focused pane)',
+      onClick: () => setFollowPin(!followPinned)
+    })
     const refreshBtn = IconButton({ icon: 'rotate-cw', label: 'Refresh', title: 'Refresh', onClick: () => void refresh() })
     const collapseBtn = IconButton({ icon: 'contract-v', label: 'Collapse all', title: 'Collapse all', onClick: () => void collapseAll() })
     const hiddenBtn = IconButton({
@@ -214,7 +235,7 @@ export const explorerFeature: UiFeature = {
     const closeBtn = IconButton({ icon: 'x', label: 'Close explorer', title: 'Close (Ctrl+Shift+E)', onClick: () => toggle(false) })
     const header = el('div', { class: 'explorer-dock-header' }, [
       title,
-      el('div', { class: 'explorer-dock-actions' }, [refreshBtn, collapseBtn, hiddenBtn, closeBtn])
+      el('div', { class: 'explorer-dock-actions' }, [pinBtn, refreshBtn, collapseBtn, hiddenBtn, closeBtn])
     ])
 
     // The Changes lens (RESEARCH §5): the changed-files view every orchestrator converged on —
@@ -246,10 +267,12 @@ export const explorerFeature: UiFeature = {
       e.stopPropagation()
       void setLens(false)
     })
-    // Ctrl/Cmd+C copies the selected path. The tree's own handler ignores chords (its
-    // type-ahead is printable-only), so this rides alongside it rather than fighting it.
+    // Ctrl+C (⌘+C on macOS) copies the selected path. The tree's own handler ignores
+    // chords (its type-ahead is printable-only), so this rides alongside it rather than
+    // fighting it. isModKey, not `ctrlKey || metaKey`: copy is the platform's own
+    // modifier and nothing else — Win+C is Windows' own (Copilot), not ours.
     dock.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'c') return
+      if (!isModKey(e) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'c') return
       if (!selection) return
       e.preventDefault()
       actions.push({ verb: 'copy', path: selection })
@@ -453,9 +476,14 @@ export const explorerFeature: UiFeature = {
       return s.workspaces.find((w) => w.id === s.activeId) ?? null
     }
 
+    // One workspace can now show DIFFERENT roots over time (its folder, or a pane's
+    // worktree) — expansion/scroll/selection are remembered per (workspace, root), so
+    // hopping between two worktrees in one workspace restores each tree's own shape.
+    const memKey = (ws: string, root: string): string => `${ws}\0${pathKey(root)}`
+
     function saveMemory(): void {
       if (!wsId || !rootPath) return
-      memory.set(wsId, { expandedDirs: tree.expandedDirs(), scrollTop: tree.el.scrollTop, selection })
+      memory.set(memKey(wsId, rootPath), { expandedDirs: tree.expandedDirs(), scrollTop: tree.el.scrollTop, selection })
     }
 
     // ── Actions: delegate, copy, type. Never execute. (11/06) ─────────────────
@@ -602,7 +630,10 @@ export const explorerFeature: UiFeature = {
       const generation = ++rootGeneration
       const ws = activeWs()
       const nextId = ws?.id ?? ''
-      const nextRoot = ws?.cwd ?? ''
+      // The follow target (11/07) wins when one is known for this workspace. NOT gated on
+      // followPinned here: pinning freezes the current root by stopping RETARGETING —
+      // rooting through this path must not snap a pinned worktree back to the ws folder.
+      const nextRoot = (nextId ? (followByWs.get(nextId) ?? '') : '') || (ws?.cwd ?? '')
       if (nextId === wsId && nextRoot === rootPath && nextRoot) {
         // Same workspace, same folder — but if this is a REOPEN, the close before it
         // called unwatchAll(), setActionRoot('') and dropGit() while the tree kept its
@@ -659,7 +690,7 @@ export const explorerFeature: UiFeature = {
 
       await tree.setRoot(nextRoot)
       if (generation !== rootGeneration || activeWs()?.id !== nextId) return
-      const mem = memory.get(nextId)
+      const mem = memory.get(memKey(nextId, nextRoot))
       if (mem) {
         // Coming back should feel like returning, not like arriving.
         await tree.setExpanded(mem.expandedDirs)
@@ -691,9 +722,63 @@ export const explorerFeature: UiFeature = {
       const under = !!rootPath && !!focusedCwd && isWithin(rootPath, focusedCwd)
       tree.setHere(under ? focusedCwd : null)
     }
+
+    // ── Follow the focused pane (11/07) ───────────────────────────────────────
+    /** Decide where the dock should be rooted for the CURRENTLY focused pane. Main
+     *  resolves two containments (pure filesystem walks, never a git spawn): the worktree
+     *  root holding the pane's cwd, and the one holding the workspace folder. A DIFFERENT
+     *  checkout is followed — the whole point of worktree-per-pane isolation; the SAME
+     *  checkout (or a non-repo cwd) roots at the workspace folder, exactly as before, so
+     *  a workspace deliberately scoped to a subfolder is never silently widened to the
+     *  repo above it. Panes that cannot be followed — remote (their cwd names another
+     *  machine), cwd-less, or no pane at all — HOLD the current root: clicking through
+     *  an ssh pane must not churn the tree. */
+    async function retarget(): Promise<void> {
+      if (!open || followPinned) return
+      const f = getFocusedPane()
+      if (!f?.cwd || getPaneRemote(f.paneId)) return // hold: nothing followable is focused
+      const ws = activeWs()
+      if (!ws?.cwd) return // a folderless workspace keeps its EmptyState
+      const generation = ++retargetGeneration
+      const [paneRoot, wsRepo] = await Promise.all([explorerResolveRoot(f.cwd), explorerResolveRoot(ws.cwd)])
+      if (generation !== retargetGeneration || followPinned || !open || activeWs()?.id !== ws.id) return
+      const next = paneRoot && pathKey(paneRoot) !== pathKey(wsRepo ?? '') ? paneRoot : ''
+      if ((followByWs.get(ws.id) ?? '') === next) return
+      followByWs.set(ws.id, next)
+      void root()
+    }
+
+    /** Pin = freeze. Retargeting stops and the CURRENT root stays put (nothing snaps back
+     *  to the workspace folder); unpinning catches up with the focused pane at once. */
+    function setFollowPin(next: boolean, opts: { persist?: boolean } = {}): void {
+      if (followPinned === next) return
+      followPinned = next
+      pinBtn.classList.toggle('is-active', next)
+      pinBtn.title = next
+        ? 'Root pinned — click to follow the focused pane again'
+        : 'Pin the current root (stop following the focused pane)'
+      if (opts.persist !== false) {
+        persistFollowPin(next)
+        getTelemetry().captureEvent({ name: 'explorer.followPin', props: { pinned: next } }) // boolean only — never a path (ADR 0005)
+      }
+      if (next) window.clearTimeout(retargetTimer)
+      else if (open) void retarget()
+    }
+
     onFocusedPane((f) => {
       focusedCwd = f?.cwd ?? ''
       if (open) applyHere()
+      // A pane SWITCH retargets immediately — that is the gesture this feature exists
+      // for. The same pane's own cwd moving (an agent cd-ing between checkouts) waits
+      // out the debounce, so the cwd state machine's mid-command flickers never thrash
+      // the tree. Both land in the same retarget().
+      const paneId = f ? String(f.paneId) : ''
+      const switched = paneId !== lastFocusPaneId
+      lastFocusPaneId = paneId
+      if (!open || followPinned) return
+      window.clearTimeout(retargetTimer)
+      if (switched) void retarget()
+      else retargetTimer = window.setTimeout(() => void retarget(), FOLLOW_DEBOUNCE_MS)
     })
 
     // ── Header actions ────────────────────────────────────────────────────────
@@ -757,7 +842,9 @@ export const explorerFeature: UiFeature = {
       }
       if (open) {
         void root({ rearm: true }) // …which pushes the watch set once it knows what is visible
+        void retarget() // the focused pane may have moved to another worktree while the dock was shut
       } else {
+        window.clearTimeout(retargetTimer) // a parked retarget must not fire into a closed dock
         saveMemory()
         unwatchAll() // CLOSED COSTS ZERO: every handle closed, the poll parked, on the spot
         dropGit() // …and the git root unregistered, so the tick stops probing for us too
@@ -767,12 +854,14 @@ export const explorerFeature: UiFeature = {
       getTelemetry().captureEvent({ name: 'explorer.dock', props: { open } }) // boolean only — never a path (ADR 0005)
     }
 
-    // Ctrl/Cmd+Shift+E. Capture, like the rail's Ctrl+Shift+B: a pane's terminal would
-    // otherwise swallow it. Shift is required — plain Ctrl+E is a real readline keystroke.
+    // Ctrl+Shift+E (⌘+Shift+E on macOS). Capture, like the rail's Ctrl+Shift+B: a pane's
+    // terminal would otherwise swallow it. Shift is required — plain Ctrl+E is a real
+    // readline keystroke. isModKey decides the modifier: Win+Shift+E opened this dock
+    // *and* Windows' own Win+E, from one press.
     window.addEventListener(
       'keydown',
       (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'e') {
+        if (isModKey(e) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'e') {
           e.preventDefault()
           e.stopPropagation()
           toggle(!open)
@@ -782,7 +871,11 @@ export const explorerFeature: UiFeature = {
     )
 
     setCommands('explorer', [
-      { id: 'explorer.toggle', title: 'Toggle file explorer', hint: 'Explorer', kbd: 'Ctrl+Shift+E', run: () => toggle(!open) }
+      { id: 'explorer.toggle', title: 'Toggle file explorer', hint: 'Explorer', kbd: 'Ctrl+Shift+E', run: () => toggle(!open) },
+      // No "file" in this title, deliberately: the query "file explorer" must keep
+      // ranking the toggle first (its smoke clicks the TOP row), and the palette
+      // breaks score ties alphabetically — where "Pin…" would beat "Toggle…".
+      { id: 'explorer.pin', title: 'Pin explorer root', hint: 'Explorer', run: () => setFollowPin(!followPinned) }
     ])
 
     // The Brain view's "show me this file" (ADR 0018/10): open the dock if it is
@@ -819,6 +912,9 @@ export const explorerFeature: UiFeature = {
       // list often lands after this init) — the workspaces subscriber above reopens
       // the moment a workspace exists. persist:false either way: a restore is not a
       // change, and a refusal must not erase the preference it was refusing.
+      // Restore the pin BEFORE the boot open below: a pinned user's dock must not
+      // retarget once on the way up. persist:false — a restore is not a change.
+      setFollowPin(init.followPinned, { persist: false })
       persistedOpen = init.open
       if (init.open) toggle(true, { persist: false })
     })
@@ -927,6 +1023,19 @@ export const explorerFeature: UiFeature = {
           }
           fillDrag(e, { dataTransfer: dt } as unknown as DragEvent)
           return data
+        },
+        // ── Follow-the-pane rooting (11/07) ──
+        followPinned: () => followPinned,
+        setFollowPin: (next: boolean) => {
+          setFollowPin(next)
+          return true
+        },
+        /** The remembered follow target for the ACTIVE workspace ('' = its own folder). */
+        followRoot: () => (wsId ? (followByWs.get(wsId) ?? '') : ''),
+        /** Drive one retarget synchronously-awaitable — the smoke's way past the debounce. */
+        retargetNow: async () => {
+          await retarget()
+          return true
         },
         lens: () => lens,
         setLens: async (on: boolean) => {

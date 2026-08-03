@@ -26,8 +26,8 @@ import {
   opencodeTuiConfig
 } from '@backend/features/agents'
 import { RELAY_SOURCE } from '@backend/features/context'
-import { claudeStatuslineArgs } from '../context'
-import { bellLaunchExtras, notifyHookInvocation, notifyHookPath } from '../notify-hook'
+import { claudeStatuslineArgs, resetRelayVerificationForSmoke } from '../context'
+import { bellLaunchExtras, notifyHookInvocation, notifyHookPath, resetNotifyVerificationForSmoke } from '../notify-hook'
 
 interface WireResult {
   exitCode: number | null
@@ -166,7 +166,11 @@ export async function runNotifyHookSmoke(): Promise<void> {
       claude.PostToolUse === undefined &&
       claude.SubagentStart?.[0]?.hooks?.[0]?.command === 'INV --event subagent-start' &&
       claude.SubagentStop?.[0]?.hooks?.[0]?.command === 'INV --event subagent-stop' &&
-      claude.UserPromptSubmit?.[0]?.hooks?.[0]?.command === 'INV --event turn-start'
+      claude.UserPromptSubmit?.[0]?.hooks?.[0]?.command === 'INV --event turn-start' &&
+      // The identity event (typed-launch exact gauge identity): sink-write only, and
+      // SessionEnd deliberately absent (a late sweep could race the next session's start).
+      claude.SessionStart?.[0]?.hooks?.[0]?.command === 'INV --event session-start' &&
+      claude.SessionEnd === undefined
 
     // Codex needs BOTH channels: OSC 9 (ambiguous — fires on complete AND on approval) and
     // the notify program (turn-complete ONLY), whose `done` is what lets the tracker resolve
@@ -422,7 +426,37 @@ export async function runNotifyHookSmoke(): Promise<void> {
       : null
     const noopOk = !!noop && noop.exitCode === 0 && noop.notify === null
 
-    // ── self-heal: generated scripts are existence-checked per call, not once per run ──
+    // ── the identity event: session-start writes the pane's context SINK and never a frame ──
+    // A frame here would ring every fresh/resumed pane red (notifyEventToState defaults
+    // unknown events to attention). TMP is redirected into userData so the pane-'7' sink
+    // never lands in the live machine's namespace; the channel is pinned for a
+    // deterministic segment ('v<N>').
+    const ssTmp = path.join(app.getPath('userData'), 'ss-smoke-tmp')
+    fs.mkdirSync(ssTmp, { recursive: true })
+    const sessionStart = script
+      ? await runHookAgainstFakeDaemon(
+          script,
+          ['--event', 'session-start'],
+          { MOGGING_PANE_ID: '7', TMP: ssTmp, TEMP: ssTmp, TMPDIR: ssTmp, MOGGING_CHANNEL: undefined },
+          'sstart',
+          '{"hook_event_name":"SessionStart","source":"resume","transcript_path":"/fake/p/s.jsonl","message":"NEVER-CROSSES"}'
+        )
+      : null
+    let ssSinkTranscript: string | null = null
+    try {
+      const sinkDirs = fs.readdirSync(ssTmp).filter((d) => d.startsWith('mogging-ctx-'))
+      const sinkFile = sinkDirs.length === 1 ? path.join(ssTmp, sinkDirs[0], '7.json') : ''
+      ssSinkTranscript = sinkFile
+        ? ((JSON.parse(fs.readFileSync(sinkFile, 'utf8')) as { transcriptPath?: string }).transcriptPath ?? null)
+        : null
+    } catch {
+      /* no sink landed — sessionStartOk fails below */
+    }
+    const sessionStartOk =
+      !!sessionStart && sessionStart.exitCode === 0 && sessionStart.notify === null &&
+      ssSinkTranscript === '/fake/p/s.jsonl'
+
+    // ── self-heal: generated scripts are re-checked per call, not once per run ──
     // A userData cleared mid-run must regrow BOTH generated scripts on the next launch;
     // the old once-per-process cache handed every later launch a settings file and hook
     // invocation pointing at scripts that were gone (statusline dead, panes bell-less).
@@ -458,24 +492,43 @@ export async function runNotifyHookSmoke(): Promise<void> {
     // silently dead, the gauge on the transcript-tail poll for good (found live on the
     // v9→v10 protocol bump, 2026-07-18). Doctored bytes at the relay path must come back
     // as the current RELAY_SOURCE after one launch-args build.
+    //
+    // Doctored, then the run's content-verification memo is cleared — because the memo is
+    // the point: verification is once per RUN (re-reading per launch could only confirm
+    // what the first read established, since nothing but a new release changes these
+    // bytes), and the guarantee therefore lives on a run's FIRST build. Clearing it is
+    // how this gate gets a fresh run without restarting the app.
     let staleHealOk = false
     if (relayAfter) {
       fs.writeFileSync(relayAfter, `// stale relay from a previous release\n${RELAY_SOURCE}`)
+      resetRelayVerificationForSmoke()
       claudeStatuslineArgs()
       staleHealOk = fs.readFileSync(relayAfter, 'utf8') === RELAY_SOURCE
+    }
+    // The notify script rots the same way since the session-start branch baked the sink
+    // dir's channel segment into ITS bytes too: a stale vintage keeps writing session
+    // identity into the OLD channel's dir while this build's monitor reads the new one.
+    // Doctored bytes must come back as the current source after one path resolution.
+    let staleNotifyHealOk = false
+    if (scriptHealed) {
+      fs.writeFileSync(scriptHealed, `// stale notify hook from a previous release\n${NOTIFY_HOOK_SOURCE}`)
+      resetNotifyVerificationForSmoke() // same fresh-run simulation as the relay above
+      notifyHookPath()
+      staleNotifyHealOk = fs.readFileSync(scriptHealed, 'utf8') === NOTIFY_HOOK_SOURCE
     }
 
     const pass =
       scriptOk && invOk && claudeOk && codexOk && geminiOk && opencodeOk && aiderOk && extrasOk && snippetsOk &&
       directOk && codexBlobOk && codexUnknownOk && noopOk && notifBlockingOk && notifUnknownOk && notifCompletedOk &&
-      selfHealOk && staleHealOk
+      sessionStartOk && selfHealOk && staleHealOk && staleNotifyHealOk
     write({
       pass,
       scriptOk, invOk, claudeOk, codexOk, geminiOk, opencodeOk, aiderOk, extrasOk,
       snippetsOk, snippetClaudeOk, snippetGeminiOk, snippetCodexOk, snippetOpencodeOk,
       directOk, codexBlobOk, codexUnknownOk, noopOk, notifBlockingOk, notifUnknownOk, notifCompletedOk,
-      selfHealOk, staleHealOk, selfHeal: { relayBefore, relayAfter, scriptHealed },
+      sessionStartOk, selfHealOk, staleHealOk, staleNotifyHealOk, selfHeal: { relayBefore, relayAfter, scriptHealed },
       direct, codexBlob, codexUnknown, noop, notifBlocking, notifUnknown, notifCompleted,
+      sessionStart: { ...sessionStart, sinkTranscript: ssSinkTranscript },
       extras: {
         userData,
         codexArgs: exCodex.args,
