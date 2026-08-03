@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { trustDialogLive } from '@ui/features/agents/auto-trust'
+import { trustDialogLive } from '@ui/features/agents/prompt-answer'
 
 // The auto-trust matcher (product decision 2026-08-02: an app-launched claude in the
 // workspace's own folder gets its trust dialog answered — opening the workspace there

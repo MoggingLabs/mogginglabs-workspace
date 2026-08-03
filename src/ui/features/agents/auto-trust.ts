@@ -1,5 +1,6 @@
-import { TerminalChannels, type PaneId } from '@contracts'
-import { getBridge } from '../../core/ipc/bridge'
+
+import type { PaneId } from '@contracts'
+import { answerPromptIfLive, openPromptWindow, trustDialogLive } from './prompt-answer'
 import { getPaneAgentSession } from '../../core/agents/agent-session-port'
 import { readPaneBufferTail } from '../../core/terminal/pane-buffer-port'
 
@@ -19,18 +20,7 @@ const POLL_MS = 400
  *  carries its "Enter to confirm" line, and a wide read would re-answer it. */
 const TAIL_LINES = 14
 
-const TRUST_PROMPT = /trust this folder/i
-const CONFIRM_HINT = /Enter to confirm/i
 
-/**
- * Is claude's folder-trust dialog LIVE in this tail? Both halves must show — the
- * question and its "Enter to confirm" hint — so scrollback fragments of an already
- * answered dialog (the hint line scrolls away first) cannot re-trigger an Enter.
- */
-export function trustDialogLive(tail: string | null): boolean {
-  if (!tail) return false
-  return TRUST_PROMPT.test(tail) && CONFIRM_HINT.test(tail)
-}
 
 /** No dialog within this long of the watch starting = the folder is already trusted
  *  in this home (an untrusted one paints the dialog right as the TUI comes up). */
@@ -98,10 +88,14 @@ export async function autoTrustClaudeLaunch(paneId: number): Promise<void> {
   settledPanes.delete(paneId) // a NEW launch's gate is unanswered until proven otherwise
   const started = Date.now()
   const until = started + WATCH_MS
+  // The dialog is answerable only while THIS launch is being watched. The window is what
+  // makes the answer safe: a pane printing "trust this folder … Enter to confirm" at any
+  // other moment — an agent echoing a file, a page, another agent — must not be able to
+  // make the app press Enter for it (prompt-answer.ts). Closed in `finally`.
+  const closeWindow = openPromptWindow(paneId, 'folder-trust')
   try {
     while (Date.now() < until && watchers.get(paneId) === gen) {
-      if (trustDialogLive(readPaneBufferTail(paneId, TAIL_LINES))) {
-        getBridge().send(TerminalChannels.write, { id: paneId as PaneId, data: '\r' })
+      if (answerPromptIfLive(paneId, 'folder-trust')) {
         await new Promise((r) => setTimeout(r, ANSWER_SETTLE_MS))
         return
       }
@@ -113,6 +107,7 @@ export async function autoTrustClaudeLaunch(paneId: number): Promise<void> {
       await new Promise((r) => setTimeout(r, POLL_MS))
     }
   } finally {
+    closeWindow()
     if (watchers.get(paneId) === gen) {
       settledPanes.add(paneId)
       watchers.delete(paneId)

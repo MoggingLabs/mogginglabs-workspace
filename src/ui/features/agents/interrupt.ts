@@ -1,15 +1,13 @@
 import { TerminalChannels, type PaneId } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 import { getPaneAgentSession } from '../../core/agents/agent-session-port'
-import { readPaneBufferTail } from '../../core/terminal/pane-buffer-port'
+import { answerPromptIfLive, openPromptWindow } from './prompt-answer'
 import {
   DOUBLE_TAP_GAP_MS,
   GONE_WAIT_MS,
   INTERRUPT_ROUNDS,
   TRAP_SWEEP_GAP_MS,
-  TRAP_SWEEP_TRIES,
-  TRAP_TAIL_LINES,
-  batchTrapAnswer
+  TRAP_SWEEP_TRIES
 } from './interrupt-core'
 
 // The deterministic interrupt (audit F2). The old failover sent ONE ^C and typed the
@@ -96,12 +94,15 @@ function write(paneId: number, data: string): void {
   getBridge().send(TerminalChannels.write, { id: paneId as PaneId, data })
 }
 
-/** Read the tail and answer a LIVE "Terminate batch job (Y/N)?" if one is showing. */
+/**
+ * Answer cmd.exe own "Terminate batch job (Y/N)?" if it is showing.
+ *
+ * Through the prompt-answer seam, which refuses unless THIS interrupt opened the window:
+ * the trap is cmd own question, raised by the ^C we just sent, and outside that moment a
+ * pane printing the same words must not be able to make the app type into it.
+ */
 function answerBatchTrap(paneId: number): boolean {
-  const answer = batchTrapAnswer(readPaneBufferTail(paneId, TRAP_TAIL_LINES))
-  if (!answer) return false
-  write(paneId, answer)
-  return true
+  return answerPromptIfLive(paneId, 'batch-trap')
 }
 
 /**
@@ -123,6 +124,11 @@ export async function interruptAgent(paneId: number): Promise<boolean> {
   // it. What the fallback is actually about is a launch that never produced a process, and
   // that is decided before the first ^C.
   const confirmedAtStart = getPaneAgentSession(paneId as PaneId)?.running === true
+  // The batch trap is answerable only while THIS interrupt is running — the ^C below is
+  // what raises it. Closed in `finally`, so a pane that prints those words at any other
+  // moment cannot make the app press a key (prompt-answer.ts).
+  const closeTrapWindow = openPromptWindow(paneId, 'batch-trap')
+  try {
   let gone = goneNow.has(paneId)
   for (let round = 0; !gone && round < INTERRUPT_ROUNDS; round++) {
     write(paneId, '\x03')
@@ -148,4 +154,7 @@ export async function interruptAgent(paneId: number): Promise<boolean> {
     if (!answerBatchTrap(paneId)) break
   }
   return true
+  } finally {
+    closeTrapWindow()
+  }
 }
