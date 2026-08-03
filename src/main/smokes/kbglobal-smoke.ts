@@ -294,22 +294,36 @@ export function runKbGlobalSmoke(win: BrowserWindow): void {
         before: n0.panes,
         after: n1.panes
       })
-      // The premise, re-asserted BETWEEN the two chords. Each negative below means "a chord
-      // pressed while the user is typing did nothing"; if the caret has quietly left the
-      // rename field by now — its own blur handler commits and REMOVES the input — then the
-      // chord that follows is no longer being pressed while renaming and the negative would
-      // pass, or fail, for a reason that has nothing to do with the guard. Asserted rather
-      // than assumed, exactly as section 0 does for the terminal.
-      check('8 …and the rename field still holds the caret after the first chord', n1.activeTag === 'INPUT' && n1.activeCls.includes('ws-rename'), {
-        tag: n1.activeTag,
-        cls: n1.activeCls
+      // EACH negative stands on its own field. Chaining them was wrong: a chord's DEFAULT
+      // action can move the caret even when the app correctly declines the chord, and on
+      // macOS one does — after ⌘+Shift+D the caret is on BODY, while the app's own refusal
+      // held (the pane count above is unchanged). The second chord was then no longer being
+      // pressed "while renaming" at all, so it opened the Board correctly and the negative
+      // failed for a reason that has nothing to do with the guard it exists to test.
+      //
+      // So the premise is re-established and re-asserted immediately before every chord,
+      // rather than assumed to survive the previous one. Where the caret went in between is
+      // recorded as diagnosis, not judged: it is the platform's business, not the app's.
+      const caretAfterFirst = { tag: n1.activeTag, cls: n1.activeCls }
+      await press('Escape')
+      await sleep(250)
+      await ES('window.__kb.focusTab()')
+      await sleep(200)
+      await press('F2')
+      const n1b = await snap()
+      check('8 the rename field is re-opened and focused for the next chord', n1b.activeTag === 'INPUT' && n1b.activeCls.includes('ws-rename'), {
+        tag: n1b.activeTag,
+        cls: n1b.activeCls,
+        caretAfterFirst
       })
       await press('Ctrl+Shift+G')
       const n2 = await snap()
-      check('8 Ctrl+Shift+G while renaming must NOT open the Board', !n2.view.includes('view-board'), n2.view)
-      check('8 …with the rename field still holding the caret throughout', n2.activeTag === 'INPUT' && n2.activeCls.includes('ws-rename'), {
-        tag: n2.activeTag,
-        cls: n2.activeCls
+      check('8 Ctrl+Shift+G while renaming must NOT open the Board', !n2.view.includes('view-board'), {
+        view: n2.view,
+        // Where the caret sat when the chord landed: the assertion above only means
+        // anything if the field still had it, and n1b proved it did a moment earlier.
+        caretAtPress: { tag: n1b.activeTag, cls: n1b.activeCls },
+        caretAfter: { tag: n2.activeTag, cls: n2.activeCls }
       })
       await press('Escape')
       await sleep(300)
