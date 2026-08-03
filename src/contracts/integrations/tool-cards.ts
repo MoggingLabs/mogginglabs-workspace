@@ -50,7 +50,21 @@ export interface ToolCardRow {
   cliState?: McpConnState
 }
 
-const isBridgeRow = (s: McpServerEntry): boolean => Array.isArray(s.args) && s.args[0] === '--connection'
+/**
+ * The app's own bridge fanout row — the connection wearing its server clothes.
+ *
+ * Matched by the PRESENCE of the `--connection` marker, never by its index. Both CLI
+ * config entries learned to carry the protocol-neutral launcher as their first arg
+ * (one builder for the house row and the connection row), which pushed `--connection`
+ * from index 0 to index 1 — and every positional reader silently stopped recognizing
+ * a bridge row: the pre-launch connection verification stopped running at all
+ * (tool-plan.ts), and a connected service's own bridge row started reading as a
+ * CLI-owned route. One predicate now, so the readers cannot drift from the builder again.
+ */
+export const isConnectionBridgeEntry = (s: McpServerEntry): boolean =>
+  Array.isArray(s.args) && s.args.includes('--connection')
+
+const isBridgeRow = isConnectionBridgeEntry
 
 /**
  * Merge the two routes into one row per service id. A service connected through

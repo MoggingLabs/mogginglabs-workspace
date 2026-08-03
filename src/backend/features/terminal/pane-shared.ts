@@ -105,12 +105,41 @@ export function paneProcessEnv(
 /** paneProcessEnv with the fold decided by the caller, so the Windows-only behavior can be
  *  asserted on every runner. Without this the one platform that exhibits the bug is the
  *  only one whose CI could catch it — which is how it survived to ship. */
+/**
+ * Claude Code's session-NESTING markers — the vars it exports to its OWN child
+ * processes so a claude spawned inside claude knows it is nested. When THIS APP is
+ * launched from a terminal inside a Claude Code session (the everyday dev workflow),
+ * every pane inherited them, and a claude launched in a pane believed it was a nested
+ * child: `CLAUDE_CODE_CHILD_SESSION` made it TURN TRANSCRIPT SAVING OFF — silently
+ * breaking resume, session pooling and the whole profile-failover continuity story
+ * (found live 2026-08-02: the switched pane's picker said "No conversations found"
+ * because the capped session had never been written). A pane here is a fresh
+ * terminal, not part of whatever session launched the app, so these claims are
+ * factually wrong in it. NAMED markers only — a user's own config (API keys, config
+ * dirs, `CLAUDE_CODE_OAUTH_TOKEN`) is never touched.
+ */
+const CLAUDE_NESTING_MARKERS = new Set([
+  'CLAUDECODE',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_PID',
+  'CLAUDE_EFFORT'
+])
+
 export function composePaneEnv(
   foldCase: boolean,
   base: NodeJS.ProcessEnv,
   ...overlays: (Record<string, string | undefined> | undefined)[]
 ): NodeJS.ProcessEnv {
-  return mergeEnvFolding(foldCase, base, ...overlays)
+  const merged = mergeEnvFolding(foldCase, base, ...overlays)
+  // Windows env names are case-insensitive to look up — delete by normalized name so
+  // an inherited casing variant cannot survive (same rule as stripLocalPaneCapabilities).
+  for (const key of Object.keys(merged)) {
+    if (CLAUDE_NESTING_MARKERS.has(key.toUpperCase())) delete merged[key]
+  }
+  return merged
 }
 
 /** The directory a pane's shell starts in: the requested one when it is a real directory,

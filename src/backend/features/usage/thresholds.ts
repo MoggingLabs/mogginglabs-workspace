@@ -94,23 +94,32 @@ const paceOf = (p: PlanUsageView, w: WindowView): PaceView | undefined =>
   w.pace ?? (p.windows.length <= 1 ? p.pace : undefined)
 
 /** The 7/09 failover-feed condition, now judged on the sibling's WORST window
- *  — the old windows[0] rule offered switches onto weekly-exhausted accounts. */
+ *  — the old windows[0] rule offered switches onto weekly-exhausted accounts.
+ *  Judged on LIVE windows only: a window whose `resetsAt` has passed is old
+ *  data however fresh the snapshot (the alert engine skips those lanes at its
+ *  own loop for the same reason), and scoring it pinned a sibling at its
+ *  pre-reset percentage — suppressing the suggestion exactly when that lane
+ *  had just become the best one. A sibling with NO live window says nothing
+ *  about itself and is excluded, not trusted. */
 export function suggestFailover(
   plan: PlanUsageView,
   plans: PlanUsageView[],
-  profiles: AgentProfile[]
+  profiles: AgentProfile[],
+  now: number
 ): { profileId: string; profileName: string } | null {
   const mine = profiles.filter((p) => p.provider === plan.providerId).sort((a, b) => a.order - b.order)
   if (mine.length < 2) return null
   if (mine[0].id !== plan.profileId) return null // only the ACTIVE plan suggests a lane change
-  const worstPct = (o: PlanUsageView): number => Math.max(...o.windows.map((w) => w.usedPct))
+  const liveWindows = (o: PlanUsageView): WindowView[] =>
+    o.windows.filter((w) => !w.resetsAt || Date.parse(w.resetsAt) > now)
+  const worstPct = (o: PlanUsageView): number => Math.max(...liveWindows(o).map((w) => w.usedPct))
   const sibling = plans
     .filter(
       (o) =>
         o.providerId === plan.providerId &&
         o.profileId !== plan.profileId &&
         o.health === 'fresh' &&
-        o.windows.length > 0 &&
+        liveWindows(o).length > 0 &&
         worstPct(o) < 50 &&
         mine.some((m) => m.id === o.profileId)
     )
@@ -144,6 +153,15 @@ export function evaluateThresholds(
 ): UsageAlert[] {
   const alerts: UsageAlert[] = []
   const levels = activeLevels(cfg)
+  // The window ladder adds `capped` at 100 — "the lane is spent NOW", the
+  // pane-failover trigger, distinct from warn's "almost". A user level set at
+  // exactly 100 is superseded (never two alerts for one crossing). The spend
+  // block below deliberately keeps the plain quiet/warn ladder: a spend cap is
+  // a billing fact, not a lane another profile could continue.
+  const laneLevels: { pct: number; level: 'quiet' | 'warn' | 'capped' }[] = [
+    ...levels.filter((l) => l.pct < 100),
+    { pct: 100, level: 'capped' }
+  ]
   for (const p of plans) {
     if (p.health !== 'fresh') continue // stale is old data, never a new tap
     const state = readState(kv, p.providerId, p.profileId, p.windows[0]?.label ?? null)
@@ -191,12 +209,18 @@ export function evaluateThresholds(
       if (lane.lastPct !== undefined && pct < lane.lastPct - REARM_MARGIN_PCT) lane.paceFired = false
 
       const pace = paceOf(p, w)
-      const crossed = levels.filter((l) => pct >= l.pct && !lane.fired.includes(l.pct))
+      const crossed = laneLevels.filter((l) => pct >= l.pct && !lane.fired.includes(l.pct))
       if (crossed.length) {
         // One toast per lane per tick: the loudest level sets severity, the
         // TITLE names the actual reading (a user at 100% must not be told
-        // "95% used"), and every crossed level is spent at once.
-        const level = crossed.some((l) => l.level === 'warn') ? 'warn' : 'quiet'
+        // "95% used"), and every crossed level is spent at once — a 60→100
+        // jump crosses quiet, warn AND capped in one tick and speaks once,
+        // with capped's voice.
+        const level = crossed.some((l) => l.level === 'capped')
+          ? 'capped'
+          : crossed.some((l) => l.level === 'warn')
+            ? 'warn'
+            : 'quiet'
         lane.fired.push(...crossed.map((l) => l.pct))
         if (pace?.verdict === 'runs-out') lane.paceFired = true
         const alert: UsageAlert = {
@@ -207,11 +231,14 @@ export function evaluateThresholds(
           planLabel: p.planLabel,
           windowLabel: w.label,
           usedPct: Math.round(pct),
-          title: `${p.planLabel} — ${Math.round(pct)}% of ${w.label} used`,
+          title:
+            level === 'capped'
+              ? `${p.planLabel} — usage limit reached (${w.label})`
+              : `${p.planLabel} — ${Math.round(pct)}% of ${w.label} used`,
           body: pace?.text ?? `${Math.round(pct)}% of ${w.label} used`
         }
-        if (level === 'warn') {
-          const failover = suggestFailover(p, plans, profiles)
+        if (level === 'warn' || level === 'capped') {
+          const failover = suggestFailover(p, plans, profiles, now)
           if (failover) alert.failover = failover
         }
         alerts.push(alert)
