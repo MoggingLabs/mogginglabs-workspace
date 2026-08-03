@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { compositeTelemetry } from '@backend'
+// Straight to the module (see the note in notify-session-start.test.ts): the root
+// backend barrel pulls in native-dependent code this test never touches.
+import { compositeTelemetry } from '@backend/core/telemetry/composite'
 import type { Telemetry, TelemetryEvent, TelemetryProps } from '@contracts'
 
 // THE CONSENT LEAK, pinned.

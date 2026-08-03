@@ -3,7 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { NOTIFY_HOOK_SOURCE } from '@backend/features/agents'
+// The DEFINING module, not the feature barrel: a barrel re-exports the whole tree,
+// which reaches modules that require pty.node — a native addon the unit tier never
+// builds. The suite then fails to LOAD, on whichever OS lacks a prebuild.
+import { NOTIFY_HOOK_SOURCE } from '@backend/features/agents/notify-hook'
 import { DAEMON_PROTOCOL_VERSION } from '@contracts'
 
 // The notify hook's IDENTITY branch, run as the exact shipped script under node — the
@@ -133,5 +136,32 @@ describe('notify hook session-start branch (the exact shipped script)', () => {
     const sink = JSON.parse(readFileSync(sinkFile(f), 'utf8')) as Record<string, unknown>
     expect(sink.transcriptPath).toBe('/fake/projects/p/abcd-1234.jsonl')
     expect(sink.usedPct).toBeNull()
+  })
+})
+
+describe('the unit tier cannot load native addons', () => {
+  // Three suites on this branch were green locally and red in CI for one shared reason:
+  // they reached a native module (`pty.node`, `better_sqlite3.node`) that nothing builds
+  // for plain Node — the verify job installs with `--ignore-scripts`, and the repo's own
+  // native steps target the ELECTRON ABI. A suite that imports one fails to LOAD, so it
+  // takes every test in the file with it.
+  //
+  // Two barrels are the road there: the backend ROOT and the agents FEATURE barrel each
+  // re-export the whole tree, including the pty host. Import the defining module instead
+  // — the thing under test is always in one — and the chain never reaches an addon.
+  it('no unit test imports a barrel that reaches the pty host', async () => {
+    const { readdirSync, readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const dir = join(process.cwd(), 'tests', 'unit')
+    // Assembled rather than written out, so this file does not match its own needle.
+    const from = (spec: string): string => `from '` + spec + `'`
+    const barrels = [from('@backend'), from('@backend/features/agents')]
+    const offenders = readdirSync(dir)
+      .filter((f) => f.endsWith('.test.ts'))
+      .filter((f) => {
+        const src = readFileSync(join(dir, f), 'utf8')
+        return barrels.some((b) => src.includes(b))
+      })
+    expect(offenders, 'import the defining module, not the barrel').toEqual([])
   })
 })
