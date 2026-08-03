@@ -2163,6 +2163,67 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+/* "New terminal…" modal (new-terminal-modal.ts) — the wizard's placement palette over
+   the panes being added, so .wizard-chip/.wizard-palette/.wizard-profile-row styling is
+   shared wholesale. Only the count row and the slot strip (the strip-sized canvas the
+   brushes paint) are new. */
+.ntm-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.ntm-count-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.ntm-count-label {
+  font-size: var(--fs-13);
+  color: var(--text-hi);
+  min-width: 5.5em; /* "12 terminals" — the row must not shimmy as the count moves */
+  font-variant-numeric: tabular-nums;
+}
+.ntm-slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+/* A slot tile is a terminal-to-be: logo + name, the assigned provider's accent as a
+   left bar (the pane chrome's own vocabulary for "who runs here"). */
+.ntm-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-12);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--bg-inset);
+  color: var(--text-mid);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
+}
+.ntm-slot:hover {
+  border-color: var(--border-strong);
+  color: var(--text-hi);
+}
+.ntm-slot.is-assigned {
+  border-left-color: var(--ntm-accent, var(--accent-ink));
+  color: var(--text-hi);
+}
+.ntm-slot-name {
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ntm-palette {
+  padding-top: var(--sp-1);
+}
+
 #workspace-host {
   flex: 1 1 auto;
   min-height: 0;
@@ -2285,6 +2346,13 @@ textarea {
   transition:
     border-color var(--dur-1) var(--ease),
     box-shadow var(--dur-1) var(--ease);
+}
+
+/* A pane mid-close (the undo toast's grace): detached from the tree but its terminal —
+   and its PTY — stay alive until the grace lapses. `display` must be beaten explicitly:
+   the [hidden] attribute loses to the .layout-slot flex above. */
+.layout-slot.soft-closed {
+  display: none;
 }
 
 /* Selected pane — the brand-orange focus ring: 1px border + 1px halo + soft glow.
@@ -10370,7 +10438,9 @@ body.pane-dragging * {
   border-left: 2px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-/* ── Usage glance (Phase-7/03): titlebar two-bar gauge + popover ────────────── */
+/* ── Usage glance (Phase-7/03): titlebar two-bar gauge + popover. Every bar in
+   the feature — gauge, tab hairline, window row, lane tile — paints % LEFT
+   (the consistency pass): a full track is a full tank. ────────────────────── */
 .usage-wrap {
   position: relative;
   display: inline-flex;
@@ -10567,10 +10637,11 @@ body.pane-dragging * {
 .usage-sec + .usage-sec {
   border-top: 1px solid var(--border);
 }
-/* Header (CodexBar grammar): line one — name bold left, the account + its
-   drill-in chevron right; line two — snapshot age left, plan tier right, both
-   quiet text (never a badge). A hairline closes the header block. The health
-   pill only appears when it is news. */
+/* Header (CodexBar grammar, tightened): line one — name bold left, the ACCOUNT
+   SWITCHER right (active profile name + fold-down chevron; opens the lane
+   list); line two only when it says something — plan tier right, snapshot age
+   left only when stale. A hairline closes the header block. The health pill
+   only appears when it is news. */
 .usage-glance-head {
   display: flex;
   flex-direction: column;
@@ -10594,21 +10665,36 @@ body.pane-dragging * {
   gap: var(--sp-1);
   margin-left: auto;
   min-width: 0;
-  padding: 0;
+  padding: 2px var(--sp-1);
   border: none;
+  border-radius: var(--r-sm);
   background: transparent;
   color: var(--text-mid);
   font-size: var(--fs-11);
   cursor: pointer;
 }
-.usage-glance-acct:hover {
+button.usage-glance-acct:hover {
   color: var(--text-hi);
+  background: var(--bg-inset);
+}
+/* One lane: the name is a fact, not a control. */
+.usage-glance-acct.is-solo {
+  cursor: default;
 }
 .usage-acct-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 160px;
+}
+/* The fold-down chevron turns with its list — the one visual verb needed. */
+.usage-acct-chev {
+  display: inline-flex;
+  align-items: center;
+  transition: transform 160ms ease;
+}
+.usage-glance-acct[aria-expanded='true'] .usage-acct-chev {
+  transform: rotate(180deg);
 }
 .usage-glance-sub {
   display: flex;
@@ -10654,13 +10740,6 @@ body.pane-dragging * {
   font-variant-numeric: tabular-nums;
   font-weight: var(--fw-semibold);
 }
-/* The run-out risk estimate: quiet ink, its own line under the verdict. */
-.usage-risk {
-  flex: 1 1 100%;
-  color: var(--text-lo);
-  font-size: var(--fs-10);
-  font-variant-numeric: tabular-nums;
-}
 .usage-pace-delta.sev-warning {
   color: var(--warning);
 }
@@ -10670,12 +10749,29 @@ body.pane-dragging * {
 .usage-pace-delta.sev-quiet {
   color: var(--muted);
 }
-/* Credits / spend line — never a $X/$Y cap. */
+/* Credits / spend — a LABELED row (the declutter pass): quiet label left,
+   tabular value right, the measurement explained on the tooltip. A bare
+   figure under a cloud provider read as a number of nothing. */
 .usage-credits {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
   padding: 0 var(--glance-pad) var(--sp-2);
   font-size: var(--fs-11);
   color: var(--text-mid);
   font-variant-numeric: tabular-nums;
+}
+.usage-spend-label {
+  flex: none;
+}
+.usage-credits .usage-spend-bar {
+  flex: 1 1 auto;
+  max-width: 96px;
+}
+.usage-spend-value {
+  margin-left: auto;
+  color: var(--text-hi);
+  font-weight: var(--fw-semibold);
 }
 /* ── The cost cluster — the twin's stat block: hairline above, the Cost row
    as its clickable title (› opens § Usage), the 2×2 grid, the 30-day spark,
@@ -10711,6 +10807,13 @@ body.pane-dragging * {
   color: var(--text-hi);
   font-size: var(--fs-13);
   font-weight: var(--fw-semibold);
+}
+/* "local estimate" — the how-is-this-measured answer, worn on the row itself
+   (the tooltip spells it out; distinct vocabulary from a cloud spend's BILL). */
+.usage-cost-tag {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-10);
 }
 .usage-cost-more {
   flex: none;
@@ -10782,10 +10885,27 @@ body.pane-dragging * {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Action rows (Usage Dashboard · Status Page · Settings… · About). */
+/* Actions (Usage Dashboard · Status Page · Settings… · About) — ONE row of
+   icon-only buttons (title + aria-label carry the words); was four full-width
+   text rows. The bare .usage-action text grammar below stays for the
+   .usage-cost-retry row, so the icon-row overrides are scoped to the strip. */
 .usage-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
   border-top: 1px solid var(--border);
-  padding: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--glance-pad);
+}
+.usage-actions .usage-action {
+  width: auto;
+  flex: 1 1 0;
+  justify-content: center;
+  min-height: 28px;
+  color: var(--text-mid);
+}
+.usage-actions .usage-action:hover {
+  color: var(--text-hi);
+  background: var(--bg-inset);
 }
 .usage-action {
   display: flex;
@@ -10806,12 +10926,18 @@ body.pane-dragging * {
   background: var(--bg-inset);
 }
 /* Lane switch — the provider's accounts as full-width rows (the twin's
-   account register), the active lane marked (the switch contract). */
+   account register), the active lane marked (the switch contract). Folds
+   open directly under the header's account switcher; display:flex would
+   otherwise defeat the [hidden] attribute the fold rides on. */
 .usage-switch {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 0 calc(var(--glance-pad) - var(--sp-2)) var(--sp-2);
+  padding: var(--sp-2) calc(var(--glance-pad) - var(--sp-2));
+  border-bottom: 1px solid var(--border);
+}
+.usage-switch[hidden] {
+  display: none;
 }
 .usage-popover .usage-track-mini {
   width: 56px;
@@ -11435,7 +11561,9 @@ body.pane-dragging * {
 .usage-row-stats {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
+  /* flex-start, not space-between: the delta chip sits NEXT TO the percent it
+     qualifies; .usage-reset's auto margin keeps the reset on the right edge. */
+  justify-content: flex-start;
   gap: var(--sp-2);
   margin-top: 6px;
 }
@@ -11751,6 +11879,122 @@ body.pane-dragging * {
     transform: none;
   }
   .pane-drop-ring {
+    animation: none;
+  }
+}
+
+/* ── PANE COVER: OFFER · SWITCH · LAUNCH ───────────────────────────────────────
+   The pane-drop idiom (blurred radial wash, centered card) for the three moments a
+   pane is not the user's: a usage-limit offer, a profile switch in flight, and an
+   agent starting up. One load-bearing difference from pane-drop: this overlay TAKES
+   the pointer — it carries buttons, and whatever is under it (a capped agent, a CLI
+   mid-interrupt, a TUI that has not mounted) has nothing useful to receive. The
+   keyboard is blocked in the pane itself (terminal-pane.ts), not here: CSS cannot
+   stop a keystroke. z-index above pane-drop so a drag started while a cover shows
+   cannot paint under the buttons. */
+.pane-offer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  /* HEAVIER than pane-drop's wash on purpose: the drop overlay wants the pane readable
+     at the edges (that's how you know it's the right pane); this one wants the switch
+     MACHINERY unreadable — interrupt, typed commands, dialogs are not the user's
+     business. The card carries all the information there is. */
+  background: radial-gradient(
+    120% 90% at 50% 44%,
+    color-mix(in srgb, var(--bg-app) 68%, transparent) 0%,
+    color-mix(in srgb, var(--bg-app) 94%, transparent) 100%
+  );
+  backdrop-filter: blur(26px) saturate(1.05);
+  -webkit-backdrop-filter: blur(26px) saturate(1.05);
+  opacity: 0;
+  transition: opacity var(--dur-2) var(--ease);
+}
+.pane-offer[hidden] {
+  display: none;
+}
+.pane-offer.is-active {
+  opacity: 1;
+}
+.pane-offer-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 280px;
+  max-width: min(92%, 420px);
+  padding: var(--sp-6) var(--sp-7);
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border-strong);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-elevated) 96%, var(--accent) 4%),
+    var(--bg-elevated)
+  );
+  box-shadow:
+    var(--shadow-3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
+  transform: translateY(8px) scale(0.97);
+  transition: transform var(--dur-2) var(--ease);
+  text-align: center;
+}
+.pane-offer.is-active .pane-offer-card {
+  transform: translateY(0) scale(1);
+}
+.pane-offer-ring {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--r-full);
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+/* The switching state's one moving element: the glyph turns while the interrupt +
+   resume run. An ambient in-flight indicator, not an interaction transition, so it
+   sits outside the 150ms motion cap; reduced-motion kills it outright. */
+.pane-offer-ring.is-spin svg {
+  animation: pane-offer-spin 1.2s linear infinite;
+}
+@keyframes pane-offer-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.pane-offer-ring.is-failed {
+  color: var(--danger-ink);
+  background: var(--danger-weak);
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+.pane-offer-title {
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  letter-spacing: -0.01em;
+  color: var(--text-hi);
+}
+.pane-offer-hint {
+  font-size: var(--fs-12);
+  color: var(--text-lo);
+}
+.pane-offer-actions {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pane-offer,
+  .pane-offer-card {
+    transition: none;
+  }
+  .pane-offer-card {
+    transform: none;
+  }
+  .pane-offer-ring.is-spin svg {
     animation: none;
   }
 }

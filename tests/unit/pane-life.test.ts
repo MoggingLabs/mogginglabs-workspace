@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { freshPaneLife } from '@ui/core/terminal/pane-life'
 import {
+  clearPaneReattached,
   isPaneLive,
   isPaneRemoteReady,
   isPaneSpawnSettled,
@@ -14,6 +15,7 @@ import {
   wasPaneReattached,
   whenPaneRemoteReady
 } from '@ui/core/terminal/liveness-port'
+import { bodyWithoutComments, sourceOf } from './source-body'
 
 // A PANE ID OUTLIVES ITS SHELLS.
 //
@@ -80,6 +82,40 @@ describe('retirePaneLife drops every mark', () => {
   })
 })
 
+describe('clearPaneReattached drops ONLY the reattach mark', () => {
+  // The mark means "an agent was already living here at spawn". The agent-gone verdict
+  // retires that claim — but the SHELL is the same live, spawn-settled process, so the
+  // other signals must survive. Dropping them too would re-open the raced-write hole
+  // whenPaneLive exists to close (audit F1's fix must not reintroduce a different bug).
+  it('reattached falls, the shell signals stand', () => {
+    const id = paneId()
+    markPaneLive(id)
+    markPaneSpawnSettled(id)
+    markPaneRemoteReady(id)
+    markPaneReattached(id)
+    clearPaneReattached(id)
+    expect([isPaneLive(id), isPaneSpawnSettled(id), isPaneRemoteReady(id), wasPaneReattached(id)]).toEqual([
+      true,
+      true,
+      true,
+      false
+    ])
+  })
+
+  it('is safe on an id that was never marked', () => {
+    expect(() => clearPaneReattached(paneId())).not.toThrow()
+  })
+
+  // The agents feature is renderer code (DOM at call time), so the WIRING is asserted over
+  // its source, same as the terminal-pane pins below: the process-table gone-branch must
+  // retire the reattach claim, or every post-restart resume adopts a phantom session and
+  // types nothing (audit F1).
+  it('the agent-gone verdict clears the mark', () => {
+    const src = sourceOf('src/ui/features/agents/index.ts')
+    expect(bodyWithoutComments(src, 'if (!ev.agentId)')).toContain('clearPaneReattached(')
+  })
+})
+
 describe('the two halves stay wired together', () => {
   // terminal-pane.ts is renderer code and cannot be instantiated here (no DOM, no Electron),
   // so the WIRING is asserted over its source. Both halves of the fix are one fix: clearing
@@ -136,6 +172,10 @@ describe('freshPaneLife re-arms every once-per-life latch', () => {
       liveMarked: false,
       remoteReadyMarked: false,
       remoteReadyProbe: '',
+      // Half of an alternate-screen sequence left over from the dead shell would complete
+      // against the new one's first bytes and dismiss a launch overlay before the agent
+      // had started — the same failure the remote probe beside it documents.
+      altScreenProbe: '',
       captureEmitted: false
     })
   })

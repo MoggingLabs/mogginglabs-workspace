@@ -35,6 +35,25 @@ export interface SpawnRequest {
 /** Private OSC emitted by the SSH bootstrap only after remote command execution starts. */
 export const REMOTE_READY_OSC = '\x1b]777;mogging-remote-ready\x07'
 /**
+ * A full-screen TUI taking the terminal over: DEC private mode 1049 (or the older 1047/47)
+ * SET. The CLIs emit it as part of mounting their interface, and for claude that is the
+ * moment typed keystrokes stop being swallowed — measured, not assumed
+ * (scripts/measure-agent-readiness.mjs; see the note in ui/core/terminal/liveness-port.ts).
+ *
+ * Shared because three layers must agree on the same bytes: the renderer scans the live
+ * stream for it, the AGENTLAUNCH gate asserts a real CLI produces it, and any future
+ * provider table records whether its CLI emits one at all.
+ */
+export const ALT_SCREEN_ENTER_RE = /\x1b\[\?(?:1049|1047|47)h/
+/** Longest prefix of an alt-screen sequence that a chunk boundary can split (`\x1b[?1049`). */
+export const ALT_SCREEN_ENTER_MAX_PREFIX = 8
+/**
+ * An SGR (colour/style) sequence — the cheapest proof that a TUI has actually PAINTED
+ * rather than merely negotiated. Taking the alternate screen happens a beat before the
+ * first frame, so readiness needs both: the takeover and a frame drawn into it.
+ */
+export const SGR_RE = /\x1b\[[0-9;]*m/
+/**
  * How the pty backing a pane behaves when its viewport grows. ConPTY appends empty rows at the
  * bottom and leaves scrollback alone; a unix pty pulls scrollback back down. xterm must be told
  * which, or the two viewports drift and ConPTY's repaint-on-resize writes stale rows into the

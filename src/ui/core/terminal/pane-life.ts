@@ -33,11 +33,15 @@ export interface PaneLife {
   remoteReadyMarked: boolean
   /** Partial match carried across PTY chunk boundaries while scanning for the readiness OSC. */
   remoteReadyProbe: string
+  /** Same, for the alternate-screen sequence that dismisses a launch overlay. Per-life
+   *  like its neighbour: a partial match from the previous shell must never complete
+   *  against the next one's first bytes. */
+  altScreenProbe: string
   /** The one session-end capture emission (revision C): exit and close race, whichever fires
    *  first sends the ladder and the other finds this latched. */
   captureEmitted: boolean
 }
 
 export function freshPaneLife(): PaneLife {
-  return { liveMarked: false, remoteReadyMarked: false, remoteReadyProbe: '', captureEmitted: false }
+  return { liveMarked: false, remoteReadyMarked: false, remoteReadyProbe: '', altScreenProbe: '', captureEmitted: false }
 }

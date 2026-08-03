@@ -85,6 +85,20 @@ export function wasPaneReattached(id: number): boolean {
 }
 
 /**
+ * The reattached pane's spawn-time agent is GONE — the process-table detector said so.
+ * The mark describes "an agent was already living here when we asked"; once that agent
+ * exits, a resume launch typed into the pane is a real launch again, not words into a
+ * running CLI's stdin. Only this mark is cleared: the shell itself is the same live,
+ * spawn-settled process, so the other signals still tell the truth. Without this, the
+ * mark held for the pane's whole life (only restart/dispose retire it) and every
+ * post-restart resume — the usage-limit failover above all — adopted a phantom session
+ * and typed nothing (audit F1).
+ */
+export function clearPaneReattached(id: number): void {
+  reattached.delete(id)
+}
+
+/**
  * Retire this pane id's SESSION LIFE — drop every mark so the next shell starts clean.
  *
  * Every signal here describes a SHELL, not an id: "produced output", "settled its spawn",
@@ -101,8 +115,71 @@ export function retirePaneLife(id: number): void {
   drop(live, id)
   drop(spawnSettled, id)
   drop(remoteReady, id)
+  agentReady.get(id)?.(false)
   reattached.delete(id)
   liveAtMs.delete(id)
+}
+
+// ── The agent's TUI is up and taking keystrokes ────────────────────────────────
+//
+// Unlike every signal above, this one is NOT a fact about the shell — a pane can launch
+// an agent, exit it, and launch another, and each launch has to wait on its OWN answer.
+// So it is a one-shot WAITER rather than a latch: whoever is about to type a launch
+// command registers first, and a mark with nobody waiting means nothing. That ordering is
+// what makes it re-armable without a generation counter, and it is why a marker emitted
+// by something else in the pane (the user's own vim, an earlier agent) cannot dismiss a
+// later launch's overlay.
+//
+// WHAT MARKS IT is measured, not assumed: scripts/measure-agent-readiness.mjs types probe
+// tokens into a booting claude every 250ms and reports which ones SURVIVE into its input
+// box. Across five runs, alternate-screen entry (`?1049h`) landed at 2.0–2.6s and always
+// AFTER the last keystroke claude dropped (1.79–2.36s), while the earlier protocol markers
+// this repo also knows — bracketed paste, mouse tracking (1.3–1.8s), cursor-shape query
+// (1.4–1.9s) — consistently fired while keystrokes were still being eaten. Alt-screen is
+// therefore the only one of them that can honestly mean "the pane accepts input".
+//
+// The mark is raised on alt-screen AND the first painted frame (terminal-pane.ts scans for
+// both). Input-readiness alone would be enough to not LOSE anything, but claude takes the
+// screen a beat before it draws, and lifting there hands over a blank terminal for a
+// fraction of a second — an intermediate step, which is the one thing the cover exists to
+// hide. The AGENTLAUNCH gate asserts the same pair against the real CLI, so the signal
+// this port ships on stays proven rather than remembered.
+
+const agentReady = new Map<number, (ready: boolean) => void>()
+
+/**
+ * Wait for THIS launch's agent to become usable: true when the TUI takes over, false at
+ * `ceilingMs`. The ceiling is a safety net, not a schedule — a real signal always resolves
+ * first, and a launch that never signals must still hand the pane back rather than trap it.
+ *
+ * Registering supersedes any earlier waiter for the pane (resolving it false): one pane has
+ * one launch in flight, and the newer one is the truthful subject.
+ */
+export function whenPaneAgentReady(id: number, ceilingMs: number): Promise<boolean> {
+  agentReady.get(id)?.(false)
+  return new Promise((resolve) => {
+    let settled = false
+    const done = (ready: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (agentReady.get(id) === done) agentReady.delete(id)
+      resolve(ready)
+    }
+    const timer = setTimeout(() => done(false), ceilingMs)
+    agentReady.set(id, done)
+  })
+}
+
+/** The pane's stream carried the TUI-takeover marker. No waiter ⇒ nothing to tell. */
+export function markPaneAgentReady(id: number): void {
+  agentReady.get(id)?.(true)
+}
+
+/** True while a launch is waiting on this pane — lets the stream scanner skip the scan
+ *  when nobody is listening. */
+export function isPaneAgentReadyPending(id: number): boolean {
+  return agentReady.has(id)
 }
 
 export function markPaneLive(id: number): void {
