@@ -165,14 +165,25 @@ export function runBrowserZeroSmoke(win: BrowserWindow): void {
   const consentReadback = (wsId: string): Promise<boolean> =>
     ES<boolean>(`window.bridge.invoke(${JSON.stringify(BrowserChannels.consentGet)}, ${JSON.stringify(wsId)})`)
 
-  /** ⌘+Shift+U, metaKey ONLY (finding 28). Dispatched on <body> with nothing focused: a
-   *  real keypress inside a text field is refused by design (finding 29), and opening the
-   *  dock parks the caret in its URL bar. */
-  const pressMetaShiftU = (): Promise<boolean> =>
+  /**
+   * Mod+Shift+U (finding 28). Dispatched on <body> with nothing focused: a real keypress inside
+   * a text field is refused by design (finding 29), and opening the dock parks the caret in its
+   * URL bar.
+   *
+   * Pressed with the modifier this platform is actually bound to —
+   * ⌘ on macOS, Ctrl on Windows/Linux (core/commands/chords.ts: the platform's own, never both).
+   *
+   * It was ⌘ everywhere, which is finding 28's press on a Mac and the WINDOWS KEY on Windows.
+   * `ctrlKey || metaKey` used to accept that, and accepting it is the bug chords.ts fixed —
+   * Win+K fired our palette *and* Windows' Cast panel from one press. So a ⌘ chord dispatched on
+   * Windows now correctly does nothing, and asserting that it toggles asserts the old defect.
+   */
+  const MOD = process.platform === 'darwin' ? 'metaKey' : 'ctrlKey'
+  const pressModShiftU = (): Promise<boolean> =>
     ES<boolean>(`(() => {
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
       document.body.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'u', code: 'KeyU', metaKey: true, shiftKey: true, bubbles: true, cancelable: true })
+        new KeyboardEvent('keydown', { key: 'u', code: 'KeyU', ${MOD}: true, shiftKey: true, bubbles: true, cancelable: true })
       )
       return true
     })()`)
@@ -222,7 +233,7 @@ export function runBrowserZeroSmoke(win: BrowserWindow): void {
         return { disabled: b instanceof HTMLButtonElement && b.disabled, title: b ? b.title : '' }
       })()`)
       const toggleClicked = await clickBrowserToggle() // a disabled control ignores this, by spec
-      await pressMetaShiftU() // ...and the shortcut funnels into the same toggle() refusal
+      await pressModShiftU() // ...and the shortcut funnels into the same toggle() refusal
       await sleep(700)
       const zeroBoot = await dockProbe()
       const zeroOpen = await isOpen()
@@ -332,12 +343,12 @@ export function runBrowserZeroSmoke(win: BrowserWindow): void {
       const okToast = await dangerToastText()
       const positiveConsentOk = afterOk.checked && !afterOk.disabled && okReadback === true && okToast === ''
 
-      // ── 7. ⌘+Shift+U (28) and the modal guard (29) ────────────────────────────
+      // ── 7. Mod+Shift+U (28) and the modal guard (29) ─────────────────────────
       const openBefore = await isOpen()
-      await pressMetaShiftU()
+      await pressModShiftU()
       await sleep(300)
       const openAfterMeta = await isOpen()
-      const metaTogglesOk = openBefore && !openAfterMeta // metaKey alone drives it now
+      const metaTogglesOk = openBefore && !openAfterMeta // the platform modifier alone drives it now
 
       await ES(`(window.__mogging.view('grid'), 1)`)
       await sleep(300)
@@ -347,7 +358,7 @@ export function runBrowserZeroSmoke(win: BrowserWindow): void {
       await clickWsClose(wsB)
       await sleep(500)
       const realModalUp = await modalOpen()
-      await pressMetaShiftU()
+      await pressModShiftU()
       await sleep(300)
       const openDuringModal = await isOpen()
       const modalBlocksOk = realModalUp && openDuringModal === openAfterMeta // nothing moved
@@ -355,7 +366,7 @@ export function runBrowserZeroSmoke(win: BrowserWindow): void {
       await clickModal('ghost') // Cancel — the workspace stays
       await sleep(400)
       const modalGone = !(await modalOpen())
-      await pressMetaShiftU()
+      await pressModShiftU()
       await sleep(300)
       const openAfterModalGone = await isOpen()
       const shortcutOk = metaTogglesOk && modalBlocksOk && modalGone && openAfterModalGone === !openAfterMeta

@@ -890,10 +890,11 @@ function exposeForDev(controller: WorkspaceController): void {
     reorganize: () => controller.openReorganize(), // opens the painter panel
     reorganizeApply: (spec: GridSpecModel) => controller.requestReorganize(spec), // paint result, no UI
     status: () => controller.layoutStatus(),
-    close: (paneId: number) => {
-      const id = controller.activeMeta()?.id
-      if (id) void controller.requestClosePane(id, paneId)
-    }
+    // The CONTROL API's close verb, not the ✕'s — `layout.close` sits beside `apply` and
+    // `split` and means the same kind of thing they do: a programmatic layout edit that is
+    // finished when it returns. The ✕'s undo grace is a human affordance and is driven
+    // where it lives, through the real button (PANECLOSE).
+    close: (paneId: number) => controller.closePaneById(paneId)
   }
   w.__mogging.workspace = {
     create: (opts?: CreateOpts) => controller.create(opts ?? {}),

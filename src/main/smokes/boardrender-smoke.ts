@@ -70,6 +70,11 @@ export function runBoardRenderSmoke(win: BrowserWindow): void {
   }
   /** The two chord dispatches, one per modifier: Ctrl is what the OLD code honoured (so a "must
    *  not fire" assertion built on it genuinely fails pre-fix) and ⌘ is finding 28 itself. */
+  /** ...but only ONE of them is this platform's real modifier (core/commands/chords.ts: Ctrl on
+   *  Windows/Linux, ⌘ on macOS — never both), and only that one may be used as a POSITIVE
+   *  control. The negative controls below still press both: neither may toggle while something
+   *  is blocking, whichever key it came from. */
+  const PLATFORM_MOD: 'ctrl' | 'meta' = process.platform === 'darwin' ? 'meta' : 'ctrl'
   const chord = (target: string, mods: 'ctrl' | 'meta'): string =>
     `${target}.dispatchEvent(new KeyboardEvent('keydown', { key: 'G', code: 'KeyG', ${mods === 'ctrl' ? 'ctrlKey' : 'metaKey'}: true, shiftKey: true, bubbles: true }))`
   /** The active view, read the way the app writes it (#content carries `view-<name>`). */
@@ -310,15 +315,21 @@ export function runBoardRenderSmoke(win: BrowserWindow): void {
       await ES(`(window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })), 1)`)
       await waitTrue(`!document.querySelector('.palette-overlay:not([hidden])')`)
 
-      // The positive control, ⌘ ONLY: nothing is blocking now, so the chord must toggle OFF the
-      // board and then back ON. Pre-fix this never moves — the handler read e.ctrlKey and metaKey
-      // was invisible to it, which is the whole of finding 28.
+      // The positive control, the PLATFORM MODIFIER ONLY (⌘ on macOS, Ctrl elsewhere): nothing is
+      // blocking now, so the chord must toggle OFF the board and then back ON. Pre-fix this never
+      // moves — the handler read e.ctrlKey and metaKey was invisible to it, which is the whole of
+      // finding 28, and on the Mac this is still exactly the ⌘ press that finding is about.
+      //
+      // It may not be ⌘ everywhere. chords.ts made the modifier the platform's own and never both,
+      // because `ctrlKey || metaKey` made the WINDOWS key a modifier on Windows (Win+K fired our
+      // palette *and* Cast). A ⌘ chord dispatched on Windows is that refusal working, so pressing
+      // it here asserted the very bug the product just fixed.
       await ES(`window.__mogging.view('board')`)
       await waitTrue(`!!document.querySelector('#content.view-board')`)
-      await ES(`(${chord('window', 'meta')}, 1)`)
+      await ES(`(${chord('window', PLATFORM_MOD)}, 1)`)
       await sleep(300)
       const viewAfterMetaOnce = await ES<string>(VIEW)
-      await ES(`(${chord('window', 'meta')}, 1)`)
+      await ES(`(${chord('window', PLATFORM_MOD)}, 1)`)
       await sleep(300)
       const viewAfterMetaTwice = await ES<string>(VIEW)
       const metaToggles = !viewAfterMetaOnce.includes('view-board') && viewAfterMetaTwice.includes('view-board')

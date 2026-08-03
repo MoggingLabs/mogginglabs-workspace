@@ -837,12 +837,21 @@ export class WorkspaceController {
     this.onChange()
   }
 
-  /** One close policy for pane chrome, shortcuts, control API, and the last pane. */
+  /**
+   * One close policy for pane chrome, shortcuts, control API, and the last pane.
+   *
+   * The live-work CONFIRM is shared by every door (WSCLOSE proves the three of them
+   * answer the same dialog). The undo GRACE is not, and `undo` is where they part —
+   * see the branch at the end of this method.
+   */
   async requestClosePane(
     wsId: string,
     paneId: number,
-    opts: { replacementCwd?: string } = {}
+    opts: { replacementCwd?: string; undo?: boolean } = {}
   ): Promise<boolean> {
+    // A close nobody can take back must not promise that it can be. Both non-undo doors
+    // are scripted (see the closing branch), and both reach the confirm dialog below.
+    const undoable = opts.undo !== false && !opts.replacementCwd
     const view = this.views.get(wsId)
     if (!view || !view.layout.paneIds().includes(paneId)) return false
     if (view.layout.paneCount <= 1 && !opts.replacementCwd) {
@@ -860,11 +869,10 @@ export class WorkspaceController {
         : 'This pane is still running.'
       const ok = await confirmDialog({
         title: `Close pane ${paneId}?`,
-        // The worktree path is the one close with no undo: the directory the pane runs in
-        // is about to be deleted, so there is nothing to restore the pane into.
-        message: opts.replacementCwd
-          ? `${what} Closing it stops that work and cannot be undone.`
-          : `${what} Closing it stops that work. You’ll have a few seconds to undo.`,
+        // Only the door that actually offers the undo may promise one.
+        message: undoable
+          ? `${what} Closing it stops that work. You’ll have a few seconds to undo.`
+          : `${what} Closing it stops that work and cannot be undone.`,
         confirmLabel: 'Close pane',
         danger: true
       })
@@ -874,11 +882,21 @@ export class WorkspaceController {
       this.splitPane(wsId, paneId, 'h', opts.replacementCwd)
       if (view.layout.paneCount <= 1) return false
     }
-    // "Remove worktree" closes hard — its caller deletes the pane's directory next, and
-    // a pane kept alive in a directory being unlinked would hold the removal open past
-    // its bounded retries. Every other close gets the same undo grace a workspace does.
-    if (opts.replacementCwd) this.closePane(wsId, paneId)
-    else this.softClosePane(wsId, paneId)
+    // THE UNDO GRACE BELONGS TO THE HUMAN GESTURE. A misclicked ✕ is one click from being
+    // taken back, and the toast is right there to take it back with — so pane chrome and
+    // the shortcuts get the same grace a workspace close gets, pane still running under it.
+    //
+    // A SCRIPTED close has nobody at that toast, and deferring it there is not a grace but
+    // a lie about what happened:
+    //   - `mogging close-pane <id>` answers with an exit code (docs/06) and the next line of
+    //     the script assumes the pane is gone. Parked, it still holds its PTY, its cwd, its
+    //     claims and its id for six more seconds, behind an answer that said "ok".
+    //   - "Remove worktree" deletes the pane's directory next; a pane kept alive in a
+    //     directory being unlinked holds the removal open past its bounded retries.
+    // Both close for good. `undoable` is sampled at the top so the dialog cannot promise an
+    // undo this branch will not give.
+    if (undoable) this.softClosePane(wsId, paneId)
+    else this.closePane(wsId, paneId)
     return true
   }
 
@@ -2112,10 +2130,13 @@ export class WorkspaceController {
     v.layout.toggleExpand(paneId, mode)
   }
 
-  /** Control API: close a pane anywhere (last pane closes its workspace). */
+  /** Control API: close a pane anywhere (last pane closes its workspace). Scripted, so it
+   *  closes for GOOD — `mogging close-pane` reports done and its caller acts on that; an
+   *  undo toast nobody is standing at would leave the pane alive behind a successful
+   *  answer. Live work still confirms (requestClosePane's shared policy, WSCLOSE). */
   closePaneById(paneId: number): void {
     const v = this.viewForPane(paneId)
-    if (v) void this.requestClosePane(v.meta.id, paneId)
+    if (v) void this.requestClosePane(v.meta.id, paneId, { undo: false })
   }
 
   /** Zoom/restore the active workspace's focused pane (Ctrl/Cmd+Shift+Enter). */
