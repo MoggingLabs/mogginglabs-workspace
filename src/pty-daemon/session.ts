@@ -6,7 +6,7 @@
 // It also PERSISTS sessions (cwd + command label + scrollback) to a small store, so the
 // daemon self-recovers on a cold start / crash and repaints prior scrollback (Phase-1/03).
 import * as crypto from 'node:crypto'
-import { spawnPty, type IPty } from '@backend/platform/pty-host'
+import { ptyEmulation, spawnPty, type IPty } from '@backend/platform/pty-host'
 import { mergeEnv } from '@backend/platform/env-path'
 import { killPtyTree } from '@backend/platform/process-tree'
 import { paneShellLaunch } from '@backend/platform/shell'
@@ -841,6 +841,57 @@ class PaneSession {
   }
 
   /**
+   * ATTACH-SCOPED REALIGNMENT — the one deliberate exception to the same-size dedupe.
+   *
+   * A reattaching client rebuilds its terminal from the ring, and the ring is a BYTE LOG,
+   * not a screen model. conhost's screen is a bounded, reflowing window with its own scroll
+   * history; replaying the log into a fresh xterm reproduces the CONTENT and not the row
+   * alignment, so the two can end up describing the same session at different rows. Measured
+   * on the Windows runner (PROFPERSIST_B, run 31313257413), the numbers are unambiguous: the
+   * replay left the cursor at row 0 column 45 — where the ring's last absolutely-addressed
+   * diff frame happened to end — while content ran to row 21. conhost then addressed live
+   * output against ITS screen (a prompt near its row 14), so every line landed mid-buffer
+   * over rows that already held phase-A text, and rows 19-21 were never erased by anything.
+   * ConPTY paints by diff and emits no erase for a row it did not repaint, so the residue
+   * survives verbatim: `MARKB1=PROFILE_B_4242echo SHELL_READY_0_…`.
+   *
+   * Nothing in the replay can fix that, because the daemon does not know conhost's cursor
+   * row — only conhost does. It will say so, though, and a resize is the one thing that
+   * makes it: conhost answers EVERY resize it is handed with a full-viewport repaint, which
+   * restates its whole screen — content, cursor and all — in absolute coordinates. That
+   * single burst reconciles a fresh client with conhost by construction, whatever the
+   * provenance of the divergence.
+   *
+   * So the dedupe in resize() stands (a same-size resize mid-session is a spurious repaint
+   * spliced over a live agent's frame — REFIT_SETTLE_MS exists for that) and THIS is the
+   * narrow, named hole in it: once per attach, when a client has measured the pane at
+   * exactly the size the session already holds. That case applies nothing today, which is
+   * precisely why it is the case that cannot self-heal.
+   *
+   * ConPTY only. A POSIX pty is a byte pipe with no renderer on the far side — nothing
+   * addresses rows on the terminal's behalf, so there is no alignment to lose and the
+   * SIGWINCH would be pure noise to the foreground program. Same platform seam the renderer
+   * reads for xterm's `windowsPty` (pty-host's ptyEmulation), so the two can never disagree
+   * about which backend is underneath.
+   *
+   * Deliberately does NOT touch this.cols/this.rows, mark the pane dirty, or flush a pending
+   * launch: nothing about the session CHANGED. This emits bytes and claims nothing.
+   */
+  repaintForAttach(): void {
+    if (ptyEmulation().backend !== 'conpty') return
+    try {
+      this.proc.resize(this.cols, this.rows)
+    } catch (err) {
+      // A pty tearing down under an attach is ordinary; the client simply keeps the ring's
+      // own alignment, which is what it had before this existed.
+      log(
+        `pane ${this.id} gen ${this.gen}: attach realignment skipped (pty exiting?): ` +
+          (err instanceof Error ? err.message : String(err))
+      )
+    }
+  }
+
+  /**
    * Every byte headed for the pty goes through here — and no ONE write may be larger than a
    * pty's input queue, which is a fixed kernel buffer that DROPS what does not fit rather
    * than blocking (PTY_INPUT_CHUNK_CHARS carries the sizes and the evidence). Anything over
@@ -1381,7 +1432,18 @@ export class SessionManager {
       // the restore's persisted-size guess into a fact, which is what a deferred resume
       // waits on (resize() confirms the changed case itself). A dims-less attach (an
       // unmeasured hidden pane) confirms nothing: the guess stays a guess.
-      else if (specDimsUsable(normalizedSpec)) existing.confirmDims()
+      //
+      // ...and it is the one attach that leaves the client to derive its own row alignment
+      // from a byte log, because no resize fires to make conhost restate its screen. That is
+      // where the reattach smear lives on ConPTY, so this case — measured, equal, existing —
+      // asks for the repaint explicitly (repaintForAttach carries the measurement and the
+      // reasoning). Ordered BEFORE the confirm so the realignment burst precedes any output
+      // from a launch the confirm releases. The dims-less arm below deliberately gets
+      // neither: an unmeasured client has stated nothing to align to.
+      else if (specDimsUsable(normalizedSpec)) {
+        existing.repaintForAttach()
+        existing.confirmDims()
+      }
       return { pane: existing, existed: true }
     }
     // A legacy/corrupt restore may have lost SSH identity. The app's resolved remote spec is

@@ -217,6 +217,60 @@ describe('4. belief follows the pty, never leads it', () => {
   })
 })
 
+describe('4b. an attach realigns the client with conhost’s screen — once, and only there', () => {
+  // The ring is a byte log, not a screen model, so a client rebuilt from it derives its own
+  // row alignment and can disagree with conhost about which row is which (measured on the
+  // Windows runner: replay cursor at row 0 col 45, content to row 21, live output landing
+  // mid-buffer over rows nothing ever erased). Only conhost can restate its screen, and only
+  // a resize makes it. This is the narrow, named hole in the same-size dedupe.
+  const SESSION = 'src/pty-daemon/session.ts'
+  const body = bodyWithoutComments(sourceOf(SESSION), 'repaintForAttach(): void')
+
+  it('forwards a genuine SAME-size resize — that is the whole primitive', () => {
+    expect(body).toContain('this.proc.resize(this.cols, this.rows)')
+  })
+
+  it('claims nothing: no belief written, no dirty mark, no launch released', () => {
+    // Nothing about the session CHANGED — this emits bytes and reports no news. A stray
+    // `this.cols =` here would let a repaint rewrite the grid it was only supposed to restate.
+    expect(body).not.toMatch(/this\.(cols|rows)\s*=/)
+    expect(body).not.toContain('flushPendingLaunch')
+    expect(body).not.toContain('onChange')
+  })
+
+  it('is ConPTY-only, as its FIRST act — a POSIX pty has no alignment to lose', () => {
+    const guard = body.indexOf("ptyEmulation().backend !== 'conpty'")
+    expect(guard).toBeGreaterThan(-1)
+    expect(guard).toBeLessThan(body.indexOf('this.proc.resize('))
+    // The same seam the renderer reads for xterm's windowsPty, so the two sides can never
+    // disagree about which backend is underneath.
+    expect(bodyWithoutComments(sourceOf('src/backend/platform/pty-host.ts'), 'export function ptyEmulation()')).toContain(
+      "backend: 'conpty'"
+    )
+  })
+
+  it('fires ONLY on the measured-and-equal attach — never dims-less, never a fresh pane', () => {
+    const ensure = bodyWithoutComments(sourceOf(SESSION), 'ensure(id: string, spec: SpawnSpec)')
+    // Exactly one call site, and it sits inside the `else if (specDimsUsable(...))` arm: the
+    // attach that applies nothing today, which is precisely why it cannot self-heal.
+    expect(ensure.match(/repaintForAttach\(\)/g) ?? []).toHaveLength(1)
+    const arm = ensure.slice(ensure.indexOf('else if (specDimsUsable(normalizedSpec))'))
+    expect(arm.slice(0, arm.indexOf('}'))).toContain('existing.repaintForAttach()')
+    // A dims-less attach states no measurement, so there is nothing to align to; a resize
+    // that CHANGES the grid already repaints on its own.
+    const changed = ensure.slice(ensure.indexOf('const dims = attachDims'), ensure.indexOf('else if (specDimsUsable'))
+    expect(changed).not.toContain('repaintForAttach')
+  })
+
+  it('the mid-session dedupe it makes an exception to is still there', () => {
+    // The exception is narrow BECAUSE the rule is right: a same-size resize mid-session is a
+    // spurious repaint spliced over a live agent's frame.
+    const resize = bodyWithoutComments(sourceOf(SESSION), 'resize(cols: number, rows: number): void')
+    expect(resize).toMatch(/if\s*\(cols === this\.cols && rows === this\.rows\)/)
+    expect(resize).not.toContain('repaintForAttach')
+  })
+})
+
 describe('5. no drop is silent', () => {
   it('the daemon reports input and resize aimed at a pane it has no session for', () => {
     const src = sourceOf('src/pty-daemon/transport.ts')
