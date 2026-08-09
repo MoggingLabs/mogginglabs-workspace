@@ -80,6 +80,55 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
       })()`
     )
 
+  /** DIAGNOSTIC ONLY: the pane's ROW GEOMETRY. The grids agree (see gridOf), so a residue
+   *  tail can only be a viewport/row-alignment disagreement: ConPTY addresses rows
+   *  absolutely inside conhost's own screen, and the ring is a BYTE LOG, not a screen model
+   *  — replayed into a fresh terminal it need not land the cursor on the row conhost thinks
+   *  it is on. This reads the sign and the size of that disagreement directly, which is the
+   *  one thing the verdict has never carried:
+   *
+   *    cursorAbs   — where the terminal will write next (baseY + cursorY)
+   *    lastRow     — the last row that actually HAS content
+   *    lag         — lastRow - cursorAbs. ZERO on a healthy pane. POSITIVE means the
+   *                  terminal is about to write OVER a row that already has text, which is
+   *                  the overpaint, and the number IS the offset (expected: 3).
+   *
+   *  `markRow` and `tail` say where the scraped line physically landed, so the next reading
+   *  of a residue can be attributed to a row rather than inferred from a string. */
+  const geometryOf = (): Promise<unknown> =>
+    ES(
+      `(() => {
+        const p = (window.__mogging.panes || []).find((x) => x.id === ${PANE})
+        if (!p) return null
+        const b = p.term.buffer.active
+        const rows = []
+        for (let i = 0; i < b.length; i++) {
+          const l = b.getLine(i)
+          rows.push(l ? l.translateToString(true) : '')
+        }
+        let lastRow = -1
+        for (let i = rows.length - 1; i >= 0; i--) { if (rows[i] !== '') { lastRow = i; break } }
+        const cursorAbs = b.baseY + b.cursorY
+        let markRow = -1
+        for (let i = rows.length - 1; i >= 0; i--) { if (/^MARKB1=/.test(rows[i])) { markRow = i; break } }
+        return {
+          rows: p.term.rows,
+          cols: p.term.cols,
+          length: b.length,
+          baseY: b.baseY,
+          viewportY: b.viewportY,
+          cursorY: b.cursorY,
+          cursorX: b.cursorX,
+          cursorAbs,
+          lastRow,
+          lag: lastRow - cursorAbs,
+          markRow,
+          markText: markRow >= 0 ? rows[markRow] : null,
+          tail: rows.slice(Math.max(0, rows.length - 8)).map((t, k) => ({ i: Math.max(0, rows.length - 8) + k, t }))
+        }
+      })()`
+    )
+
   /** Echo the pointer var with a distinct prefix and poll for its result line. */
   const probeEnv = async (prefix: string): Promise<string> => {
     await cli(['send', String(PANE), sh.echoVar('FAKE_MARK', `${prefix}=`)])
@@ -136,10 +185,13 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
 
       // The restored pane must carry B's env — the DEFAULT (A) would be the 6/04 bug.
       const gridAtMount = await gridOf() // before a single probe byte is typed
+      const geomAtMount = await geometryOf() // ...and where the replay left the cursor
       const settled = await settle() // restore relaunched the lineup: gemini is back on the screen
       const gridAfterSettle = await gridOf()
+      const geomAfterSettle = await geometryOf()
       const restored = await probeEnv('MARKB1')
       const gridAtProbe = await gridOf() // the reading that explains a residue tail, if any
+      const geomAtProbe = await geometryOf() // ...and `lag` is the offset itself
       const restoredOnB = restored === MARK_B
       const neverA = !(await bufferText()).includes(`=${MARK_A}`)
 
@@ -195,7 +247,10 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
         settled,
         gridAtMount,
         gridAfterSettle,
-        gridAtProbe
+        gridAtProbe,
+        geomAtMount,
+        geomAfterSettle,
+        geomAtProbe
       })
       app.exit(pass ? 0 : 1)
     } catch (e) {
