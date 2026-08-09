@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { parse as parseJsonc } from 'jsonc-parser'
+// Subpath, not the barrel — the barrel's install.ts re-export reaches node-pty (POSIX
+// loads it at import), and this module sits in app-settings' unit-tested graph.
 import {
   NOTIFY_HOOK_SOURCE,
   aiderBellEnv,
@@ -11,7 +13,7 @@ import {
   opencodeConfig,
   opencodePluginSource,
   opencodeTuiConfig
-} from '@backend/features/agents'
+} from '@backend/features/agents/notify-hook'
 
 // App-wiring for the "always rings the bell" layer (backend/features/agents/
 // notify-hook.ts): write the generated notify script + per-CLI config files into
