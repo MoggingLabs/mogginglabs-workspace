@@ -3,6 +3,7 @@
 // a cwd, and the resulting command string.
 
 import type { AgentCliId, AgentExecutionTarget } from '../domain/agent-cli'
+import type { PaneLaunchIntent } from '../domain/launch-intent'
 
 /** An agent CLI + whether it's installed (on PATH). */
 export interface AgentInfo {
@@ -158,6 +159,25 @@ export interface AgentCommandCommitResult {
 export interface AgentCommandResult {
   ok: boolean
   command?: string
+  /**
+   * What this launch IS, resolved — the composer's own input, handed back so it can be
+   * persisted with the pane and re-composed on restore.
+   *
+   * The command string above is the composer's OUTPUT, and an output can only be recovered
+   * by re-parsing it. That is what restore used to do, matching the command's first token
+   * against a table of CLI names; the first token of every command this composer builds is
+   * `cd`, so it recovered nothing and every restored pane lost its agent and its profile.
+   * The input travels alongside the output now, and nothing has to be parsed back.
+   */
+  intent?: PaneLaunchIntent
+  /**
+   * This pane had been running under a profile that no longer exists, so the launch fell
+   * back. NOT a refusal — a restore must not be blocked by a profile the user deleted — but
+   * it must not be silent either: the pane comes back on a DIFFERENT config home, with
+   * different sessions and a different login, and the one thing worse than moving it is
+   * moving it without saying so. The renderer phrases it; never a launch gate.
+   */
+  profileFallback?: { wanted: string; using?: string }
   /** Honest launch refusal (unknown agent, missing remote, or scoped-plan conflict). */
   reason?: string
   /** claude launches: main declared the launch cwd TRUSTED in the launch home (and

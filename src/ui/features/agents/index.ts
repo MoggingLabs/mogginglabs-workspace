@@ -1,6 +1,8 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
 import { AgentChannels, AgentHookChannels, IntegrationsChannels, ProfileChannels, TerminalChannels, isAgentCliId, planSignature, type AgentCliId, type AgentCommandResult, type AgentDetectedEvent, type AgentInfo, type AgentProfile, type GlobalHooksMutationResult, type GlobalHooksStatus, type HostedCliId, type McpStatusSnapshot, type PaneId, type WorkspaceToolPlan } from '@contracts'
 import { dismissSignInBanner, offerSignIn } from './signin-banner'
+import { markLaunchDegraded } from './degraded-banner'
+import { onLaunchDegraded } from '../../core/terminal/degraded-port'
 import { interruptAgent, noteAgentGone, noteAgentPresent, recordSwitchPhase, resetSwitchTrace, switchTrace } from './interrupt'
 import { endProvesAgentGone } from './interrupt-core'
 import { NO_LAUNCH_COVER, beginLaunchCover, type LaunchCover } from './launch-readiness'
@@ -20,7 +22,7 @@ import { getFocusedPane } from '../../core/layout/focus'
 import { getPaneCwd, getPaneCwdProjection, onPaneCwdProjection, setPaneCwd } from '../../core/layout/pane-cwd'
 import { getPaneRemote, setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
 import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover, type AgentLaunchRequest } from '../../core/agents/launch-port'
-import { armSpawnRun, whenSpawnRunOutcome } from '../../core/terminal/spawn-run-port'
+import { armSpawnRun, whenSpawnRunOutcome, type SpawnRunBuild } from '../../core/terminal/spawn-run-port'
 import { paneInstance } from '../../core/terminal/pane-instance-port'
 import { clearPaneAgentSession, getPaneAgentSession, onPaneAgentSession, setPaneAgentSession, type PaneAgentSession } from '../../core/agents/agent-session-port'
 import { allCommands, setCommands } from '../../core/commands/command-port'
@@ -190,6 +192,11 @@ export const agentsFeature: UiFeature = {
       if (session) noteAgentPresent(Number(paneId))
       else if (end && endProvesAgentGone(end)) noteAgentGone(Number(paneId))
     })
+
+    // A pane that restored having lost its launch settings. It comes back with its history
+    // and nothing else, so it says so and offers the relaunch — rather than passing for a
+    // shell that was only ever a shell, which is how a lost session goes unnoticed.
+    onLaunchDegraded((paneId, agentId) => markLaunchDegraded(paneId, agentId))
 
     async function onAgentDetected(ev: AgentDetectedEvent): Promise<void> {
       const paneId = Number(ev?.id)
@@ -538,18 +545,26 @@ export const agentsFeature: UiFeature = {
         consume?: boolean
       }
     ): Promise<{ mine: AgentProfile[]; effectiveProfile?: string; workspaceId?: string; result: AgentCommandResult }> {
-      // Default profile (order 0) applies when none was named and any exist (4/04).
+      // The default profile (order 0) is resolved by MAIN, not here. The renderer used to
+      // substitute `mine[0]?.id` and send it as an explicitly NAMED profile, which made an
+      // unnamed launch indistinguishable from a deliberate one — so a relaunch could never
+      // honour the profile the pane had actually been running under, and re-answered
+      // "whichever is order 0 right now" instead. Anything that moved order 0 since (a
+      // profile activated in Settings, a newly discovered login) silently moved the pane.
+      //
+      // Sending only what the caller NAMED lets main apply its precedence: named, else the
+      // pane's own recorded profile, else order 0. `mine` is still fetched for the labels
+      // below (profile name in toasts and the ⋯ menu).
       let mine: AgentProfile[] = []
       let effectiveProfile = profileId
       const workspaceId = workspaceIdForPane(paneId)
       try {
         mine = (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
-        effectiveProfile = profileId ?? mine[0]?.id
         const result = await agentsClient.command({
           agentId: provider,
           cwd,
           resume,
-          profileId: effectiveProfile,
+          profileId,
           workspaceId,
           // Names the pane so a cross-profile resume can continue its EXACT session
           // (main reads the context monitor's lock — ADR 0013). Id only.
@@ -560,6 +575,11 @@ export const agentsFeature: UiFeature = {
           remote,
           ...(opts?.consume === false ? { consume: false } : {})
         })
+        // What main ACTUALLY resolved, straight from the build's own intent — the labels
+        // below then name the profile the pane really launched under rather than the one
+        // this side guessed. Falls back to the local guess only when main returned no
+        // intent (a refusal, or a custom/unknown provider).
+        effectiveProfile = result.intent?.profileId ?? profileId ?? mine[0]?.id
         return { mine, effectiveProfile, workspaceId, result }
       } catch {
         return { mine, effectiveProfile, workspaceId, result: { ok: false } }
@@ -742,7 +762,9 @@ export const agentsFeature: UiFeature = {
         cover.cancel()
         return
       }
-      agentsClient.launchInto(paneId, result.command)
+      // The build's own intent rides with the bytes: this is the ONLY path by which a pane
+      // launched any way other than the wizard ever records what it is running.
+      agentsClient.launchInto(paneId, result.command, result.intent)
       recordCliLaunch(paneId, provider, cwd, resume, { mine, effectiveProfile, workspaceId, result })
       // Hold the cover until the agent is genuinely usable, then lift it — on the agent's
       // word OR on the ceiling, because a cover that can outlive its own failure mode is a
@@ -793,6 +815,20 @@ export const agentsFeature: UiFeature = {
       if (result.needsSignIn) {
         const target = result.needsSignIn
         setTimeout(() => offerSignIn(paneId, target, true), 1200)
+      }
+      // This pane was running under a profile that no longer exists. It still launched — a
+      // restore must not be blocked by a deleted profile — but it is on a DIFFERENT config
+      // home now, which means different sessions and a different login. Say so while it is
+      // on screen, rather than letting the user discover it from a session list that has
+      // gone quietly empty.
+      if (result.profileFallback) {
+        const { wanted, using } = result.profileFallback
+        const usingName = mine.find((p) => p.id === using)?.name
+        showToast({
+          tone: 'attention',
+          title: `Pane ${paneId} could not use its previous profile`,
+          body: `“${wanted}” no longer exists, so this pane launched on ${usingName ? `“${usingName}”` : 'the provider default'} instead. Its earlier sessions live under the old profile's config home.`
+        })
       }
       // Remember the tool-plan signature this pane launched with (8/09) — a
       // later plan edit flips it to restart-needed.
@@ -884,9 +920,11 @@ export const agentsFeature: UiFeature = {
       const prep = custom || !isAgentCliId(provider)
         ? null
         : prepareCliLaunch(paneId, provider, cwd, false, req.profileId, undefined, false)
-      let build: Promise<string | null> = custom
-        ? Promise.resolve(customCmd)
-        : prep!.then((p) => (p.result.ok && p.result.command ? p.result.command : null))
+      let build: Promise<SpawnRunBuild | null> = custom
+        ? Promise.resolve({ command: customCmd })
+        : prep!.then((p) =>
+            p.result.ok && p.result.command ? { command: p.result.command, intent: p.result.intent } : null
+          )
       if (import.meta.env.DEV && spawnRunHoldMs > 0) {
         const ms = spawnRunHoldMs
         build = new Promise<void>((r) => setTimeout(r, ms)).then(() => build)
@@ -930,7 +968,7 @@ export const agentsFeature: UiFeature = {
         }
         if (outcome !== true) {
           await whenPaneLive(paneId, 15000)
-          agentsClient.launchInto(paneId, p.result.command)
+          agentsClient.launchInto(paneId, p.result.command, p.result.intent)
         }
         recordCliLaunch(paneId, provider, cwd, false, p)
         // Both arms end here: the daemon typed it at spawn, or the fallback just did.

@@ -13,11 +13,34 @@ import { channelFromEnv, runtimeSegment, type ReleaseChannel } from '@contracts'
 
 const APP = 'MoggingLabs'
 
+const sameDir = (a: string, b: string): boolean => {
+  const norm = (p: string): string => path.resolve(p).replace(/[\\/]+$/, '')
+  return process.platform === 'win32' ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b)
+}
+
 /** The OS base under which every MoggingLabs runtime path lives. */
 export function runtimeBaseDir(): string {
-  return process.platform === 'win32'
-    ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
-    : process.env.XDG_RUNTIME_DIR || path.join(os.homedir(), 'Library', 'Application Support')
+  const osDefault =
+    process.platform === 'win32'
+      ? path.join(os.homedir(), 'AppData', 'Local')
+      : path.join(os.homedir(), 'Library', 'Application Support')
+  const base =
+    process.platform === 'win32'
+      ? process.env.LOCALAPPDATA || osDefault
+      : process.env.XDG_RUNTIME_DIR || osDefault
+  // Both branches fall back to the REAL per-user tree, which is correct for the app and
+  // catastrophic for a test: one ensureRuntimeDir() away from the user's live sessions.db.
+  // vitest.config.ts redirects this, but a redirect nobody enforces is a redirect somebody
+  // deletes — and the failure is silent, months later, as fixture panes in a real session.
+  // Same principle as runtimeIsolationError's "loud refusal at boot, never a silent massacre",
+  // one layer lower, where the path is actually derived.
+  if (process.env.VITEST && sameDir(base, osDefault)) {
+    throw new Error(
+      `runtimeBaseDir(): a test run resolved the REAL per-user runtime tree (${base}). ` +
+        'Point LOCALAPPDATA / XDG_RUNTIME_DIR at a temp dir — vitest.config.ts `test.env` does this.'
+    )
+  }
+  return base
 }
 
 /** The runtime dir for a channel (default: the inherited MOGGING_CHANNEL). PURE — it

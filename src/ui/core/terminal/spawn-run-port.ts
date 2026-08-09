@@ -22,19 +22,29 @@
  * the pre-spawn-run behavior (typed on live).
  */
 
-const armed = new Map<number, Promise<string | null>>()
+import type { PaneLaunchIntent } from '@contracts'
+
+/** A built launch: the line to type, and what that line IS. The intent travels with the
+ *  command so a wizard-launched pane records its agent and PROFILE from its first instant,
+ *  instead of the store having to recover them by parsing the command back later. */
+export interface SpawnRunBuild {
+  command: string
+  intent?: PaneLaunchIntent
+}
+
+const armed = new Map<number, Promise<SpawnRunBuild | null>>()
 const outcomes = new Map<number, boolean>()
 const waiters = new Map<number, Set<(delivered: boolean | null) => void>>()
 
 /** Arm a pane's launch command build. Must run BEFORE the pane constructs (the
  *  controller emits spawn-deliver requests pre-create; the agents feature arms
  *  synchronously inside the port callback). Resolves to null when the build failed. */
-export function armSpawnRun(paneId: number, build: Promise<string | null>): void {
+export function armSpawnRun(paneId: number, build: Promise<SpawnRunBuild | null>): void {
   armed.set(paneId, build)
 }
 
 /** One-shot claim by the spawning pane. Null = nothing armed (normal pane). */
-export function claimSpawnRun(paneId: number): Promise<string | null> | null {
+export function claimSpawnRun(paneId: number): Promise<SpawnRunBuild | null> | null {
   const build = armed.get(paneId) ?? null
   armed.delete(paneId)
   return build

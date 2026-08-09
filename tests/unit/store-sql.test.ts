@@ -75,6 +75,18 @@ const LOCAL: PersistedPane = {
   reportedCwd: 'C:\\repos\\alpha\\.mogging\\worktrees\\x',
   reportedCwdAt: 1_700_000_000_000,
   command: 'claude',
+  // Launch intent spans TWO columns (agent_id + launch_intent), so it is exactly the shape
+  // of field this file exists to catch: map it correctly, forget one of the three column
+  // lists, and the pane comes back having lost the profile it ran under.
+  launch: {
+    v: 1,
+    agentId: 'claude',
+    cwd: 'C:\\repos\\alpha',
+    profileId: 'cmain',
+    configDir: 'C:\\Users\\p\\.claude-cmain',
+    source: 'declared',
+    at: 1_700_000_000_400
+  },
   scrollback: 'hello\r\nworld',
   cols: 133,
   rows: 41,

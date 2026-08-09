@@ -6,6 +6,7 @@ import {
   encodeMessage,
   keyToBytes,
   DAEMON_PROTOCOL_VERSION,
+  normalizeLaunchIntent,
   normalizeRemoteConnection
 } from '@contracts'
 import type { ClientIdentity, ClientMessage, ServerMessage, ReviewSnapshot } from '@contracts'
@@ -198,7 +199,10 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
               existing: existed,
               restored: existed && pane.restoredPristine,
               scrollback: pane.scrollback,
-              pty: ptyEmulation()
+              pty: ptyEmulation(),
+              ...(pane.launchDegraded && pane.launchIntent
+                ? { degraded: { agentId: pane.launchIntent.agentId } }
+                : {})
             })
             subscribe(m.id)
           }
@@ -224,7 +228,18 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           // Gen-gated when the sender claims one: pane ids are reused, and a stale
           // generation's late input must not type into the id's successor session.
           const pane = sessions.get(m.id)
-          if (pane && (typeof m.gen !== 'number' || m.gen === pane.gen)) pane.write(m.data)
+          if (pane && (typeof m.gen !== 'number' || m.gen === pane.gen)) {
+            // The declaration rides the input it describes, so it is gated by the SAME
+            // generation check: a stale sender must not relabel the id's successor session
+            // any more than it may type into it. Normalized rather than trusted — this
+            // crossed a socket and is headed for sqlite, and the restore guard that reads
+            // it back is built on this validator.
+            if (m.launch) {
+              const intent = normalizeLaunchIntent(m.launch)
+              if (intent) pane.declareLaunch(intent)
+            }
+            pane.write(m.data)
+          }
           // A refusal used to leave NOTHING — no log, no frame, no counter — so "my keystrokes
           // vanished" was undiagnosable after the fact. Logged, not answered with an error
           // frame: the live client rejects any PENDING SPAWN carrying the same pane id

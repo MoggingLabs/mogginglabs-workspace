@@ -19,11 +19,11 @@ import { paneToRow, rowToPane, type PaneRowCells } from './session-rows'
 const Database = requireNative<typeof import('better-sqlite3')>('better-sqlite3')
 
 const PANE_COLUMNS =
-  'id, workspace_id AS workspaceId, cwd, reported_cwd AS reportedCwd, reported_cwd_at AS reportedCwdAt, remote_name AS remoteName, remote_host AS remoteHost, remote_user AS remoteUser, remote_port AS remotePort, remote_cwd AS remoteCwd, remote_platform AS remotePlatform, remote_shell AS remoteShell, command, scrollback, grid_cols AS gridCols, grid_rows AS gridRows, updated_at AS updatedAt'
+  'id, workspace_id AS workspaceId, cwd, reported_cwd AS reportedCwd, reported_cwd_at AS reportedCwdAt, remote_name AS remoteName, remote_host AS remoteHost, remote_user AS remoteUser, remote_port AS remotePort, remote_cwd AS remoteCwd, remote_platform AS remotePlatform, remote_shell AS remoteShell, command, agent_id AS agentId, launch_intent AS launchIntent, scrollback, grid_cols AS gridCols, grid_rows AS gridRows, updated_at AS updatedAt'
 
 const PANE_UPSERT =
-  `INSERT INTO panes (id, workspace_id, cwd, reported_cwd, reported_cwd_at, remote_name, remote_host, remote_user, remote_port, remote_cwd, remote_platform, remote_shell, command, scrollback, grid_cols, grid_rows, updated_at)
-   VALUES (@id, @workspaceId, @cwd, @reportedCwd, @reportedCwdAt, @remoteName, @remoteHost, @remoteUser, @remotePort, @remoteCwd, @remotePlatform, @remoteShell, @command, @scrollback, @gridCols, @gridRows, @updatedAt)
+  `INSERT INTO panes (id, workspace_id, cwd, reported_cwd, reported_cwd_at, remote_name, remote_host, remote_user, remote_port, remote_cwd, remote_platform, remote_shell, command, agent_id, launch_intent, scrollback, grid_cols, grid_rows, updated_at)
+   VALUES (@id, @workspaceId, @cwd, @reportedCwd, @reportedCwdAt, @remoteName, @remoteHost, @remoteUser, @remotePort, @remoteCwd, @remotePlatform, @remoteShell, @command, @agentId, @launchIntent, @scrollback, @gridCols, @gridRows, @updatedAt)
    ON CONFLICT(id) DO UPDATE SET
      workspace_id = excluded.workspace_id, cwd = excluded.cwd,
      reported_cwd = excluded.reported_cwd, reported_cwd_at = excluded.reported_cwd_at,
@@ -31,6 +31,7 @@ const PANE_UPSERT =
      remote_user = excluded.remote_user, remote_port = excluded.remote_port,
      remote_cwd = excluded.remote_cwd, remote_platform = excluded.remote_platform,
      remote_shell = excluded.remote_shell, command = excluded.command,
+     agent_id = excluded.agent_id, launch_intent = excluded.launch_intent,
      scrollback = excluded.scrollback, grid_cols = excluded.grid_cols,
      grid_rows = excluded.grid_rows, updated_at = excluded.updated_at`
 
@@ -55,6 +56,8 @@ export class SessionStore {
         remote_platform TEXT,
         remote_shell TEXT,
         command TEXT,
+        agent_id TEXT,
+        launch_intent TEXT,
         scrollback TEXT NOT NULL,
         grid_cols INTEGER,
         grid_rows INTEGER,
@@ -92,7 +95,14 @@ export class SessionStore {
       // typed resume boots its TUI at the pane's real width, not the 80×24 default
       // (the cold-start smear; see the contract's field doc).
       ['grid_cols', 'INTEGER'],
-      ['grid_rows', 'INTEGER']
+      ['grid_rows', 'INTEGER'],
+      // What the pane was RUNNING, as the composer's input (PersistedPane.launch). Two
+      // columns on purpose: `agent_id` is the tripwire that lets an unreadable intent
+      // degrade VISIBLY instead of passing for a pane that was only ever a shell. Rows
+      // written before these existed carry neither, and rowToPane derives the intent from
+      // the legacy `command` string on read — so no backfill has to run here.
+      ['agent_id', 'TEXT'],
+      ['launch_intent', 'TEXT']
     ] as const) {
       addColumnIfMissing(this.db, 'panes', column, type)
     }

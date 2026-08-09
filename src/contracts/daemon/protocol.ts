@@ -5,6 +5,7 @@
 
 import type { AgentState } from '../domain/agent'
 import type { PaneCwdLocality, PaneCwdSource } from '../domain/cwd'
+import type { PaneLaunchIntent } from '../domain/launch-intent'
 import type { RemotePaneTarget } from '../domain/remote'
 import type { PersistedWorkspace } from '../ipc/workspace.ipc'
 import type { PtyEmulation } from '../ipc/terminal.ipc'
@@ -187,6 +188,11 @@ export interface SpawnSpec {
   rows?: number
   /** A line typed into the pane right after spawn (e.g. to launch an agent CLI). */
   run?: string
+  /** What `run` IS, structured — the composer's input rather than its output, recorded so
+   *  a restore can re-compose instead of parsing the line back. `run` is a one-shot launch
+   *  INSTRUCTION and is deliberately stripped from the reconnect-replay spec; this is the
+   *  opposite, it is pane IDENTITY and must survive. */
+  launch?: PaneLaunchIntent
   /** Extra per-pane environment merged into the PTY's process env (Phase-8/08).
    *  The app resolves vault SERVICE KEYS here, pre-spawn, so api-key MCP servers
    *  read them from the env — the value NEVER rides `run`/scrollback (which
@@ -220,6 +226,16 @@ export interface PaneInfo {
   role?: SwarmRole
   /** Remote pane's host display name (Phase-4/05). */
   remoteName?: string
+  /** What this pane is RUNNING — the pane's own record of its agent, profile and session,
+   *  survived across the daemon's cold start. Additive: an older daemon omits it and every
+   *  reader falls back to what it did before.
+   *
+   *  This is the pane's OWN answer to "which profile am I", and it outranks the workspace
+   *  manifest's slot entry, which is only written when a launch NAMED a profile explicitly.
+   *  A launch that took the default — or a hand-typed agent — left that slot null, so the
+   *  relaunch re-resolved "whichever profile is order 0 right now" and a pane came back on
+   *  a different config home than the one it had been running under. */
+  launch?: PaneLaunchIntent
 }
 
 /** Who a daemon connection belongs to — OPTIONAL and additive (old clients send none, old
@@ -243,7 +259,14 @@ export type ClientMessage =
   // type into (or smear-repaint) the id's successor. Optional because generation-less
   // senders exist by design (the in-proc backend, pane-bound CLI verbs) — absent passes,
   // present-and-stale is dropped. See the v11 note above for why this took a bump.
-  | { t: 'input'; id: string; data: string; gen?: number }
+  // `launch` (declaration, not input): these bytes ARE this launch. Carried ON the input
+  // that realizes it rather than as its own message, so the two cannot arrive out of order
+  // or disagree — if the command is typed the intent is recorded, and if the write is
+  // dropped so is the intent. This is the ONLY way a pane that became an agent pane after
+  // birth ever gets recorded: every launch except the wizard's types its command in, and a
+  // write is all the daemon used to see. 14 of 34 real panes persisted `command = NULL`
+  // because of it, and cold-restored as bare shells having lost the agent and its profile.
+  | { t: 'input'; id: string; data: string; gen?: number; launch?: PaneLaunchIntent }
   | { t: 'resize'; id: string; cols: number; rows: number; gen?: number }
   | { t: 'kill'; id: string }
   | { t: 'list' }
@@ -309,7 +332,21 @@ export type ServerMessage =
   // `restored` narrows `existing`: a cold-start restore (fresh shell + repainted
   // scrollback, untouched since) rather than a continuously-live session — the app
   // types resume into the former and must keep its hands off the latter (v5).
-  | { t: 'spawned'; id: string; gen: number; existing: boolean; restored: boolean; scrollback: string; pty: PtyEmulation }
+  | {
+      t: 'spawned'
+      id: string
+      gen: number
+      existing: boolean
+      restored: boolean
+      scrollback: string
+      pty: PtyEmulation
+      /** The restored pane NAMED an agent whose stored intent could not be read back. The
+       *  pane still comes up — its scrollback is real user data and dropping the row would
+       *  destroy it — but it must SAY so. A lost session that comes back looking like an
+       *  ordinary shell is one the user does not notice until the thread is already gone.
+       *  Carries what the row still proves, which is enough to offer a relaunch. */
+      degraded?: { agentId: string }
+    }
   | { t: 'attached'; id: string; gen: number; scrollback: string }
   | { t: 'data'; id: string; gen: number; data: string }
   | { t: 'exit'; id: string; gen: number; code: number }

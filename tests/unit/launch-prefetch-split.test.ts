@@ -85,8 +85,11 @@ describe('the renderer commits before it types', () => {
     const commitAt = body.indexOf('commandCommit(')
     // The CLI write specifically — a `custom:` provider writes its own command earlier
     // in this function and has no deferred effects to claim.
-    const typeAt = body.indexOf('agentsClient.launchInto(paneId, result.command)')
+    // Prefix, not the whole call: the write also carries the build's launch INTENT, and a
+    // gate about ORDER must not fail because an argument was added.
+    const typeAt = body.indexOf('agentsClient.launchInto(paneId, result.command')
     expect(commitAt, 'the declaration must be in place before the CLI writes its first log line').toBeGreaterThan(-1)
+    expect(typeAt, 'the CLI write must still be here to order against').toBeGreaterThan(-1)
     expect(commitAt).toBeLessThan(typeAt)
   })
 

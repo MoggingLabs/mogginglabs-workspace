@@ -174,7 +174,17 @@ run_static() {
   local name="$1"; shift
   should_run "$name" || return 0
   echo "── $name ──"
-  if "$@" >"$TMPBASE/$name.log" 2>&1; then
+  # Static does not mean inert. These gates run node over the repo, and node reads
+  # LOCALAPPDATA / XDG_RUNTIME_DIR the same way the app does — runtimeBaseDir() falls back
+  # to the REAL per-user tree when they are unset (backend/platform/runtime-paths.ts). This
+  # tier ran fully ambient while run_smoke above was carefully sandboxed, so anything a
+  # static gate touched landed in the user's live runtime: CLIGRAM's deep-link row put four
+  # workspaces into the production sessions.db, and UNIT (vitest) had the same reach. Same
+  # three vars, same shape, same reason.
+  local iso="$TMPBASE/$name"
+  mkdir -p "$iso/userdata" "$iso/local"
+  if MOGGING_USERDATA="$iso/userdata" LOCALAPPDATA="$iso/local" XDG_RUNTIME_DIR="$iso/local" \
+       "$@" >"$TMPBASE/$name.log" 2>&1; then
     RESULTS+=("$name PASS"); echo "  PASS"
   else
     # A gate whose SCRIPT died is not a gate that found a violation — same

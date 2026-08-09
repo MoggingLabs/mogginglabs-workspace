@@ -1,4 +1,12 @@
-import { normalizeRemoteConnection, REMOTE_READY_OSC, type PersistedPane } from '@contracts'
+import {
+  LAUNCH_INTENT_VERSION,
+  normalizeLaunchIntent,
+  normalizeRemoteConnection,
+  REMOTE_READY_OSC,
+  type PaneLaunchIntent,
+  type PersistedPane
+} from '@contracts'
+import { parseLegacyLaunchCommand } from './legacy-launch-parse'
 
 /** Remove the live remote-readiness signal from persisted history. Imported, never spelled:
  *  a second copy of these bytes is a second thing to keep in agreement. */
@@ -37,6 +45,13 @@ export interface PaneRowCells {
   remotePlatform: string | null
   remoteShell: string | null
   command: string | null
+  /** The agent this pane ran, as its OWN column beside the intent blob — deliberately not
+   *  folded into it. It is the tripwire: with the agent id inside the JSON, an unreadable
+   *  blob would be indistinguishable from "this pane was always just a shell", and there
+   *  would be nothing left to fail closed ON. Cheap, and independently readable. */
+  agentId: string | null
+  /** Versioned JSON — PaneLaunchIntent. */
+  launchIntent: string | null
   scrollback: string
   gridCols: number | null
   gridRows: number | null
@@ -65,6 +80,11 @@ export function paneToRow(p: PersistedPane): PaneRowCells {
     remotePlatform: p.remote?.platform ?? null,
     remoteShell: p.remote?.shell ?? null,
     command: p.command ?? null,
+    // WRITE-SIDE SYMMETRY, and it is load-bearing: never emit `agent_id` without a
+    // serializable intent beside it. A guard that only bites on read is half a guard —
+    // it would manufacture the very torn row rowToPane is built to refuse.
+    agentId: p.launch ? p.launch.agentId : null,
+    launchIntent: p.launch ? JSON.stringify(p.launch) : null,
     // The remote-readiness OSC is a LIVE signal, not history. It is ordinary pty output, so
     // it lands in scrollback like anything else - and on a cold-start restore the replay feeds
     // it back through the parser, declaring a brand-new unauthenticated ssh session READY.
@@ -74,6 +94,50 @@ export function paneToRow(p: PersistedPane): PaneRowCells {
     gridRows: p.rows ?? null,
     updatedAt: p.updatedAt
   }
+}
+
+/**
+ * A row's launch intent, and whether it TORE. Three cases, and the middle one is the point:
+ *
+ *   - the two columns agree            -> the intent
+ *   - `agent_id` set, blob missing / unparseable / naming a different agent
+ *                                      -> DEGRADED: a pane that ran an agent and could not
+ *                                         be reconstructed. Never a silent plain shell.
+ *   - both columns empty               -> derive once from the legacy `command` string
+ *
+ * The legacy derivation is gated on BOTH columns being null, so it can only fire for rows
+ * written before those columns existed; the daemon's first persist writes the result into
+ * real columns, so it self-extinguishes rather than needing a ledger that can half-run.
+ * It also cannot throw (see parseLegacyLaunchCommand) — a row that will not parse must
+ * restore exactly as it does today, never take the daemon down at boot.
+ */
+function rowLaunch(r: PaneRowCells): { launch?: PaneLaunchIntent; launchDegraded?: boolean } {
+  if (r.agentId === null && r.launchIntent === null) {
+    const derived = parseLegacyLaunchCommand(r.command, { cwd: r.cwd, at: r.updatedAt })
+    return derived ? { launch: derived } : {}
+  }
+  let parsed: unknown = null
+  if (r.launchIntent !== null) {
+    try {
+      parsed = JSON.parse(r.launchIntent)
+    } catch {
+      parsed = null
+    }
+  }
+  const intent = normalizeLaunchIntent(parsed)
+  if (r.agentId !== null && (!intent || intent.agentId !== r.agentId)) {
+    // Keep what the row still PROVES — the agent id and the cwd — so the pane can say what
+    // it was and offer to relaunch, instead of coming back as an anonymous shell.
+    const stub = normalizeLaunchIntent({
+      v: LAUNCH_INTENT_VERSION,
+      agentId: r.agentId,
+      cwd: r.cwd,
+      source: 'declared',
+      at: r.updatedAt
+    })
+    return stub ? { launch: stub, launchDegraded: true } : { launchDegraded: true }
+  }
+  return intent ? { launch: intent } : {}
 }
 
 /** Row -> pane, or null for a row that must not restore. A partial/corrupt/unsupported
@@ -101,6 +165,7 @@ export function rowToPane(r: PaneRowCells): PersistedPane | null {
   // a pty can spawn at, so a torn pair falls back to the spawn default together.
   const cols = asGridDim(r.gridCols, 2)
   const rows = asGridDim(r.gridRows, 1)
+  const { launch, launchDegraded } = rowLaunch(r)
   return {
     id: r.id,
     workspaceId: r.workspaceId,
@@ -111,6 +176,8 @@ export function rowToPane(r: PaneRowCells): PersistedPane | null {
     // that a restored pane comes back speaking the dialect it went away in.
     remote: remote ? { ...remote, cwd: r.remoteCwd ?? undefined, shell: asRemoteShell(r.remoteShell) } : undefined,
     command: r.command ?? undefined,
+    ...(launch ? { launch } : {}),
+    ...(launchDegraded ? { launchDegraded } : {}),
     // ...and on the way IN, because rows written by every build before this one already hold
     // it. A write-side fix alone protects nobody who is upgrading.
     scrollback: stripReadinessMarkers(r.scrollback),

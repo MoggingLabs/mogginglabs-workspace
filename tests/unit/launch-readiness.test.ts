@@ -169,8 +169,10 @@ describe('EVERY surface that injects an agent raises the cover', () => {
     const body = launchInPaneBody()
     const raise = body.indexOf('if (!resume) raiseCover()')
     const live = body.indexOf('whenPaneLive(paneId, 15000)')
-    const write = body.indexOf('agentsClient.launchInto(paneId, result.command)')
+    // Prefix, not the whole call — the write also carries the build's launch intent.
+    const write = body.indexOf('agentsClient.launchInto(paneId, result.command')
     expect(raise, 'a fresh launch must be covered before it waits for the pane').toBeGreaterThan(-1)
+    expect(write, 'the CLI write must still be here to order against').toBeGreaterThan(-1)
     expect(raise).toBeLessThan(live)
     expect(raise, 'covering at the write leaves the prompt and the command visible').toBeLessThan(write)
   })

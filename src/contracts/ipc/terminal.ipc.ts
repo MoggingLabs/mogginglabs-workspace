@@ -1,5 +1,6 @@
 import type { AgentState } from '../domain/agent'
 import type { PaneCwdLocality, PaneCwdSource } from '../domain/cwd'
+import type { PaneLaunchIntent } from '../domain/launch-intent'
 import type { PaneId } from '../domain/pane'
 
 // Commands: UI -> backend
@@ -30,6 +31,9 @@ export interface SpawnRequest {
    *  (ADR 0002). Local panes only; a remote pane's launch stays typed after the SSH
    *  bootstrap proves the far-side shell. */
   run?: string
+  /** What `run` IS. Unlike `run` — a one-shot instruction the reconnect replay deliberately
+   *  strips — this is pane IDENTITY and must survive into the session and its store. */
+  launch?: PaneLaunchIntent
 }
 
 /** Private OSC emitted by the SSH bootstrap only after remote command execution starts. */
@@ -87,6 +91,10 @@ export interface SpawnResult {
    *  instead of resizing/typing into the successor session (ConPTY answers every applied
    *  resize with a full repaint, so a stale resize is a smear, not a no-op). */
   gen?: number
+  /** This restored pane ran an agent whose stored launch intent could not be read back.
+   *  The pane comes up with its history intact and says so, offering a relaunch — never
+   *  silently as a plain shell, which is how a lost session goes unnoticed. */
+  degraded?: { agentId: string }
 }
 export interface WriteCommand {
   id: PaneId
@@ -94,6 +102,10 @@ export interface WriteCommand {
   /** The sender's session generation (see SpawnResult.gen). Absent = ungated legacy/
    *  in-proc sender; present-and-stale = dropped by the daemon. */
   gen?: number
+  /** These bytes ARE this launch — a DECLARATION riding the input that realizes it, so
+   *  the pane records what it is running rather than only seeing keystrokes. Set by
+   *  agents.client.launchInto; absent for ordinary typing. */
+  launch?: PaneLaunchIntent
 }
 export interface ResizeCommand {
   id: PaneId

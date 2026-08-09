@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PersistedPane } from '@contracts'
-import { REMOTE_READY_OSC } from '@contracts'
+import { LAUNCH_INTENT_VERSION, REMOTE_READY_OSC } from '@contracts'
 import {
   PERSISTED_SCROLLBACK_CHARS,
   paneToRow,
@@ -14,6 +14,15 @@ const LOCAL: PersistedPane = {
   reportedCwd: 'C:\\repos\\alpha\\.mogging\\worktrees\\x',
   reportedCwdAt: 1_700_000_000_000,
   command: 'claude',
+  launch: {
+    v: LAUNCH_INTENT_VERSION,
+    agentId: 'claude',
+    cwd: 'C:\\repos\\alpha',
+    profileId: 'cmain',
+    configDir: 'C:\\Users\\p\\.claude-cmain',
+    source: 'declared',
+    at: 1_700_000_000_400
+  },
   scrollback: 'hello\n',
   cols: 133,
   rows: 41,
@@ -44,6 +53,69 @@ describe('session pane row mapping', () => {
     // A row that lost its platform (or host) is not restorable as the SSH pane it was —
     // and restoring its launch command into a LOCAL shell is the failure this guards.
     expect(rowToPane({ ...row, remotePlatform: null, remoteHost: null })).toBeNull()
+  })
+
+  // A pane that ran an agent under a profile must not come back as an anonymous shell. The
+  // remote guard above is the precedent; these are its twin for agent panes, and the reason
+  // `agent_id` is its own column rather than a field inside the blob.
+  it('carries launch intent through the row and back', () => {
+    const row = paneToRow(LOCAL)
+    expect(row.agentId).toBe('claude')
+    expect(JSON.parse(row.launchIntent!)).toEqual(LOCAL.launch)
+    expect(rowToPane(row)?.launch).toEqual(LOCAL.launch)
+    expect(rowToPane(row)?.launchDegraded).toBeUndefined()
+  })
+
+  it('never writes an agent id without an intent beside it', () => {
+    // A write-side violation would manufacture the exact torn row the read side refuses.
+    const shell = paneToRow({ ...LOCAL, launch: undefined })
+    expect(shell.agentId).toBeNull()
+    expect(shell.launchIntent).toBeNull()
+  })
+
+  it.each([
+    ['a missing blob', { launchIntent: null }],
+    ['an unparseable blob', { launchIntent: '{not json' }],
+    ['a blob from a newer build', { launchIntent: JSON.stringify({ ...LOCAL.launch, v: 99 }) }],
+    ['a blob naming a different agent', { launchIntent: JSON.stringify({ ...LOCAL.launch, agentId: 'codex' }) }]
+  ])('degrades VISIBLY on %s rather than restoring a plain shell', (_label, patch) => {
+    const pane = rowToPane({ ...paneToRow(LOCAL), ...patch })
+    expect(pane).not.toBeNull()
+    expect(pane?.launchDegraded).toBe(true)
+    // It still says WHAT it was, so the pane can offer to relaunch instead of going quiet.
+    expect(pane?.launch?.agentId).toBe('claude')
+    // ...and the scrollback is untouched: nothing overwrites the session that was lost.
+    expect(pane?.scrollback).toBe(LOCAL.scrollback)
+  })
+
+  // Rows written before the intent columns existed. THE bug: the shipped resume matcher took
+  // the first token of this command, which is `cd` for every command the app ever built.
+  it('derives intent from a legacy command string when both intent columns are empty', () => {
+    const legacy = {
+      ...paneToRow(LOCAL),
+      agentId: null,
+      launchIntent: null,
+      command: 'cd /d "C:\\repos\\alpha" && set "CLAUDE_CONFIG_DIR=C:\\Users\\p\\.claude-cmain" && claude --settings C:\\gen.json'
+    }
+    expect(rowToPane(legacy)?.launch).toMatchObject({
+      agentId: 'claude',
+      cwd: 'C:\\repos\\alpha',
+      configDir: 'C:\\Users\\p\\.claude-cmain',
+      source: 'legacy'
+    })
+    expect(rowToPane(legacy)?.launchDegraded).toBeUndefined()
+  })
+
+  it('leaves a legacy plain-shell row without intent, and not degraded', () => {
+    const legacy = { ...paneToRow(LOCAL), agentId: null, launchIntent: null, command: 'npm run dev' }
+    const pane = rowToPane(legacy)
+    expect(pane?.launch).toBeUndefined()
+    expect(pane?.launchDegraded).toBeUndefined()
+  })
+
+  it('does not re-derive once real columns exist — the derivation self-extinguishes', () => {
+    const row = { ...paneToRow(LOCAL), command: 'cd /d "C:\\elsewhere" && codex' }
+    expect(rowToPane(row)?.launch).toEqual(LOCAL.launch)
   })
 
   it('drops an unknown persisted shell dialect rather than inventing one', () => {

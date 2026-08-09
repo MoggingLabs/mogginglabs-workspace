@@ -3133,6 +3133,17 @@ textarea {
   flex: none;
   color: var(--info);
 }
+/* The degraded-restore marker shares the sign-in banner's layout but not its tone: one is an
+   offer, the other is a report that something was lost. Warning, not info — and never danger,
+   because nothing here is broken now and the pane's history is intact. */
+.pane-signin.pane-degraded {
+  border-top-color: color-mix(in srgb, var(--warning) 45%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--warning) 45%, transparent);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+.pane-signin.pane-degraded svg {
+  color: var(--warning);
+}
 .pane-signin-text {
   flex: 0 1 auto;
   min-width: 0;

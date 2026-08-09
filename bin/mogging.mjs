@@ -828,13 +828,30 @@ function runOpen(args) {
     process.exit(2)
   }
   const url = `${SCHEME}://open?cwd=${encodeURIComponent(dir)}`
-  const platform = process.platform
-  if (platform === 'win32') {
-    spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' }).unref()
-  } else if (platform === 'darwin') {
-    spawn('open', [url], { detached: true, stdio: 'ignore' }).unref()
+  // MOGGING_OPEN_SHIM is a test-only stand-in (a file path), the same shape as
+  // MOGGING_SSH_SHIM: it records the URL and returns, so a gate can assert the
+  // grammar without an OS handoff.
+  //
+  // Handing a URL to the shell is the ONE side effect no env var can contain. The
+  // runtime base (LOCALAPPDATA / XDG_RUNTIME_DIR) redirects everything this process
+  // touches, but `start`/`open`/`xdg-open` route by SCHEME to whichever app the OS has
+  // registered — the INSTALLED build, with its own environment and its own sessions.db.
+  // check-cli-grammar.mjs believed its sandbox covered this and asserted the real-directory
+  // case exits 0, so every sweep opened a real workspace in the user's live app: four
+  // consecutive gate runs left panes 1401/1501/1601/1701 (ordinals 14-17) in the production
+  // store, one of which a real session then adopted by id.
+  const shim = process.env.MOGGING_OPEN_SHIM
+  if (shim) {
+    writeFileSync(shim, url + '\n', { flag: 'a' })
   } else {
-    spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref()
+    const platform = process.platform
+    if (platform === 'win32') {
+      spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' }).unref()
+    } else if (platform === 'darwin') {
+      spawn('open', [url], { detached: true, stdio: 'ignore' }).unref()
+    } else {
+      spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref()
+    }
   }
   process.stdout.write(`mogging: opening workspace for ${dir}\n`)
 }
