@@ -170,11 +170,15 @@ export async function runReattachFitSmoke(): Promise<void> {
     } else {
       // The end-to-end bite for the realignment: revert repaintForAttach and conhost is
       // never asked to restate its screen, so this is 0 and the reattach smear comes back.
+      // It read exactly 0 once already, when the method asked for the size conhost already
+      // held — ResizePseudoConsole repaints on a real change, so the realignment JIGGLES
+      // (grow one row, restore) and this is what proves the jiggle still lands.
       if (burstBytes <= 0)
         return fail('a ConPTY same-dims reattach did NOT realign (no repaint burst)', { burstBytes })
-      // Bounded: one viewport's worth of repaint, generously — 132x40 cells plus escapes and
-      // SGR runs. Anything past this is not a repaint, it is a loop that happened to settle.
-      const burstCeiling = 132 * 40 * 4
+      // Bounded: TWO viewports' worth, generously — the jiggle is two real resizes, so
+      // conhost may answer with two repaints (it may also fold them into one flush; the cap
+      // admits either). Anything past this is not a repaint, it is a loop that settled.
+      const burstCeiling = 2 * 132 * 40 * 4
       if (burstBytes > burstCeiling)
         return fail('the attach repaint burst was not bounded', { burstBytes, burstCeiling })
     }

@@ -224,10 +224,13 @@ export async function runRestoreDimsSmoke(): Promise<void> {
     await delay(800)
     const suppressDelta = capB.length - ringLen
     // The claim is "no RING bytes" — a measured same-dims spawn on ConPTY now also
-    // triggers the attach realignment repaint (session.repaintForAttach), one bounded
-    // viewport of NEW bytes that is not the ring and must not read as it. One
-    // viewport's allowance, win32 only; POSIX keeps the strict bound (no repaint there).
-    const repaintAllowance = process.platform === 'win32' ? 90 * 22 * 4 : 0
+    // triggers the attach realignment repaint (session.repaintForAttach), a bounded burst
+    // of NEW bytes that is not the ring and must not read as it. TWO viewports' allowance,
+    // not one: the realignment is a JIGGLE (grow one row, restore) because
+    // ResizePseudoConsole with the dimensions conhost already holds repaints nothing, so
+    // conhost may answer with two repaints. win32 only; POSIX keeps the strict bound, which
+    // is what proves the platform guard rather than assuming it.
+    const repaintAllowance = process.platform === 'win32' ? 2 * 90 * 22 * 4 : 0
     const suppressOk = suppressDelta < Math.max(300, ringLen / 4) + repaintAllowance
     if (!suppressOk) return fail('suppress replay still delivered the ring', { suppressDelta, ringLen })
     const beforeReset = capB.length

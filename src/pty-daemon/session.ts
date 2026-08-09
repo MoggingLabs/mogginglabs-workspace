@@ -857,10 +857,33 @@ class PaneSession {
    *
    * Nothing in the replay can fix that, because the daemon does not know conhost's cursor
    * row — only conhost does. It will say so, though, and a resize is the one thing that
-   * makes it: conhost answers EVERY resize it is handed with a full-viewport repaint, which
-   * restates its whole screen — content, cursor and all — in absolute coordinates. That
-   * single burst reconciles a fresh client with conhost by construction, whatever the
-   * provenance of the divergence.
+   * makes it: conhost answers a resize with a full-viewport repaint, which restates its
+   * whole screen — content, cursor and all — in absolute coordinates. That burst reconciles
+   * a fresh client with conhost by construction, whatever the provenance of the divergence.
+   *
+   * WHY THIS JIGGLES, and why that is not superstition. `ResizePseudoConsole` with the
+   * dimensions conhost already holds is a NO-OP: it repaints on a real change, not on being
+   * asked. This repo had already measured that ("a same-size reattach gets zero bytes and
+   * never repaints") and the first cut of this method re-earned it — REATTACHFIT's own new
+   * assertion caught it on the runner with `burstBytes: 0`. So the size has to actually
+   * move and come back.
+   *
+   * ROWS, never columns. The width axis is where ConPTY loses data: the OS's v1 discards its
+   * re-wrap overflow on a width shrink, measured by the CONPTY gate at 18-27 lost markers of
+   * 120 (v2 zero, but MOGGING_CONPTY_V1 keeps the fallback sweepable, and a realignment must
+   * not corrupt the thing it realigns). Height carries no such contract.
+   *
+   * GROW first, then restore — not shrink-then-grow. Conhost grows by APPENDING empty rows
+   * at the bottom (the CONPTY gate's own words), so +1 pushes nothing off the top and the
+   * restore removes exactly the blank row it added. A shrink-first jiggle would scroll a
+   * real line out of a full screen into conhost's discarded scrollback before we ever got
+   * it back.
+   *
+   * Two synchronous calls, no timer: node-pty's WindowsTerminal.resize defers each call
+   * through `_deferNoArgs` and never coalesces, so both reach ResizePseudoConsole. Whether
+   * conhost paints twice or folds them into one flush does not matter — either way the
+   * resize path invalidates its whole viewport, and what lands is a full repaint of the
+   * TRUE grid, because the true grid is where the pair ends.
    *
    * So the dedupe in resize() stands (a same-size resize mid-session is a spurious repaint
    * spliced over a live agent's frame — REFIT_SETTLE_MS exists for that) and THIS is the
@@ -880,12 +903,27 @@ class PaneSession {
   repaintForAttach(): void {
     if (ptyEmulation().backend !== 'conpty') return
     try {
-      this.proc.resize(this.cols, this.rows)
+      this.proc.resize(this.cols, this.rows + 1)
     } catch (err) {
-      // A pty tearing down under an attach is ordinary; the client simply keeps the ring's
-      // own alignment, which is what it had before this existed.
+      // Never grew, so there is nothing to put back. A pty tearing down under an attach is
+      // ordinary; the client simply keeps the ring's own alignment, which is what it had
+      // before this existed.
       log(
         `pane ${this.id} gen ${this.gen}: attach realignment skipped (pty exiting?): ` +
+          (err instanceof Error ? err.message : String(err))
+      )
+      return
+    }
+    try {
+      this.proc.resize(this.cols, this.rows)
+    } catch (err) {
+      // The restore is the half that must not be lost: conhost would be left one row taller
+      // than every belief in this process, which is the divergence this method exists to
+      // end. Only a pty dying mid-jiggle can get here, so the pane is going away regardless
+      // — but say it loudly rather than leaving a silent one-row lie behind.
+      log(
+        `pane ${this.id} gen ${this.gen}: attach realignment left the pty at ${this.rows + 1} rows ` +
+          `(restore failed, pty exiting?): ` +
           (err instanceof Error ? err.message : String(err))
       )
     }

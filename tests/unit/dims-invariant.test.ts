@@ -226,8 +226,35 @@ describe('4b. an attach realigns the client with conhost’s screen — once, an
   const SESSION = 'src/pty-daemon/session.ts'
   const body = bodyWithoutComments(sourceOf(SESSION), 'repaintForAttach(): void')
 
-  it('forwards a genuine SAME-size resize — that is the whole primitive', () => {
-    expect(body).toContain('this.proc.resize(this.cols, this.rows)')
+  it('JIGGLES — a same-size resize is a no-op in conhost and repaints nothing', () => {
+    // Measured on the runner: the first cut asked for the size conhost already held and got
+    // `burstBytes: 0`. ResizePseudoConsole repaints on a real CHANGE, not on being asked.
+    const grow = body.indexOf('this.proc.resize(this.cols, this.rows + 1)')
+    const restore = body.lastIndexOf('this.proc.resize(this.cols, this.rows)')
+    expect(grow).toBeGreaterThan(-1)
+    expect(restore).toBeGreaterThan(grow)
+    expect(body.match(/this\.proc\.resize\(/g) ?? []).toHaveLength(2)
+  })
+
+  it('moves ROWS, never columns — width is the axis ConPTY loses data on', () => {
+    // The OS's v1 discards its re-wrap overflow on a width shrink (CONPTY gate: 18-27 lost
+    // markers of 120). A realignment must not corrupt the thing it realigns.
+    expect(body).not.toMatch(/this\.proc\.resize\(this\.cols\s*[+-]\s*1/)
+  })
+
+  it('GROWS first and restores — a shrink would scroll a real line off a full screen', () => {
+    // Conhost grows by appending empty rows at the BOTTOM, so +1 pushes nothing off the top
+    // and the restore removes exactly the blank row it added.
+    expect(body).not.toMatch(/this\.rows\s*-\s*1/)
+    expect(body.indexOf('this.rows + 1')).toBeLessThan(body.lastIndexOf('this.proc.resize(this.cols, this.rows)'))
+  })
+
+  it('always puts the size back — a failed restore is reported, never silent', () => {
+    // Conhost left one row taller than every belief in this process is the exact divergence
+    // this method exists to end.
+    const afterGrow = body.slice(body.indexOf('this.proc.resize(this.cols, this.rows + 1)'))
+    expect(afterGrow).toContain('this.proc.resize(this.cols, this.rows)')
+    expect((afterGrow.match(/log\(/g) ?? []).length).toBeGreaterThanOrEqual(1)
   })
 
   it('claims nothing: no belief written, no dirty mark, no launch released', () => {
@@ -242,11 +269,24 @@ describe('4b. an attach realigns the client with conhost’s screen — once, an
     const guard = body.indexOf("ptyEmulation().backend !== 'conpty'")
     expect(guard).toBeGreaterThan(-1)
     expect(guard).toBeLessThan(body.indexOf('this.proc.resize('))
-    // The same seam the renderer reads for xterm's windowsPty, so the two sides can never
-    // disagree about which backend is underneath.
-    expect(bodyWithoutComments(sourceOf('src/backend/platform/pty-host.ts'), 'export function ptyEmulation()')).toContain(
-      "backend: 'conpty'"
+  })
+
+  it('the guard string is the one the emulation module actually reports', () => {
+    // A guard that tests a string nothing produces is an early return that always fires —
+    // the heal would die silently and every gate would still be green. So the literal is
+    // asserted against its SOURCE, in both directions: the contract's backend union and the
+    // function that mints the value. Rename the backend and this fails here, loudly, instead
+    // of on a Windows runner three rounds later.
+    const emulation = bodyWithoutComments(sourceOf('src/backend/platform/pty-host.ts'), 'export function ptyEmulation()')
+    expect(emulation).toContain("backend: 'conpty'")
+    expect(emulation).toContain("backend: 'posix'")
+    const union = sourceOf('src/contracts/ipc/terminal.ipc.ts')
+    expect(union).toContain("export type PtyEmulation = { backend: 'posix' } | { backend: 'conpty'; buildNumber: number }")
+    // ...and no third spelling has appeared that the guard would silently miss.
+    const backends = new Set(
+      [...sourceOf('src/backend/platform/pty-host.ts').matchAll(/backend: '([a-z-]+)'/g)].map((m) => m[1])
     )
+    expect([...backends].sort()).toEqual(['conpty', 'posix'])
   })
 
   it('fires ONLY on the measured-and-equal attach — never dims-less, never a fresh pane', () => {
