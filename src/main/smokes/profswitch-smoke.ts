@@ -1,10 +1,11 @@
 import { app, type BrowserWindow } from 'electron'
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { setAgentDetectOverrideForSmoke } from '../agents'
 import { runtimeDir } from '../daemon-client'
+import { settleToShell } from './smoke-shell'
 import { AgentChannels, type AgentInfo, type AgentInstallState } from '@contracts'
 
 // Env-gated pane profile-SWITCH smoke (MOGGING_PROFSWITCH) — the audit F1/F2 gate:
@@ -90,8 +91,9 @@ function resolveNodeBin(): string {
 export function runProfSwitchSmoke(win: BrowserWindow): void {
   const live = process.env.MOGGING_PROFSWITCH === 'claude'
   const shots = process.env.MOGGING_PROFSWITCH === 'shots'
-  /** Step 4's fixture agent, once it has reported its own pid. */
+  /** Step 4's fixture agent, once it has reported its own pid, and the temp bin it lives in. */
   let fixturePid = 0
+  let fixtureDir = ''
   const fixtureAlive = (): boolean => {
     if (fixturePid <= 0) return false
     try {
@@ -106,11 +108,23 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
    *  process leaking into whatever gate runs next. SIGTERM is untrapped there; on
    *  Windows node's kill terminates outright. */
   const killFixture = (): void => {
-    if (fixturePid <= 0) return
-    try {
-      process.kill(fixturePid)
-    } catch {
-      /* already gone */
+    if (fixturePid > 0) {
+      try {
+        process.kill(fixturePid)
+      } catch {
+        /* already gone */
+      }
+    }
+    // And delete the bin. A start line can still be sitting UNREAD in the pane's tty buffer
+    // (the second door types one only when the first looked dead, and a shell blocked on a
+    // live fixture reads nothing until it dies) — with the script gone that line can only
+    // print "cannot find module" instead of resurrecting an agent behind the smoke's back.
+    if (fixtureDir) {
+      try {
+        rmSync(fixtureDir, { recursive: true, force: true })
+      } catch {
+        /* best effort — it is a temp dir */
+      }
     }
   }
   // Safety net (real CLIs boot slowly). `shots` runs the switch TWICE — two interrupts,
@@ -141,6 +155,37 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
     cli(['notify', '--pane', String(paneId), '--event', 'usage-limit'], {
       MOGGING_DAEMON_ENDPOINT: join(runtimeDir(), 'endpoint.json')
     })
+  /** Type ONE line into a pane through the daemon's own door, and get a VERDICT for it.
+   *
+   *  `mogging send` refuses an unknown pane (exit 1), writes the bytes on the daemon's
+   *  authed socket, and answers 0 only after the daemon has PROCESSED them (it pings and
+   *  waits for the pong on the same ordered stream). A renderer `bridge.send` is the other
+   *  sanctioned door — and the one this arm used, to nothing: `ipcMain.on` is
+   *  fire-and-forget in both directions, so a write that never reached the pty is
+   *  indistinguishable from one that did. This door cannot lie about delivery, and it is
+   *  the same endpoint the capped trigger above already proves works in this very arm.
+   *
+   *  It is also spy-clean by construction: `__mogging.ptyWrites` is pushed by
+   *  terminalClient.write and agentsClient.launchInto (both RENDERER-side), and these bytes
+   *  never enter the renderer at all — so `nothingTypedOk` still sees only the switch. */
+  const paneSend = (paneId: number, line: string): Promise<{ code: number }> =>
+    cli(['send', String(paneId), line], {
+      MOGGING_DAEMON_ENDPOINT: join(runtimeDir(), 'endpoint.json')
+    })
+  /** What the pane's shell actually SAID — the last lines of its buffer. A failed fixture
+   *  start is otherwise a silence, and a silence cannot be told from a shell that answered
+   *  "command not found". */
+  const paneTail = (paneId: number, lines = 14): Promise<string> =>
+    ES<string>(
+      `(() => {
+        const p = (window.__mogging.panes || []).find((x) => x.id === ${paneId})
+        if (!p || !p.term) return ''
+        const b = p.term.buffer.active
+        let s = ''
+        for (let i = 0; i < b.length; i++) { const l = b.getLine(i); if (l) s += l.translateToString(true) + '\\n' }
+        return s.trim().split('\\n').slice(-${lines}).join('\\n')
+      })()`
+    )
 
   const runShots = async (): Promise<void> => {
     let result: Record<string, unknown> = { pass: false }
@@ -609,10 +654,11 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       //     re-anchor that broke the declared fixture never fires).
       // The live variant keeps its DECLARED fixture on its own second pane.
       let fixtureStarted = live
+      let fixtureDiag: Record<string, unknown> | null = null
       if (live) {
         await ES(`window.__mogging.agents.detected({ id: ${pane2}, agentId: 'gemini', cwd: ${JSON.stringify(anchor)}, sinceMs: Date.now() })`)
       } else {
-        const fixtureDir = mkdtempSync(join(tmpdir(), 'mogging-psfix-'))
+        fixtureDir = mkdtempSync(join(tmpdir(), 'mogging-psfix-'))
         const fixtureFile = join(fixtureDir, 'gemini')
         const fixturePidFile = join(fixtureDir, 'pid')
         writeFileSync(
@@ -620,111 +666,164 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
           [
             "// PROFSWITCH step 4's agent: a real process for the process table to find.",
             "process.on('SIGINT', () => {}) // the double-^C lands and changes nothing",
-            `require('fs').writeFileSync(${JSON.stringify(fixturePidFile)}, String(process.pid))`,
+            "// `wx`: the pid file is also the ONE-INSTANCE lock. The arm may type a second",
+            '// start line when the first looked dead, and two live fixtures would leave one',
+            '// unkillable (teardown knows a single pid). Whoever loses the race just leaves.',
+            'try {',
+            `  require('fs').writeFileSync(${JSON.stringify(fixturePidFile)}, String(process.pid), { flag: 'wx' })`,
+            '} catch {',
+            '  process.exit(0)',
+            '}',
             'setInterval(() => {}, 1000)',
             ''
           ].join('\n')
         )
-        const nodeBin = resolveNodeBin()
-        // Typed through the RAW bridge on purpose: terminalClient.write and
-        // agentsClient.launchInto are the DEV write spy's two mouths, and this line
-        // carries the word `gemini` inside the fixture's path. The spy must see exactly
-        // what the SWITCH types and nothing the harness types.
         // node is INVOKED, never a `gemini`/`gemini.cmd` shim found on a doctored PATH: on
         // Windows that shim is a BATCH file, and a ^C inside a batch raises cmd's own
         // "Terminate batch job (Y/N)?" — which this very interrupt answers `Y` (its trap
         // window is open). The fixture would then lose the foreground to a shell prompt
         // mid-arm, in the one arm whose whole premise is that it never does.
-        const startFixture =
+        const startLine = (nodeRef: string): string =>
           process.platform === 'win32'
-            ? `"${nodeBin}" "${fixtureFile}"` // cmd.exe, the pane shell COMSPEC names
-            : `${shq(nodeBin)} ${shq(fixtureFile)}` // bash (linux) / zsh (macos)
-        await ES(
-          `window.bridge.send('terminal:write', { id: ${pane2}, data: ${JSON.stringify(startFixture + '\r')} })`
-        )
+            ? `"${nodeRef}" "${fixtureFile}"` // cmd.exe, the pane shell COMSPEC names
+            : `${shq(nodeRef)} ${shq(fixtureFile)}` // bash (linux) / zsh (macos)
+        const nodeBin = resolveNodeBin()
+        // THE PANE MUST BE A SHELL, PROVEN, BEFORE A SHELL COMMAND IS TYPED AT IT. The house
+        // recipe (smoke-shell.ts), and skipping it is how the first cut of this fixture
+        // asserted on a line nothing ever executed: it interrupts whatever holds the
+        // keyboard — including a shell parked in a quote/`More?` continuation, which eats
+        // every line typed after it — answers cmd's batch trap if the ^C raised one, then
+        // ROUND-TRIPS a sentinel and returns only once a shell has demonstrably run it.
+        // ~1.5s on a pane already at its prompt, and it turns "the fixture never appeared"
+        // from a silence into a fact with a name.
+        const shellReady = await settleToShell({ es: ES, sleep, paneId: pane2 })
         // Its OWN word that it is up, before detection is asked about it: a fixture that
         // never started must not read as one the detector missed — and the pid is what
         // teardown kills (it ignores ^C by design, and the daemon outlives this app).
-        for (let i = 0; i < 24 && !fixturePid; i++) {
-          await sleep(500)
-          try {
-            fixturePid = Number(readFileSync(fixturePidFile, 'utf8').trim()) || 0
-          } catch {
-            /* not up yet */
+        const awaitPid = async (tries: number): Promise<void> => {
+          for (let i = 0; i < tries && !fixturePid; i++) {
+            await sleep(500)
+            try {
+              fixturePid = Number(readFileSync(fixturePidFile, 'utf8').trim()) || 0
+            } catch {
+              /* not up yet */
+            }
           }
+        }
+        // DOOR 1 — the daemon's own, and the only one that answers. `mogging send` refuses
+        // an unknown pane, writes on the authed socket, and exits 0 only after the daemon
+        // has processed the bytes (transport's `input` reaches the same `pane.write` a
+        // renderer keystroke does, so the detector arms its probe identically).
+        let fixtureDoor: string | null = null
+        const sent = await paneSend(pane2, startLine(nodeBin))
+        await awaitPid(20)
+        if (fixturePid) fixtureDoor = 'cli+abs'
+        // DOOR 2 — the renderer's, and a DIFFERENT node reference: bare `node`, resolved by
+        // the pane's own shell. The two doors share no code below this file, and the two
+        // references fail for opposite reasons (a PATH this process cannot see vs. one the
+        // pane cannot), so one run distinguishes transport from resolution instead of
+        // costing a CI round trip per hypothesis. The `wx` lock above makes the retry safe.
+        const bridgeTried = !fixturePid
+        if (bridgeTried) {
+          await ES(
+            `(window.bridge.send('terminal:write', { id: ${pane2}, data: ${JSON.stringify(startLine('node') + '\r')} }), 1)`
+          )
+          await awaitPid(12)
+          if (fixturePid) fixtureDoor = 'bridge+path'
         }
         fixtureStarted = fixturePid > 0
-      }
-      // The arm's whole claim is "a CONFIRMED agent that never dies fails the interrupt
-      // CLOSED" — so the confirmation must exist before the trigger fires, and hermetically
-      // it is now the PROCESS TABLE's own: nothing declares this session, the detector
-      // finds it (submitted line -> probe -> listing, plus the shared-snapshot gap). Racing
-      // it hands the interrupt an UNCONFIRMED session, whose rules let it give up after two
-      // rounds, and the OSC guess below then legitimately reads as agent-gone.
-      let confirmed2 = false
-      for (let i = 0; i < 40 && !confirmed2; i++) {
-        await sleep(500)
-        confirmed2 = (await ES(`(window.__mogging.agents.session(${pane2}) || {}).running === true`)) as boolean
-      }
-      const sessionWrittenAt = Date.now()
-      const capSent2 = (await capNotify(pane2)).code === 0
-      let offered2 = false
-      for (let i = 0; i < 20 && !offered2; i++) {
-        await sleep(300)
-        offered2 = (await offerState2())?.state === 'offered'
-      }
-      const launchesBefore2 = await writesFor2()
-      await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Continue on')); if (b) b.click(); return 1 })()`)
-      // THE GUESSES, fired AT the interrupt — what made this gate flaky instead of
-      // deterministic. A living process settles the process table's answer; it settles
-      // nothing about the OTHER ways a pane's agent session is retired, and each of those
-      // used to reach the interrupt as "the agent is gone" while the CLI ran on. The
-      // loudest is the shell's own OSC 133;D — a real mark that any zsh/bash
-      // with third-party shell integration emits at every prompt (ours is 633, which is
-      // why Windows and Linux sweeps never saw it), fired here through the pane's xterm
-      // exactly as blocks-smoke does, so no shell emitter is needed. It is armed by a
-      // 133;C and only bites once terminal-pane's 1500ms post-session grace has expired
-      // — which is the load dependence: unloaded, the offer polls once and the ^C lands
-      // inside the grace; loaded, the poll takes seconds and the guess is live by the
-      // time the interrupt starts. A fixture that leaves that to luck is not a fixture.
-      let guessFired = false
-      for (let i = 0; i < 80 && !guessFired; i++) {
-        const started = (await ES(
-          `(window.__mogging.agents.switchTrace(${pane2}) || []).some((t) => t.phase === 'interrupt-start')`
-        )) as boolean
-        if (started && Date.now() - sessionWrittenAt > 1600) {
-          guessFired = (await ES(
-            `(() => {
-              const p = (window.__mogging.panes || []).find((x) => x.id === ${pane2})
-              if (!p || !p.term) return false
-              const E = String.fromCharCode(27), B = String.fromCharCode(7)
-              p.term.write(E + ']133;C' + B)   // a command started (arms the exit guess)
-              p.term.write(E + ']133;D;0' + B) // ...and the shell is back at its prompt
-              return true
-            })()`
-          )) as boolean
+        fixtureDiag = {
+          door: fixtureDoor, // which transport/reference pair actually started it
+          shellReady, // false => the pane was executing NO typed command at all
+          sentCode: sent.code, // 0 => the daemon processed the bytes; 1 => it refused the pane
+          bridgeTried,
+          nodeBin,
+          nodeBinExists: existsSync(nodeBin),
+          fixtureFile,
+          startLine: startLine(nodeBin),
+          ...(fixtureStarted ? {} : { tail: await paneTail(pane2) }) // what the SHELL said
         }
-        if (!guessFired) await sleep(200)
       }
+      // NO FIXTURE, NO ARM. Everything below asks what a CONFIRMED agent does to the
+      // interrupt; with no agent in the pane it asks nothing, and running it anyway spends
+      // a minute producing a tail that reads like a fail-closed regression when the only
+      // real finding is one line above. Stop here, loudly, on the fixture's own flag.
+      let confirmed2 = false
+      let capSent2 = false
+      let offered2 = false
+      let guessFired = false
       let failedOk = false
-      for (let i = 0; i < 60 && !failedOk; i++) {
-        await sleep(500)
-        failedOk = (await offerState2())?.state === 'failed'
-      }
-      const nothingTypedOk = (await writesFor2()) === launchesBefore2
-      // Diagnosis line for a fail-closed miss: where the offer actually ended up, what the
-      // switch trace recorded (a stuck 'switching' = a throw mid-flow; a trace with 'typed'
-      // = the interrupt wrongly reported gone) — and, first of all, whether the FIXTURE was
-      // still alive, because a dead one turns every reading below into a different question.
-      const failDiag = failedOk
-        ? null
-        : {
-            offerFinal: await offerState2(),
-            trace2: (await ES(`window.__mogging.agents.switchTrace(${pane2})`)) as { phase: string }[],
-            session2: await ES(`window.__mogging.agents.session(${pane2})`),
-            fixturePid,
-            fixtureAlive: fixtureAlive()
+      let nothingTypedOk = false
+      let failDiag: Record<string, unknown> | null = null
+      if (fixtureStarted) {
+        // The arm's whole claim is "a CONFIRMED agent that never dies fails the interrupt
+        // CLOSED" — so the confirmation must exist before the trigger fires, and hermetically
+        // it is now the PROCESS TABLE's own: nothing declares this session, the detector
+        // finds it (submitted line -> probe -> listing, plus the shared-snapshot gap). Racing
+        // it hands the interrupt an UNCONFIRMED session, whose rules let it give up after two
+        // rounds, and the OSC guess below then legitimately reads as agent-gone.
+        for (let i = 0; i < 40 && !confirmed2; i++) {
+          await sleep(500)
+          confirmed2 = (await ES(`(window.__mogging.agents.session(${pane2}) || {}).running === true`)) as boolean
+        }
+        const sessionWrittenAt = Date.now()
+        capSent2 = (await capNotify(pane2)).code === 0
+        for (let i = 0; i < 20 && !offered2; i++) {
+          await sleep(300)
+          offered2 = (await offerState2())?.state === 'offered'
+        }
+        const launchesBefore2 = await writesFor2()
+        await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Continue on')); if (b) b.click(); return 1 })()`)
+        // THE GUESSES, fired AT the interrupt — what made this gate flaky instead of
+        // deterministic. A living process settles the process table's answer; it settles
+        // nothing about the OTHER ways a pane's agent session is retired, and each of those
+        // used to reach the interrupt as "the agent is gone" while the CLI ran on. The
+        // loudest is the shell's own OSC 133;D — a real mark that any zsh/bash with
+        // third-party shell integration emits at every prompt (ours is 633, which is why
+        // Windows and Linux sweeps never saw it), fired here through the pane's xterm
+        // exactly as blocks-smoke does, so no shell emitter is needed. It is armed by a
+        // 133;C and only bites once terminal-pane's 1500ms post-session grace has expired
+        // — which is the load dependence: unloaded, the offer polls once and the ^C lands
+        // inside the grace; loaded, the poll takes seconds and the guess is live by the
+        // time the interrupt starts. A fixture that leaves that to luck is not a fixture.
+        for (let i = 0; i < 80 && !guessFired; i++) {
+          const started = (await ES(
+            `(window.__mogging.agents.switchTrace(${pane2}) || []).some((t) => t.phase === 'interrupt-start')`
+          )) as boolean
+          if (started && Date.now() - sessionWrittenAt > 1600) {
+            guessFired = (await ES(
+              `(() => {
+                const p = (window.__mogging.panes || []).find((x) => x.id === ${pane2})
+                if (!p || !p.term) return false
+                const E = String.fromCharCode(27), B = String.fromCharCode(7)
+                p.term.write(E + ']133;C' + B)   // a command started (arms the exit guess)
+                p.term.write(E + ']133;D;0' + B) // ...and the shell is back at its prompt
+                return true
+              })()`
+            )) as boolean
           }
+          if (!guessFired) await sleep(200)
+        }
+        for (let i = 0; i < 60 && !failedOk; i++) {
+          await sleep(500)
+          failedOk = (await offerState2())?.state === 'failed'
+        }
+        nothingTypedOk = (await writesFor2()) === launchesBefore2
+        // Diagnosis line for a fail-closed miss: where the offer actually ended up, what the
+        // switch trace recorded (a stuck 'switching' = a throw mid-flow; a trace with 'typed'
+        // = the interrupt wrongly reported gone) — and, first of all, whether the FIXTURE was
+        // still alive, because a dead one turns every reading below into a different question.
+        failDiag = failedOk
+          ? null
+          : {
+              offerFinal: await offerState2(),
+              trace2: (await ES(`window.__mogging.agents.switchTrace(${pane2})`)) as { phase: string }[],
+              session2: await ES(`window.__mogging.agents.session(${pane2})`),
+              fixturePid,
+              fixtureAlive: fixtureAlive(),
+              tail: await paneTail(pane2)
+            }
+      }
 
       const pass =
         savedA && savedB && confirmed && capSent && offered && switched && typedOk && orderOk &&
@@ -733,8 +832,8 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       result = {
         pass, mode: live ? 'claude-live' : 'gemini-hermetic', savedA, savedB, confirmed,
         initialProfile, switchedTo, capSent, offered, switched, typedOk, orderOk, phases1: p1,
-        menuEntryOk, menuDiag, manualOk, fixtureStarted, fixturePid, confirmed2, capSent2,
-        offered2, guessFired, failedOk, failDiag, nothingTypedOk
+        menuEntryOk, menuDiag, manualOk, fixtureStarted, fixturePid, fixtureDiag, confirmed2,
+        capSent2, offered2, guessFired, failedOk, failDiag, nothingTypedOk
       }
     } catch (e) {
       result = { pass: false, error: String(e) }

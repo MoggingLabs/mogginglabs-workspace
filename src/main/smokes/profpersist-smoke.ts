@@ -64,6 +64,22 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
    *  sleep can never establish it. */
   const settle = (): Promise<boolean> => settleToShell({ es: ES, sleep, paneId: PANE })
 
+  /** DIAGNOSTIC ONLY (never asserted): the three grids that must agree for a restored pane
+   *  to render its own replay faithfully — what the pane PROPOSES for its box, what XTERM
+   *  actually holds, and what the SESSION reported at the last spawn reply. A reattach whose
+   *  spawn carried no dims leaves the session on its own grid and xterm on the fabricated
+   *  80x24 default, and ConPTY — which paints by diff, at absolute rows, erasing nothing it
+   *  did not repaint — then lands every later line (session.rows - xterm.rows) rows above the
+   *  visible end of the pane. That is what a residue tail on a scraped row looks like from
+   *  the inside, so the numbers ride the verdict. */
+  const gridOf = (): Promise<unknown> =>
+    ES(
+      `(() => {
+        const p = (window.__mogging.panes || []).find((x) => x.id === ${PANE})
+        return p && p.grid ? p.grid() : null
+      })()`
+    )
+
   /** Echo the pointer var with a distinct prefix and poll for its result line. */
   const probeEnv = async (prefix: string): Promise<string> => {
     await cli(['send', String(PANE), sh.echoVar('FAKE_MARK', `${prefix}=`)])
@@ -119,8 +135,11 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
       await sleep(4500)
 
       // The restored pane must carry B's env — the DEFAULT (A) would be the 6/04 bug.
+      const gridAtMount = await gridOf() // before a single probe byte is typed
       const settled = await settle() // restore relaunched the lineup: gemini is back on the screen
+      const gridAfterSettle = await gridOf()
       const restored = await probeEnv('MARKB1')
+      const gridAtProbe = await gridOf() // the reading that explains a residue tail, if any
       const restoredOnB = restored === MARK_B
       const neverA = !(await bufferText()).includes(`=${MARK_A}`)
 
@@ -173,7 +192,10 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
         staleRemoval,
         staleLaunch,
         staleRefused,
-        settled
+        settled,
+        gridAtMount,
+        gridAfterSettle,
+        gridAtProbe
       })
       app.exit(pass ? 0 : 1)
     } catch (e) {
