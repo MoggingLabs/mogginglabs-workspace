@@ -221,11 +221,19 @@ export function runProductSmoke(win: BrowserWindow): void {
       await sleep(700)
       await ES(`window.__mogging.workspace.create({ name: 'Torrent' })`)
       await sleep(500)
-      await ES(`window.__mogging.layout.apply(16)`)
+      // The door's own verdict rides the diagnostics: a refused apply and a stalled
+      // spawn read identically as livePanes below, and they are different bugs.
+      const applyAccepted = (await ES(`window.__mogging.layout.apply(16)`)) as boolean
+      let paneCountAfterApply = 0
       for (let i = 0; i < 40; i++) {
-        if (Number(await ES(`window.__mogging.layout.paneCount()`)) === 16) break
+        paneCountAfterApply = Number(await ES(`window.__mogging.layout.paneCount()`))
+        if (paneCountAfterApply === 16) break
         await sleep(400)
       }
+      const applyDiag = (await ES(`(() => ({
+        ceiling: window.__mogging.workspace.layoutCeiling ? window.__mogging.workspace.layoutCeiling() : null,
+        toasts: [...document.querySelectorAll('.toast')].map((t) => (t.textContent || '').slice(0, 120))
+      }))()`).catch(() => null)) as { ceiling: number | null; toasts: string[] } | null
       await sleep(2500)
       const torrentIdx = Number(await ES(`window.__mogging.workspace.count()`)) - 1
       const swarmIdx = torrentIdx - 1
@@ -263,6 +271,7 @@ export function runProductSmoke(win: BrowserWindow): void {
         pass, phaseAOk, phaseBOk, anyCliInstalled,
         checklistShown, rolesOk, profileChosenOk, checklistHonest, dockOk,
         ledgerOk, mailOk, workOk, gateOk, repoOk,
+        applyAccepted, paneCountAfterApply, applyDiag,
         phaseB, budget: BUDGET
       }
     } catch (e) {
