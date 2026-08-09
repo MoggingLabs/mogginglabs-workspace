@@ -1,5 +1,9 @@
 import { ipcMain } from 'electron'
-import { resumeSessionIdFromFile } from '@backend/features/agents'
+// Subpath, not the barrel: the agents barrel re-exports install.ts, which reaches the
+// terminal feature and so node-pty — and on POSIX node-pty loads its native binding AT
+// IMPORT (unixTerminal.ts), so any unit test that imports app-settings (-> here) dies on
+// a runner with no compiled addon (ed9bc80's precedent: the barrel reaches node-pty).
+import { resumeSessionIdFromFile } from '@backend/features/agents/session-pool'
 import {
   WorkspaceChannels,
   type LastSessionInfo,
