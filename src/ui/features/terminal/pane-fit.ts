@@ -1,4 +1,6 @@
 import type { Terminal } from '@xterm/xterm'
+import { deviceFloorsCells } from '../../core/system/renderer-profile-port'
+import { terminalFontsReady } from '../../core/terminal/font-port'
 
 /**
  * The pane's grid derivation — the house replacement for @xterm/addon-fit, retired for
@@ -14,13 +16,27 @@ import type { Terminal } from '@xterm/xterm'
  * at the right edge, on top of the normal sub-cell flooring remainder — the reported
  * "terminal stops a little before the pane's edge".
  *
- * The derivation is otherwise exactly FitAddon's, including its private seam: cell
- * metrics come from the ACTIVE renderer's `_renderService.dimensions.css.cell` (the
- * WebGL renderer floors cells at device pixels, the DOM renderer does not — so the
- * renderer that will paint is the only honest source; see PaneWebglManager, whose
- * attach/release now refits through this same derivation). Guarded like
- * retireXtermScrollbar: if xterm moves the seam, propose() returns null and the pane
- * keeps its grid — degraded, never broken.
+ * The derivation is otherwise exactly FitAddon's, including its private seam into
+ * `_renderService.dimensions`. Guarded like retireXtermScrollbar: if xterm moves the
+ * seam, propose() returns null and the pane keeps its grid — degraded, never broken.
+ *
+ * WHAT A PROPOSAL IS. A proposal is a PUBLISHED measurement: it becomes a pty's size and
+ * therefore an agent's render width, and on an app restart it is applied to a session
+ * that is already running. So it may only exist when its inputs are FINAL, and this
+ * module owns both conditions because there is no other honest place to put them:
+ *
+ *   FONT — xterm measures its cell at term.open(), against whatever face is resolved in
+ *   that instant. Before the terminal faces activate that is a system fallback, and the
+ *   grid derived from it is wrong in BOTH axes (measured on a real pane: 71x24 proposed
+ *   where the truth was 68x18). xterm exposes no readiness signal — the seam returns a
+ *   number as soon as anything has been measured at all — so the gate is terminalFontsReady().
+ *
+ *   RENDERER — the two renderers disagree about cell width, so the same pane proposed two
+ *   different grids depending on which was attached, and every swap put a resize on the
+ *   wire. publishableCell() collapses them instead of racing the attach.
+ *
+ * Both gates live INSIDE proposeGrid rather than at its call sites: one definition of
+ * "this pane has a publishable grid", which a fifth caller cannot forget.
  */
 
 /** Grid floors, matching FitAddon's (and attachDims' on the daemon side): below this a
@@ -49,12 +65,46 @@ interface RendererCell {
   height: number
 }
 
-/** The active renderer's CSS cell size — FitAddon's own seam, kept private-API-guarded. */
-function activeCell(term: Terminal): RendererCell | null {
-  const core = (term as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: RendererCell } } } } })
-    ._core
-  const cell = core?._renderService?.dimensions?.css?.cell
+/** The active renderer's DEVICE cell size — FitAddon's own seam, kept private-API-guarded.
+ *
+ *  `device`, not `css`, and the difference is load-bearing for publishableCell below: the
+ *  DOM renderer derives its css.cell as `round(deviceCell * cols / dpr) / cols`, a residue
+ *  that depends on the CURRENT column count, so flooring it can disagree with the WebGL
+ *  cell by one device pixel at a knife edge. The device cells carry no such residue —
+ *  WebGL's is already an integer and the DOM's is the raw product — so they collapse
+ *  exactly. */
+function deviceCell(term: Terminal): RendererCell | null {
+  const core = (
+    term as unknown as { _core?: { _renderService?: { dimensions?: { device?: { cell?: RendererCell } } } } }
+  )._core
+  const cell = core?._renderService?.dimensions?.device?.cell
   return cell && typeof cell.width === 'number' && typeof cell.height === 'number' ? cell : null
+}
+
+/**
+ * The cell a grid may be PUBLISHED at: the renderer-independent one, in CSS pixels.
+ *
+ * The WebGL renderer floors char width at device pixels and the DOM renderer does not, so
+ * until now a pane's proposal changed with whichever renderer happened to be attached — a
+ * property that flips on GPU events the user never caused (the context cap, hidden-pane
+ * eviction, a driver reset). Flooring the DEVICE cell collapses the two: WebGL's is
+ * already floored, so floor is idempotent on it, and the DOM's raw product lands on the
+ * same integer. Heights need no help — both renderers already compute the identical
+ * `floor(ceil(charH * dpr) * lineHeight)`, so a renderer swap was only ever a cols event.
+ *
+ * This is what PaneWebglManager's transient-loss suppression (`release(!retrying)`) was
+ * hand-tuning around: with the floor, a loss/recover cycle proposes the SAME grid at both
+ * ends, applyGrid dedupes it, and the pty sees nothing. The suppression stays — it is
+ * still correct — but it is no longer what stands between a GPU blip and a resize thrash.
+ *
+ * The one machine where flooring is wrong is one that can never paint with WebGL, where
+ * the DOM renderer's raw cell IS the truth rather than a transient; renderer-profile-port
+ * answers that, once, at boot.
+ */
+export function publishableCell(cell: RendererCell, dpr: number): RendererCell {
+  if (!(dpr > 0)) return cell
+  if (!deviceFloorsCells()) return { width: cell.width / dpr, height: cell.height / dpr }
+  return { width: Math.floor(cell.width) / dpr, height: Math.floor(cell.height) / dpr }
 }
 
 /** Warned once per session: the cell-metrics seam is private API, and its silent failure
@@ -66,9 +116,15 @@ let warnedCellSeam = false
 /** Propose the grid for the terminal's current container, or null when unmeasurable
  *  (not yet opened, hidden, or xterm moved its internals). */
 export function proposeGrid(term: Terminal): { cols: number; rows: number } | null {
+  // FIRST, before anything is measured: a grid measured against a fallback face is not a
+  // measurement, and publishing one is how a wrong size reaches a running agent. Null here
+  // is a supported, designed state all the way down — spawn omits its dims, attachDims
+  // leaves an existing session alone, and the daemon defers a typed launch until a client
+  // confirms the grid (LAUNCH_DIMS_GRACE_MS). Nothing invents a size on our behalf.
+  if (!terminalFontsReady()) return null
   const parent = term.element?.parentElement
   if (!parent) return null
-  const cell = activeCell(term)
+  const cell = deviceCell(term)
   if (!cell) {
     // Distinguish "hidden" from "the seam broke": a hidden pane's PARENT is unmeasurable
     // too (display:none computes width 'auto'), while a broken seam leaves a measurable
@@ -91,7 +147,8 @@ export function proposeGrid(term: Terminal): { cols: number; rows: number } | nu
   const padX =
     parseFloat(elementStyle.paddingLeft) + parseFloat(elementStyle.paddingRight)
   const padY = parseFloat(elementStyle.paddingTop) + parseFloat(elementStyle.paddingBottom)
-  return gridFor(parentWidth - padX, parentHeight - padY, cell.width, cell.height)
+  const published = publishableCell(cell, window.devicePixelRatio || 1)
+  return gridFor(parentWidth - padX, parentHeight - padY, published.width, published.height)
 }
 
 /** Apply a proposed grid (render-clear + resize, exactly what FitAddon.fit did).

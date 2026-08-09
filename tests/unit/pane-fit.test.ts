@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { gridFor, MIN_COLS, MIN_ROWS } from '@ui/features/terminal/pane-fit'
+import { gridFor, MIN_COLS, MIN_ROWS, publishableCell } from '@ui/features/terminal/pane-fit'
 
 // The house grid derivation that retired @xterm/addon-fit. The one deliberate
 // difference from the addon is the ABSENCE of its scrollbar reservation
@@ -67,8 +67,66 @@ describe('gridFor', () => {
     // The same 800px box under the two renderers at dpr 1.25: the DOM renderer
     // measures 8.4px, WebGL floors to device pixels and reports 8.0px. Different
     // renderers, different (both correct) grids — which is why a renderer swap
-    // must re-run this derivation.
+    // used to have to re-run this derivation, and why publishableCell now removes
+    // the divergence upstream of it (see below).
     expect(gridFor(800, 400, 8.4, 18.2)!.cols).toBe(95)
     expect(gridFor(800, 400, 8.0, 18.2)!.cols).toBe(100)
+  })
+})
+
+describe('publishableCell — the same pane must propose one grid, not two', () => {
+  // The renderers disagree about cell WIDTH: WebGL floors charWidth at device pixels and
+  // the DOM renderer uses the raw product. So a pane's proposal used to change with
+  // whichever renderer happened to be attached — a property that flips on GPU events the
+  // user never caused (the context cap, hidden-pane eviction, a driver reset), and every
+  // flip put a resize on the wire, mid-frame, into a live agent.
+  //
+  // These are DEVICE cells, which is why the collapse is exact: WebGL's is already an
+  // integer so floor is idempotent on it, and the DOM's is the raw product. (Flooring the
+  // CSS cell would not do — the DOM renderer's carries a round(·cols)/cols residue that
+  // depends on the current column count.)
+  const CHAR_W = 8.4 // JetBrains Mono at the default 14px: 0.6em advance
+  const CHAR_H = 18.48 // ...and its 1.32em line box
+
+  const domCell = (dpr: number): { width: number; height: number } => ({
+    width: CHAR_W * dpr,
+    height: Math.floor(Math.ceil(CHAR_H * dpr) * 1.3)
+  })
+  const webglCell = (dpr: number): { width: number; height: number } => ({
+    width: Math.floor(CHAR_W * dpr),
+    height: Math.floor(Math.ceil(CHAR_H * dpr) * 1.3)
+  })
+
+  it('collapses the two renderers onto the same published cell at every scaling', () => {
+    // THE assertion that fails if the floor is ever reverted.
+    for (const dpr of [1, 1.25, 1.5, 1.75, 2]) {
+      expect(publishableCell(domCell(dpr), dpr), `dpr ${dpr}`).toEqual(publishableCell(webglCell(dpr), dpr))
+    }
+  })
+
+  it('is idempotent — a published cell republishes to itself', () => {
+    for (const dpr of [1, 1.25, 2]) {
+      const once = publishableCell(domCell(dpr), dpr)
+      expect(publishableCell({ width: once.width * dpr, height: once.height * dpr }, dpr)).toEqual(once)
+    }
+  })
+
+  it('leaves heights alone — both renderers already compute the identical device cell', () => {
+    for (const dpr of [1, 1.25, 1.5, 2]) {
+      expect(publishableCell(domCell(dpr), dpr).height).toBe(domCell(dpr).height / dpr)
+    }
+  })
+
+  it('yields the WebGL grid — the floored cell is NARROWER, so it fits MORE columns', () => {
+    // Worth pinning because the direction is counter-intuitive and the trade depends on it.
+    const cell = publishableCell(domCell(1.25), 1.25)
+    expect(cell.width).toBe(8)
+    expect(gridFor(800, 400, cell.width, cell.height)!.cols).toBe(100)
+  })
+
+  it('passes the cell through unharmed when the ratio is unusable', () => {
+    const cell = { width: 10.5, height: 31 }
+    expect(publishableCell(cell, 0)).toEqual(cell)
+    expect(publishableCell(cell, NaN)).toEqual(cell)
   })
 })

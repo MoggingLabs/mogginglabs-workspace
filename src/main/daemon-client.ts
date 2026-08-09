@@ -549,12 +549,17 @@ export class DaemonClient {
         if (waiters) {
           this.spawnWaiters.delete(m.id)
           for (const waiter of waiters) {
+            // cols/rows ride through untouched, including when the daemon omits them (an
+            // older build): absent must stay absent, because "the session's size is
+            // unknown" and "the session is 0x0" are opposite instructions to the caller.
             waiter.resolve({
               existing: m.existing === true,
               restored: m.restored === true,
               pty: m.pty,
               gen: m.gen,
-              degraded: m.degraded
+              degraded: m.degraded,
+              cols: m.cols,
+              rows: m.rows
             })
           }
         }
@@ -618,11 +623,20 @@ export class DaemonClient {
     }
   }
 
+  /** Write a command to the daemon. Best-effort by design — the caller reconnects — but
+   *  never SILENT: the optional-chain below used to swallow a whole class of loss whole.
+   *  With no socket, `this.sock?.write` evaluated to undefined and the message evaporated
+   *  with no throw, no log and no return value, so a resize dropped in a socket gap was
+   *  both permanent and invisible. The behaviour is unchanged; only its knowability is. */
   private send(m: ClientMessage): void {
+    if (!this.sock || this.sock.destroyed) {
+      clientLog('send-dropped', { t: m.t, reason: this.sock ? 'socket-destroyed' : 'no-socket' })
+      return
+    }
     try {
-      this.sock?.write(encodeMessage(m))
-    } catch {
-      /* peer gone; caller will reconnect */
+      this.sock.write(encodeMessage(m))
+    } catch (err) {
+      clientLog('send-dropped', { t: m.t, reason: err instanceof Error ? err.message : String(err) })
     }
   }
 

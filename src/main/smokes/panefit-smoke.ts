@@ -87,6 +87,26 @@ const SCRIPT = `(async () => {
     webglCellW: Math.round(webglCell * 1000) / 1000
   }
 
+  // A3. ...and yet the PUBLISHED cell must be the same under either renderer. A2's
+  // divergence is real and permanent; what changed is that pane-fit no longer PUBLISHES
+  // it. Flooring the DEVICE cell collapses the two — WebGL's is already an integer so the
+  // floor is idempotent, the DOM's is the raw product — so a context loss, a cap eviction
+  // or a driver reset now proposes the SAME grid at both ends and costs the pty zero
+  // resizes. Read live rather than recomputed: this is the seam, not a restatement of it.
+  //
+  // No residue assertion here on purpose. Flooring would clip a DOM-painted pane by one
+  // device pixel per column, but renderer-profile-port turns the floor OFF on a machine
+  // with no WebGL at all — and A above proves this one has it, so the case cannot arise.
+  const dpr = window.devicePixelRatio || 1
+  const devCell = panes[0].term._core._renderService.dimensions.device.cell
+  const domDeviceW = raw * dpr
+  checks.rendererIndependent = {
+    pass: Math.floor(domDeviceW) === Math.floor(devCell.width),
+    domDeviceW: Math.round(domDeviceW * 1000) / 1000,
+    webglDeviceW: devCell.width,
+    dpr
+  }
+
   // B. release on hide (budget 0), grid kept while unmeasurable, convergence on return
   const colsBefore = panes.map((p) => p.cols())
   window.__moggingGlBudget = 0

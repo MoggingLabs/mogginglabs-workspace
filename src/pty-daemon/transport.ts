@@ -42,6 +42,20 @@ const approvalKey = (repoId: string, branch: string): string => `${repoId}\0${br
 /** The self-reported identity from `hello`, sanitized into one short log label. Diagnosis
  *  only (never authorization): "shutdown requested by client" with no way to say WHICH
  *  client is what made a night of six daemon retires an archaeology project. */
+/**
+ * Pane ids whose input/resize we have already reported dropping for want of a session.
+ * FIRST OCCURRENCE ONLY: a client that resizes a pane a beat before its spawn lands is
+ * ordinary and self-correcting, while the same id repeating is the pathology worth seeing
+ * — and an unthrottled line here would be one per window tick, per pane, forever.
+ */
+const droppedNoSession = new Set<string>()
+
+function logDropNoSession(kind: 'input' | 'resize', id: string, gen: number | undefined): void {
+  if (droppedNoSession.has(id)) return
+  droppedNoSession.add(id)
+  log(`${kind} DROPPED for pane ${id}: no session (gen ${String(gen)}) — first occurrence only`)
+}
+
 function describeClient(raw: ClientIdentity | undefined): string {
   const pid = typeof raw?.pid === 'number' && Number.isInteger(raw.pid) && raw.pid > 0 ? raw.pid : 0
   const kind = typeof raw?.kind === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(raw.kind) ? raw.kind : ''
@@ -193,14 +207,21 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
             // replay arriving ahead of the gen would be dropped as stale. Same tick either
             // way, so no pty output can land between the scrollback snapshot and the bind.
             // The DAEMON owns the pty, so the daemon reports how it behaves — the app never guesses.
+            // cols/rows are read AFTER ensure(), so they are what the session holds once
+            // this spawn's own reconciliation has been applied — the read-back a client
+            // compares its measurement against. Sampled here rather than echoed from the
+            // request precisely because the two can differ: a dims-less spawn leaves the
+            // session at its own size, and an attach applies the client's.
             send({
               t: 'spawned',
               id: m.id,
               gen: pane.gen,
               existing: existed,
               restored: existed && pane.restoredPristine,
-              scrollback: pane.scrollback,
+              scrollback: pane.replayStream,
               pty: ptyEmulation(),
+              cols: pane.cols,
+              rows: pane.rows,
               ...(pane.launchDegraded && pane.launchIntent
                 ? { degraded: { agentId: pane.launchIntent.agentId } }
                 : {})
@@ -221,7 +242,7 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
             break
           }
           // Reply before bind, same reason as `spawn`.
-          send({ t: 'attached', id: m.id, gen: pane.gen, scrollback: pane.scrollback })
+          send({ t: 'attached', id: m.id, gen: pane.gen, scrollback: pane.replayStream })
           subscribe(m.id)
           break
         }
@@ -247,6 +268,9 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           // (daemon-client.ts), so a frame here would kill a spawn in flight for that pane —
           // trading a silent drop for a louder bug.
           else if (pane) log(`input REFUSED for pane ${m.id}: gen ${String(m.gen)} != ${pane.gen}`)
+          // No session at all took NO branch — not even the refusal log above — so input
+          // aimed at a pane the daemon has not registered yet vanished without a trace.
+          else logDropNoSession('input', m.id, m.gen)
           break
         }
         case 'resize': {
@@ -255,6 +279,11 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
           const pane = sessions.get(m.id)
           if (pane && (typeof m.gen !== 'number' || m.gen === pane.gen)) pane.resize(m.cols, m.rows)
           else if (pane) log(`resize REFUSED for pane ${m.id}: gen ${String(m.gen)} != ${pane.gen}`)
+          // The same hole, and the one that mattered: a pane refits before its spawn lands
+          // (spawnPty waits on the emulation round trip and can wait on an armed run), so
+          // its corrected grid arrived here first and was discarded in silence. The pane
+          // then held a grid the pty never learned, with nothing to detect it.
+          else logDropNoSession('resize', m.id, m.gen)
           break
         }
         case 'kill':

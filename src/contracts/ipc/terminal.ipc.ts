@@ -11,7 +11,11 @@ export interface SpawnRequest {
    *  background workspace mounts display:none; its cells are unmeasurable). Dims flow
    *  one way, from a real measurement to the PTY: an invented 80×24 here resized a
    *  SURVIVING agent session to the wrong grid on every app restart (attachDims treats
-   *  absent dims as "leave the session alone" — this is the field honoring it). */
+   *  absent dims as "leave the session alone" — this is the field honoring it).
+   *
+   *  One way SETS; it does not mean one way KNOWS. SpawnResult reports the grid the
+   *  session actually holds, so a client can tell agreement from divergence and heal the
+   *  latter. Reporting is not measuring: a pane that could not measure adopts nothing. */
   cols?: number
   rows?: number
   /** Trusted renderer context for least-privilege pane environment materialization.
@@ -95,6 +99,19 @@ export interface SpawnResult {
    *  The pane comes up with its history intact and says so, offering a relaunch — never
    *  silently as a plain shell, which is how a lost session goes unnoticed. */
   degraded?: { agentId: string }
+  /** The grid the SESSION holds, read back after the backend applied whatever this spawn
+   *  asked for. Absent from an older daemon, and absent is not zero — a caller that cannot
+   *  see the session's size must assert nothing.
+   *
+   *  This is the answer to the one-way rule at the top of this file, not an exception to
+   *  it. Dims still flow one way — only a real client measurement ever SETS a size — but
+   *  the session now REPORTS what it holds, which is what makes a divergence detectable.
+   *  Without it, a resize dropped between the renderer and ConPTY (a session that did not
+   *  exist yet, a dead socket, a tombstoned generation) was permanent and silent: nothing
+   *  compared the two sides, and the only re-assert in the app rides the daemon-reconnect
+   *  edge, which a boot-time drift never crosses. */
+  cols?: number
+  rows?: number
 }
 export interface WriteCommand {
   id: PaneId
