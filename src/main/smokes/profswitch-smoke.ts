@@ -1,8 +1,8 @@
 import { app, type BrowserWindow } from 'electron'
 import { execFile } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { setAgentDetectOverrideForSmoke } from '../agents'
 import { runtimeDir } from '../daemon-client'
 import { AgentChannels, type AgentInfo, type AgentInstallState } from '@contracts'
@@ -20,13 +20,23 @@ import { AgentChannels, type AgentInfo, type AgentInstallState } from '@contract
 //   3. Manual switch (⋯ menu): a "Switch to <profile> (resume session)" entry exists
 //      for the running provider's OTHER profile and switches the pane back.
 //   4. The interrupt fails CLOSED (F2): with a CONFIRMED-running agent that never
-//      dies (detection shim; no process verdict will ever come), the switch ends in
-//      the overlay's 'failed' state and types NO launch command — AND it holds while
-//      the pane's shell claims otherwise. The shim only ever silenced the process
-//      table, so "no verdict will ever come" left the heuristics that ALSO retire a
-//      pane's agent session free to answer in its place; step 4 now fires the loudest
-//      of them (a real OSC 133;D prompt mark) straight at the interrupt instead of
-//      hoping the run is fast enough that it never lands.
+//      dies, the switch ends in the overlay's 'failed' state and types NO launch
+//      command — AND it holds while the pane's shell claims otherwise.
+//      "Never dies" is a PROCESS fact here, not a declaration. The arm used to shim a
+//      detection into a pane whose foreground was a plain shell and call the silence
+//      that followed "no verdict will ever come" — a property of the SHIM, never of
+//      the world. Phase-launch's re-anchor (agent-proc.ts: a pane is re-listed when
+//      `!t.hasPromptMarker || t.foregroundIsShell`) then started asking the process
+//      table about exactly those panes, and it answered with a REAL null verdict —
+//      correctly: a table that finds only a shell in the pane authorizes typing, the
+//      fail-closed law protects RUNNING agents. macOS's zsh reached that first, which
+//      is the whole platform skew. So the fixture is now a running agent: node
+//      executing a script whose basename IS an adapter bin (the npm-shim shape the
+//      detector matches by construction), trapping SIGINT so the double-^C cannot end
+//      it, holding the pane's foreground so neither a prompt mark nor the re-anchor
+//      has anything to say. On top of that process, step 4 still fires the loudest of
+//      the HEURISTIC retirements (a real OSC 133;D prompt mark) straight at the
+//      interrupt: a guess may hide the context bar, it may never authorize a keystroke.
 // Assertions ride __mogging.ptyWrites (the DEV write spy) + the switch trace —
 // phases and command presence only, never buffer content.
 //
@@ -35,8 +45,10 @@ import { AgentChannels, type AgentInfo, type AgentInstallState } from '@contract
 // `MOGGING_PROFSWITCH=claude` is the manual live variant for a machine with Claude
 // Code installed: steps 1-3 run against the REAL CLI — real boot, real process-table
 // confirmation, a real double-^C death, and the real ADR-0013 exact-session resume —
-// while step 4 (fail-closed) keeps a hermetic never-dies gemini fixture on a second
-// pane, because a real agent rightly DIES under the interrupt.
+// while step 4 (fail-closed) keeps its own never-dies gemini fixture on a second pane,
+// because a real agent rightly DIES under the interrupt. That second pane keeps the
+// DECLARED fixture (the shim): the hermetic row is the one the sweep certifies F2 on,
+// and it is the one that runs a real process.
 // `MOGGING_PROFSWITCH=shots` is the SCREENSHOT walkthrough on a machine with TWO
 // signed-in claude accounts: real conversation on profile A -> /status shows account
 // A's email -> capped offer -> switch -> the SAME conversation resumes under profile B
@@ -49,13 +61,65 @@ import { AgentChannels, type AgentInfo, type AgentInstallState } from '@contract
 // rides MOGGING_PROFSHOT_HOME_B (default ~/.claude-cmain); expected emails may ride
 // MOGGING_PROFSHOT_EMAIL_A/_B — set BOTH for the return leg's exact-match assertion,
 // which is what proves the CLI actually left account B.
+/** POSIX literal quoting for a path typed at a pane's own shell prompt (bash/zsh/sh). */
+const shq = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`
+
+/**
+ * A real `node` binary, absolute where PATH knows one.
+ *
+ * NEVER `process.execPath`: in Electron main that is the Electron binary, whose basename
+ * is not an interpreter the detector knows — the fixture below would then run as a process
+ * the process table cannot identify as an agent at all, which is the exact failure this
+ * arm exists to stop faking. Absolute, so the PANE's login shell (a macOS zsh -l re-runs
+ * path_helper over its own PATH) does not have to find it; the bare fallback keeps the arm
+ * running on a host whose PATH this process never saw, at the cost of that guarantee.
+ */
+function resolveNodeBin(): string {
+  const name = process.platform === 'win32' ? 'node.exe' : 'node'
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    // `npm run` puts node_modules/.bin FIRST, and a dependency that ships a `node` entry
+    // there is a wrapper SCRIPT: the pane would then run `node <wrapper> <fixture>`, whose
+    // script leaf is `node` and matches no adapter at all. Only a real installation counts.
+    if (!dir || dir.split(/[\\/]+/).includes('node_modules')) continue
+    const candidate = join(dir, name)
+    if (existsSync(candidate)) return candidate
+  }
+  return name.replace(/\.exe$/, '')
+}
+
 export function runProfSwitchSmoke(win: BrowserWindow): void {
   const live = process.env.MOGGING_PROFSWITCH === 'claude'
   const shots = process.env.MOGGING_PROFSWITCH === 'shots'
+  /** Step 4's fixture agent, once it has reported its own pid. */
+  let fixturePid = 0
+  const fixtureAlive = (): boolean => {
+    if (fixturePid <= 0) return false
+    try {
+      process.kill(fixturePid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  /** Reap it on EVERY exit path — the watchdog below included. It survives ^C by design
+   *  and the daemon survives THIS app (ADR 0006), so an unkilled one is a live node
+   *  process leaking into whatever gate runs next. SIGTERM is untrapped there; on
+   *  Windows node's kill terminates outright. */
+  const killFixture = (): void => {
+    if (fixturePid <= 0) return
+    try {
+      process.kill(fixturePid)
+    } catch {
+      /* already gone */
+    }
+  }
   // Safety net (real CLIs boot slowly). `shots` runs the switch TWICE — two interrupts,
   // two CLI boots, two resumes, three /status reads — so it gets roughly double the
   // live variant's budget rather than the same one.
-  setTimeout(() => app.exit(1), shots ? 400000 : live ? 220000 : 150000)
+  setTimeout(() => {
+    killFixture()
+    app.exit(1)
+  }, shots ? 400000 : live ? 220000 : 150000)
   const provider = live ? 'claude' : 'gemini'
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
@@ -511,10 +575,10 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       await sleep(1000) // the in-flight guard releases just after the overlay clears
 
       // ── 4. F2 fails CLOSED: a confirmed-running agent that never dies ────────
-      // The detection shim marks the session running:true; no process verdict will
-      // ever arrive for it, so the interrupt must give up and type NOTHING. Always a
-      // HERMETIC gemini fixture: a real agent rightly dies under the interrupt, so the
-      // live variant stages this on a SECOND pane with its own gemini profile pair.
+      // A gemini agent RUNS in the pane and cannot be interrupted to death, so no
+      // process verdict will ever arrive and the switch must give up and type NOTHING.
+      // Always gemini: a real agent rightly dies under the interrupt, so the live
+      // variant stages this on a SECOND pane with its own gemini profile pair.
       let pane2 = pane
       if (live) {
         await save({ id: 'g-a', name: 'GemA', provider: 'gemini', env: { FAKE_MARK: 'GA' }, order: 0 })
@@ -529,15 +593,77 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       const offerState2 = (): Promise<{ state: string } | null> => ES(`window.__mogging.agents.offer(${pane2})`)
       const writesFor2 = (): Promise<number> =>
         ES<number>(`(window.__mogging.ptyWrites || []).filter((w) => w.id === ${pane2} && String(w.data).includes('gemini')).length`)
-      await ES(`window.__mogging.agents.detected({ id: ${pane2}, agentId: 'gemini', cwd: ${JSON.stringify(anchor)}, sinceMs: Date.now() })`)
+      // THE FIXTURE AGENT. Hermetic: a real process, started in the pane itself.
+      //   · `node <file named gemini>` — the BASENAME is the entire match. agent-proc.ts
+      //     identifies an npm-installed CLI by reading an INTERPRETER's script path and
+      //     asking whether its leaf is an adapter bin, which is why this cannot be
+      //     `node -e '…'` (an inline program has no script path, so nothing would ever
+      //     read it as gemini) and why the file carries no extension the leaf test would
+      //     have to strip twice.
+      //   · SIGINT trapped: the interrupt's four double-^C rounds all land, and none of
+      //     them ends it — so the process table has nothing to report but "still there",
+      //     which is what makes "no verdict will ever come" true BY CONSTRUCTION rather
+      //     than by silencing the one thing that is allowed to answer.
+      //   · it holds the pane's FOREGROUND, so the shell emits no prompt mark (nothing
+      //     retires the session for free) and `foregroundIsShell` stays false (the
+      //     re-anchor that broke the declared fixture never fires).
+      // The live variant keeps its DECLARED fixture on its own second pane.
+      let fixtureStarted = live
+      if (live) {
+        await ES(`window.__mogging.agents.detected({ id: ${pane2}, agentId: 'gemini', cwd: ${JSON.stringify(anchor)}, sinceMs: Date.now() })`)
+      } else {
+        const fixtureDir = mkdtempSync(join(tmpdir(), 'mogging-psfix-'))
+        const fixtureFile = join(fixtureDir, 'gemini')
+        const fixturePidFile = join(fixtureDir, 'pid')
+        writeFileSync(
+          fixtureFile,
+          [
+            "// PROFSWITCH step 4's agent: a real process for the process table to find.",
+            "process.on('SIGINT', () => {}) // the double-^C lands and changes nothing",
+            `require('fs').writeFileSync(${JSON.stringify(fixturePidFile)}, String(process.pid))`,
+            'setInterval(() => {}, 1000)',
+            ''
+          ].join('\n')
+        )
+        const nodeBin = resolveNodeBin()
+        // Typed through the RAW bridge on purpose: terminalClient.write and
+        // agentsClient.launchInto are the DEV write spy's two mouths, and this line
+        // carries the word `gemini` inside the fixture's path. The spy must see exactly
+        // what the SWITCH types and nothing the harness types.
+        // node is INVOKED, never a `gemini`/`gemini.cmd` shim found on a doctored PATH: on
+        // Windows that shim is a BATCH file, and a ^C inside a batch raises cmd's own
+        // "Terminate batch job (Y/N)?" — which this very interrupt answers `Y` (its trap
+        // window is open). The fixture would then lose the foreground to a shell prompt
+        // mid-arm, in the one arm whose whole premise is that it never does.
+        const startFixture =
+          process.platform === 'win32'
+            ? `"${nodeBin}" "${fixtureFile}"` // cmd.exe, the pane shell COMSPEC names
+            : `${shq(nodeBin)} ${shq(fixtureFile)}` // bash (linux) / zsh (macos)
+        await ES(
+          `window.bridge.send('terminal:write', { id: ${pane2}, data: ${JSON.stringify(startFixture + '\r')} })`
+        )
+        // Its OWN word that it is up, before detection is asked about it: a fixture that
+        // never started must not read as one the detector missed — and the pid is what
+        // teardown kills (it ignores ^C by design, and the daemon outlives this app).
+        for (let i = 0; i < 24 && !fixturePid; i++) {
+          await sleep(500)
+          try {
+            fixturePid = Number(readFileSync(fixturePidFile, 'utf8').trim()) || 0
+          } catch {
+            /* not up yet */
+          }
+        }
+        fixtureStarted = fixturePid > 0
+      }
       // The arm's whole claim is "a CONFIRMED agent that never dies fails the interrupt
-      // CLOSED" — so the confirmation must exist before the trigger fires. Racing it
-      // (macOS lost this race consistently) hands the interrupt an UNCONFIRMED session,
-      // whose rules still allow the heuristic verdicts the shim cannot silence, and the
-      // OSC guess below then legitimately reads as agent-gone.
+      // CLOSED" — so the confirmation must exist before the trigger fires, and hermetically
+      // it is now the PROCESS TABLE's own: nothing declares this session, the detector
+      // finds it (submitted line -> probe -> listing, plus the shared-snapshot gap). Racing
+      // it hands the interrupt an UNCONFIRMED session, whose rules let it give up after two
+      // rounds, and the OSC guess below then legitimately reads as agent-gone.
       let confirmed2 = false
       for (let i = 0; i < 40 && !confirmed2; i++) {
-        await sleep(300)
+        await sleep(500)
         confirmed2 = (await ES(`(window.__mogging.agents.session(${pane2}) || {}).running === true`)) as boolean
       }
       const sessionWrittenAt = Date.now()
@@ -550,10 +676,10 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       const launchesBefore2 = await writesFor2()
       await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Continue on')); if (b) b.click(); return 1 })()`)
       // THE GUESSES, fired AT the interrupt — what made this gate flaky instead of
-      // deterministic. "No process verdict will ever come" was only ever true of the
-      // process table; the pane's agent session can ALSO be retired by heuristics the
-      // shim above does not control, and each of those used to read as "the agent is
-      // gone". The loudest is the shell's own OSC 133;D — a real mark that any zsh/bash
+      // deterministic. A living process settles the process table's answer; it settles
+      // nothing about the OTHER ways a pane's agent session is retired, and each of those
+      // used to reach the interrupt as "the agent is gone" while the CLI ran on. The
+      // loudest is the shell's own OSC 133;D — a real mark that any zsh/bash
       // with third-party shell integration emits at every prompt (ours is 633, which is
       // why Windows and Linux sweeps never saw it), fired here through the pane's xterm
       // exactly as blocks-smoke does, so no shell emitter is needed. It is armed by a
@@ -586,28 +712,34 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
         failedOk = (await offerState2())?.state === 'failed'
       }
       const nothingTypedOk = (await writesFor2()) === launchesBefore2
-      // Diagnosis line for a fail-closed miss: where the offer actually ended up and
-      // what the switch trace recorded (a stuck 'switching' = a throw mid-flow; a
-      // trace with 'typed' = the interrupt wrongly reported gone).
+      // Diagnosis line for a fail-closed miss: where the offer actually ended up, what the
+      // switch trace recorded (a stuck 'switching' = a throw mid-flow; a trace with 'typed'
+      // = the interrupt wrongly reported gone) — and, first of all, whether the FIXTURE was
+      // still alive, because a dead one turns every reading below into a different question.
       const failDiag = failedOk
         ? null
         : {
             offerFinal: await offerState2(),
             trace2: (await ES(`window.__mogging.agents.switchTrace(${pane2})`)) as { phase: string }[],
-            session2: await ES(`window.__mogging.agents.session(${pane2})`)
+            session2: await ES(`window.__mogging.agents.session(${pane2})`),
+            fixturePid,
+            fixtureAlive: fixtureAlive()
           }
 
       const pass =
         savedA && savedB && confirmed && capSent && offered && switched && typedOk && orderOk &&
-        menuEntryOk && manualOk && capSent2 && offered2 && guessFired && failedOk && nothingTypedOk
+        menuEntryOk && manualOk && fixtureStarted && confirmed2 && capSent2 && offered2 &&
+        guessFired && failedOk && nothingTypedOk
       result = {
         pass, mode: live ? 'claude-live' : 'gemini-hermetic', savedA, savedB, confirmed,
         initialProfile, switchedTo, capSent, offered, switched, typedOk, orderOk, phases1: p1,
-        menuEntryOk, menuDiag, manualOk, capSent2, offered2, guessFired, failedOk, failDiag, nothingTypedOk
+        menuEntryOk, menuDiag, manualOk, fixtureStarted, fixturePid, confirmed2, capSent2,
+        offered2, guessFired, failedOk, failDiag, nothingTypedOk
       }
     } catch (e) {
       result = { pass: false, error: String(e) }
     }
+    killFixture() // a throw mid-arm cleans up exactly like a pass does
     try {
       writeFileSync(join(process.cwd(), 'out', 'profswitch-result.json'), JSON.stringify(result, null, 2))
     } catch {

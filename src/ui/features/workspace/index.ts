@@ -914,6 +914,7 @@ function exposeForDev(controller: WorkspaceController): void {
   w.__mogging = w.__mogging ?? {}
   w.__mogging.layout = {
     apply: (n: number) => controller.requestApplyTemplate(n),
+    ceiling: () => controller.layoutCeiling(), // what apply() would honestly accept here
     paneCount: () => controller.activePaneCount(),
     paneIds: () => controller.activePaneIds(), // TREE order
     liveOrder: () => controller.activeLiveOrder(), // READING order — what the painter draws
