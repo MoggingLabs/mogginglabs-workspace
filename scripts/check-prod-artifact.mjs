@@ -45,7 +45,12 @@ const PRODUCTION_KNOBS = new Set([
   'MOGGING_INPROC',
   'MOGGING_CI_KEYRING',
   'MOGGING_CI_GPU',
-  'MOGGING_FAKE_UPDATE'
+  'MOGGING_FAKE_UPDATE',
+  // The install-handoff probe (phase-launch F015): counts quitAndInstall handoffs instead of
+  // performing them, so UPDATEOFFLINE can prove the Restart latch without running an installer.
+  // Same exposure class as MOGGING_FAKE_UPDATE — a replay knob, sanctioned, named here so the
+  // gate's model states the decision instead of silently not noticing the env read.
+  'MOGGING_UPDATE_INSTALL_PROBE'
 ])
 
 // Harness triggers that are NOT gate names, so the `run_smoke` rows below cannot derive them —
