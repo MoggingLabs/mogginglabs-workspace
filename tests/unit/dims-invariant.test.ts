@@ -97,6 +97,56 @@ describe('2b. a spawn publishes only a grid xterm actually holds', () => {
   })
 })
 
+describe('2c. the replay paints AFTER the grid is reconciled, never before', () => {
+  // A reattach's whole screen rides the spawn reply (transport sends `scrollback` with
+  // `spawned`), and the daemon puts it on the pane's data channel ahead of the reply. Painted
+  // first, it lands at whatever grid xterm happens to hold — and on a dims-less reattach that
+  // is the fabricated 80x24 while the pty is on its own. ConPTY paints by diff at absolute
+  // rows and erases nothing it did not repaint, so a viewport that disagrees with conhost's
+  // screen from the first frame stays wrong for the pane's whole life.
+  const src = sourceOf(TERMINAL_PANE)
+
+  it('the pane holds pty bytes from the moment it asks for a session', () => {
+    const body = bodyWithoutComments(src, 'private spawnPty(')
+    expect(body.indexOf('this.holdReplayPaint()')).toBeGreaterThan(-1)
+    expect(body.indexOf('this.holdReplayPaint()')).toBeLessThan(body.indexOf('terminalClient'))
+  })
+
+  it('the flush follows reconcileSession — that order IS the fix', () => {
+    const body = bodyWithoutComments(src, 'private spawnPty(')
+    const reconciled = body.indexOf('this.reconcileSession(res.cols, res.rows)')
+    const painted = body.indexOf('this.flushReplayPaint()')
+    expect(reconciled).toBeGreaterThan(-1)
+    expect(painted).toBeGreaterThan(reconciled)
+  })
+
+  it('a spawn that never answers still paints — no reply, no permanently blank pane', () => {
+    const body = bodyWithoutComments(src, 'private spawnPty(')
+    const failed = body.slice(body.indexOf('.catch((err)'))
+    expect(failed).toContain('this.flushReplayPaint()')
+    expect(bodyWithoutComments(src, 'private holdReplayPaint()')).toContain('REPLAY_HOLD_MAX_MS')
+  })
+
+  it('only the PAINT waits — every port signal still fires on arrival', () => {
+    // Deferring the probes too would move liveness, remote-ready and agent-ready behind an
+    // IPC round trip; the hold is the last act of the handler, after all of them.
+    const handler = src.slice(src.indexOf('terminalClient.onData((e) => {'), src.indexOf('terminalClient.onExit('))
+    const held = handler.indexOf('this.replayHold.push(e.data)')
+    expect(held).toBeGreaterThan(-1)
+    for (const signal of ['markPaneLive', 'markPaneRemoteReady', 'markPaneAgentReady']) {
+      expect(handler.indexOf(signal), signal).toBeLessThan(held)
+    }
+  })
+
+  it('the queue drains in arrival order, and clears before it writes', () => {
+    // xterm runs OSC handlers synchronously inside write(); one of them re-entering this
+    // pane must find the straight-through state, not a half-drained queue.
+    const body = bodyWithoutComments(src, 'private flushReplayPaint()')
+    expect(body.indexOf('this.replayHold = null')).toBeLessThan(body.indexOf('this.term.write(chunk)'))
+    expect(body).toMatch(/for\s*\(const chunk of held\)/)
+  })
+})
+
 describe('3. the session reports its grid, and the renderer reconciles', () => {
   it('the spawn reply is consumed for the session dims', () => {
     const src = sourceOf(TERMINAL_PANE)
@@ -104,13 +154,23 @@ describe('3. the session reports its grid, and the renderer reconciles', () => {
     expect(then).toContain('this.reconcileSession(res.cols, res.rows)')
   })
 
-  it('reconcile adopts nothing from an unmeasured pane, and stays silent on agreement', () => {
+  it('reconcile PUBLISHES nothing from an unmeasured pane, and stays silent on agreement', () => {
     const body = bodyWithoutComments(sourceOf(TERMINAL_PANE), 'private reconcileSession(')
-    // The session's size is not evidence about this pane's box: without a proposal of our
-    // own there is nothing to compare, and adopting would resize a live agent to a layout
-    // from another app run.
-    expect(body).toMatch(/proposeGrid\(this\.term\)[\s\S]*?if\s*\(!d\)\s*return/)
+    // The session's size is not evidence about this pane's BOX, so it never goes back out
+    // as a resize — that would size a live agent to a layout from another app run.
+    const noProposal = body.slice(body.indexOf('if (!d)'), body.lastIndexOf('applyGrid'))
+    expect(noProposal).not.toContain('terminalClient.resize')
     expect(body).toMatch(/if\s*\(this\.sessionDims\.cols === d\.cols && this\.sessionDims\.rows === d\.rows\)\s*return/)
+  })
+
+  it('...but an unmeasured pane still renders the session at the SESSION’s size', () => {
+    // xterm's grid with no proposal is the constructor's fabricated 80x24 — nobody's
+    // measurement — and it is the size the session's own replay is about to be painted at.
+    // Leaving it there is what put a dims-less reattach's every later line N rows above the
+    // visible end of the pane on ConPTY (PROFPERSIST_B's residue tail).
+    const body = bodyWithoutComments(sourceOf(TERMINAL_PANE), 'private reconcileSession(')
+    const noProposal = body.slice(body.indexOf('if (!d)'), body.lastIndexOf('applyGrid'))
+    expect(noProposal).toContain('applyGrid(this.term, this.sessionDims)')
   })
 
   it('the daemon samples the dims AFTER ensure(), so the reply is post-reconciliation truth', () => {

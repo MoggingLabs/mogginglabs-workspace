@@ -111,6 +111,18 @@ const IS_MAC = navigator.platform.toUpperCase().includes('MAC')
 const REFIT_SETTLE_MS = 120
 
 /**
+ * The ceiling on holding a pane's first bytes back for its spawn reply (see replayHold).
+ *
+ * Not a guess about the round trip — main answers this invoke in single-digit ms, and the
+ * pane has already awaited one IPC (the emulation probe) before it even asked. The only way
+ * to spend this budget is a reply that never arrives, and then the choice is a late paint
+ * against a permanently blank pane. 1500 ms is generous enough that no healthy boot can
+ * reach it (the font bound, the app's slowest renderer-side await, is the same number) and
+ * short enough that a wedged main is a stutter rather than a dead terminal.
+ */
+const REPLAY_HOLD_MAX_MS = 1500
+
+/**
  * The Windows worktree-lock ladder for the pane's DIRECT removal road (buildMenu's
  * `!eventHost.isConnected` branch). node-pty exits ASYNCHRONOUSLY, and on Windows the closed
  * pty's former cwd stays locked until its handle drops, so `git worktree remove` answers
@@ -174,6 +186,29 @@ export class TerminalPane {
    *  gate-visible only — never an input to a fit. A pane fits its own box; this is just
    *  the other side of the comparison. */
   private sessionDims?: { cols: number; rows: number }
+  /**
+   * PTY bytes held back from xterm while this pane's spawn reply is still in flight, or null
+   * when output paints straight through (the steady state, and every byte after the first
+   * reply).
+   *
+   * A reattach's whole screen arrives INSIDE the spawn reply (transport sends `scrollback`
+   * with `spawned`), and the daemon emits it as pane data BEFORE the reply reaches this
+   * promise — so the replay used to paint before anything here knew what grid the session
+   * holds. On ConPTY that is not a cosmetic ordering: paint the session's own bytes at the
+   * wrong height and the terminal's viewport and conhost's screen hold different lines at
+   * the same row indices from the first frame, which is the offset every later line then
+   * overwrites an older row through.
+   *
+   * So the paint waits for reconcileSession — one IPC round trip the pane is already paying
+   * (spawnPty awaits the emulation probe before it even asks). Only the WRITE is deferred:
+   * liveness, the remote-ready OSC and the alt-screen probes all still run on arrival, so no
+   * port signal changes its timing. Order is preserved by construction — a FIFO queue drained
+   * before the flag clears.
+   */
+  private replayHold: string[] | null = null
+  /** Failsafe for the hold: a spawn reply that never comes must cost a late paint, never a
+   *  permanently blank pane. Cleared by the flush that beats it. */
+  private replayHoldTimer?: ReturnType<typeof setTimeout>
   private stateDot?: HTMLSpanElement
   /** The pane's process is gone (exit or failed spawn — the markDead paths). The state
    *  dot only records this when it is VISIBLE, so untracked plain panes need this flag:
@@ -458,7 +493,10 @@ export class TerminalPane {
           } else if (this.altSeen) {
             this.altSeen = false
           }
-          this.term.write(e.data)
+          // PAINT LAST, and not at all while a spawn reply is outstanding — see replayHold.
+          // Every probe above has already run, so only pixels wait.
+          if (this.replayHold) this.replayHold.push(e.data)
+          else this.term.write(e.data)
         }
       }),
       terminalClient.onExit((e) => {
@@ -715,6 +753,12 @@ export class TerminalPane {
     // buffer of a first spawn has nothing to reflow. The rule this encodes is the one the
     // whole dims invariant rests on: ONE operation moves BOTH sides, never one of them.
     if (grid) applyGrid(this.term, grid)
+    // ...and hold the paint until the reply has told us the grid the SESSION holds. A
+    // reattach's entire screen rides that same reply, and the daemon puts it on the pane's
+    // data channel first — so without this the replay paints before the one message that
+    // says what size it was produced at (see replayHold, and reconcileSession's unmeasured
+    // branch, which is what the wait exists to run first).
+    this.holdReplayPaint()
     return terminalClient
       .spawn({
         id: this.id,
@@ -785,12 +829,20 @@ export class TerminalPane {
         // else revisits either — reassertGrid rides the reconnect edge, which boot never
         // crosses.
         if (!this.disposed) this.reconcileSession(res.cols, res.rows)
+        // NOW paint. The grid is reconciled, so the replay renders at the size it was
+        // produced at and the terminal's viewport agrees with conhost's screen from the
+        // first frame — the alignment every later absolutely-positioned ConPTY paint
+        // depends on. Must follow reconcileSession, and nothing may be added between them.
+        this.flushReplayPaint()
         // Second stateSync pull: the spawn just registered/reattached the session, so
         // the backend now KNOWS this pane's state (the mountChrome pull may have run
         // before it existed). Reattach to a busy/attention agent paints correctly here.
         this.syncState?.()
       })
       .catch((err) => {
+        // No reply, so no grid to reconcile against — but whatever the pty did manage to
+        // say is still the user's output, and it must not die in the hold.
+        this.flushReplayPaint()
         // A failed spawn delivered nothing — the agents feature's typed fallback will
         // wait on liveness and fail as gracefully as it always has. Disposed panes report
         // nothing at all (see the .then twin): forgetSpawnRun already answered the waiters
@@ -809,6 +861,35 @@ export class TerminalPane {
           markPaneSpawnSettled(this.id)
         }
       })
+  }
+
+  /** Begin holding pty bytes back from xterm until the spawn reply reconciles the grid.
+   *  Re-arming over an existing hold keeps what is already queued: a restart's spawn must
+   *  not drop the dying shell's last words. */
+  private holdReplayPaint(): void {
+    if (!this.replayHold) this.replayHold = []
+    if (this.replayHoldTimer) clearTimeout(this.replayHoldTimer)
+    // The bound, not a guess about the round trip: main answers this invoke in single-digit
+    // ms, and the only way to spend a second here is a reply that is never coming. Paint
+    // then, unreconciled — a late, possibly misaligned pane beats a blank one, and the next
+    // real resize still heals it.
+    this.replayHoldTimer = setTimeout(() => this.flushReplayPaint(), REPLAY_HOLD_MAX_MS)
+  }
+
+  /** Paint everything held, in arrival order, and return to writing straight through.
+   *  Idempotent, and safe on a disposed pane (which paints nothing and just lets go). */
+  private flushReplayPaint(): void {
+    if (this.replayHoldTimer) {
+      clearTimeout(this.replayHoldTimer)
+      this.replayHoldTimer = undefined
+    }
+    const held = this.replayHold
+    // Cleared BEFORE the writes: xterm's parser runs handlers (OSC 52, OSC 133, 777)
+    // synchronously inside write(), and one of those re-entering this pane must find the
+    // straight-through state, never a half-drained queue.
+    this.replayHold = null
+    if (!held || this.disposed) return
+    for (const chunk of held) this.term.write(chunk)
   }
 
   /**
@@ -1036,10 +1117,30 @@ export class TerminalPane {
    * the backend after its own attach reconciliation). Three cases, and the direction is
    * never symmetric:
    *
-   *   UNMEASURED pane — adopt nothing. The session's size is not evidence about this
-   *   pane's box, and taking it would resize a live agent to a layout from another app
-   *   run. This is the same rule spawnPty's absent dims encode, one message later.
+   *   UNMEASURED pane — PUBLISH nothing, and adopt the session's grid into XTERM ONLY.
+   *   The two halves are different claims and were wrongly collapsed into one. The session's
+   *   size is not evidence about this pane's BOX, so it must never go back out as a resize:
+   *   that would size a live agent to a layout from another app run, which is the rule
+   *   spawnPty's absent dims encode one message later. But xterm's grid is not a claim about
+   *   the box at all — with no proposal it is the CONSTRUCTOR'S FABRICATED 80x24, a number
+   *   nobody measured — and it is the size at which this terminal is about to render the
+   *   session's own bytes. Leaving it at the fabrication is how PROFPERSIST_B went red:
    *
+   *     A dims-less reattach takes neither branch of ensure()'s reconciliation (attachDims
+   *     returns null, and the confirm is gated on specDimsUsable), so the daemon keeps the
+   *     live grid and merely REPORTS it. The replay then painted at 80x24 into a pty at the
+   *     pane's real height, and ConPTY — a DIFFING renderer that positions absolutely inside
+   *     its own viewport and erases nothing it did not repaint — put every later line
+   *     (session.rows - 24) rows above the visible end of the pane, over an older row, tail
+   *     and all: `MARKB1=PROFILE_B_4242echo SHELL_READY_0_…`. The reveal that finally
+   *     measured the pane could not heal it either: it proposed exactly the grid the session
+   *     already held, so xterm grew ALONE and the daemon deduped the resize before ConPTY
+   *     could answer it with the repaint that re-aligns the two.
+   *
+   *   Adopting into the buffer costs the pty nothing, renders the stream at the size it was
+   *   produced at, and makes that later reveal a no-op instead of a solo reflow.
+   *
+
    *   MEASURED and EQUAL — assert nothing. This is the only place agreement is knowable,
    *   so it is the only place silence is provably right rather than merely quiet.
    *
@@ -1053,7 +1154,14 @@ export class TerminalPane {
     this.sessionDims = typeof cols === 'number' && typeof rows === 'number' ? { cols, rows } : undefined
     if (this.dead || !this.sessionDims) return
     const d = proposeGrid(this.term)
-    if (!d) return
+    if (!d) {
+      // No proposal of our own: render the session's stream at the session's size, and put
+      // NOTHING on the wire. A fresh dims-less pane reports the daemon's own 80x24 default
+      // here, so this is a no-op for it — it bites only on a reattach, which is the case
+      // that needs it.
+      applyGrid(this.term, this.sessionDims)
+      return
+    }
     applyGrid(this.term, d) // heal a wrong xterm first; deduped, so a right one costs nothing
     if (this.sessionDims.cols === d.cols && this.sessionDims.rows === d.rows) return
     terminalClient.resize({ id: this.id, cols: d.cols, rows: d.rows, gen: this.sessionGen })
@@ -2720,6 +2828,13 @@ export class TerminalPane {
     if (this.reassertTimer) {
       clearTimeout(this.reassertTimer)
       this.reassertTimer = undefined
+    }
+    // Held bytes belong to a pane that no longer exists — drop them and the failsafe with
+    // them, or a late flush writes a dead session's replay into a disposed xterm.
+    this.replayHold = null
+    if (this.replayHoldTimer) {
+      clearTimeout(this.replayHoldTimer)
+      this.replayHoldTimer = undefined
     }
     clearPaneState(this.id)
     clearPaneCwd(this.id) // stops the backend git watch for this pane (git feature unwatches)
