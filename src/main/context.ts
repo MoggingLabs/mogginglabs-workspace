@@ -3,8 +3,12 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { ContextMonitor, RELAY_SOURCE } from '@backend/features/context'
-import { claudeNotifyHooks } from '@backend/features/agents'
-import { resolveHome } from '@backend/features/usage'
+// Subpath, not the barrel — the barrel's install.ts re-export reaches node-pty, which
+// POSIX loads at import; context.ts sits in app-settings' unit-tested graph.
+import { claudeNotifyHooks } from '@backend/features/agents/notify-hook'
+// Subpath for the same reason as notify-hook below: the usage barrel re-exports
+// claude-adapter, whose claude-refresh pulls node-pty at module load.
+import { resolveHome } from '@backend/features/usage/homes'
 import {
   ContextChannels,
   isContextProvider,

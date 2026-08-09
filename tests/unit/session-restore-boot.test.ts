@@ -30,7 +30,12 @@ vi.mock('../../src/main/app-settings', () => ({
 vi.mock('../../src/main/context', () => ({ paneSessionLog: (paneId: number) => edges.logs.get(paneId) }))
 vi.mock('../../src/main/assigned-sessions', () => ({ assignedSessionFor: () => undefined }))
 vi.mock('../../src/main/fault-port', () => ({ maybeFault: async () => {} }))
-vi.mock('@backend/features/agents', () => ({
+// The SUBPATH, matching session-restore's own import — it stopped importing the barrel
+// (the barrel's install.ts re-export reaches node-pty, which POSIX loads at import).
+// Mocking the barrel here would intercept nothing and the real file-parser would run:
+// green on Windows (claude names transcripts <sessionId>.jsonl, so the filename IS the
+// answer), undefined on POSIX — exactly the drift this seam exists to prevent.
+vi.mock('@backend/features/agents/session-pool', () => ({
   resumeSessionIdFromFile: (_provider: string, file: string) =>
     file.replace(/^.*[\\/]/, '').replace(/\.jsonl$/, '')
 }))
