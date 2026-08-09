@@ -110,7 +110,10 @@ describe('a successful launch releases what the wizard held', () => {
     const at = src.indexOf('function disposeWizard(): void {')
     expect(at, 'disposeWizard not found').toBeGreaterThan(-1)
     const body = src.slice(at, src.indexOf('function leave(): void {', at))
-    for (const held of ['openGeneration++', 'selection?.dispose()', 'cdLine?.dispose()', 'setupPanels.splice(0)', 'launching = false']) {
+    // `palette?.dispose()` is where the missing-CLI setup panels are released now — each
+    // holds an AgentChannels subscription, and the palette owns them since the wizard and
+    // the New-terminals modal started sharing one.
+    for (const held of ['openGeneration++', 'selection?.dispose()', 'cdLine?.dispose()', 'palette?.dispose()', 'launching = false']) {
       expect(body, `${held} must move with the teardown`).toContain(held)
     }
     expect(body, 'navigation is leave()’s job, not the teardown’s').not.toContain('goBack()')

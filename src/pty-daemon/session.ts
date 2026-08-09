@@ -374,6 +374,9 @@ export interface PaneSubscriber {
   /** Typed-launch detection: an agent CLI process appeared in / vanished from the
    *  pane's PTY subtree (process-table truth, not output heuristics). */
   agent?(agentId: string | null, cwd?: string, sinceMs?: number): void
+  /** FOREGROUND WORK: the pane's shell is waiting on a child process. Optional so an older
+   *  subscriber shape stays valid; replayed on (re)attach, like `agent`. */
+  foreground?(active: boolean, pid?: number, command?: string): void
 }
 
 interface PaneHooks {
@@ -437,6 +440,11 @@ class PaneSession {
    *  detection) — replayed to (re)attaching clients so an app restart re-learns a
    *  hand-typed session it never launched. */
   private lastAgent: { agentId: string; cwd: string; sinceMs: number } | null = null
+  /** The last foreground fact PUBLISHED — change-only, and the reattach replay's source. */
+  private lastForeground: { active: boolean; pid?: number; command?: string } = { active: false }
+  /** The detector's proven foreground process, or null. A separate lane from the cwd state,
+   *  which deliberately forgets a pid whose cwd it could not read. */
+  private foregroundProc: { pid: number; command?: string } | null = null
   private subs = new Set<PaneSubscriber>()
   private readonly hooks: PaneHooks
   /** One breadcrumb per pane when the pty refuses writes — never one per keystroke. */
@@ -759,7 +767,10 @@ class PaneSession {
     // agent just restores its shell.
     if (spec.run && !restore) {
       if (specDimsUsable(spec)) {
-        this.cwdState.acceptCommandStart()
+        // PUBLISHED, not bare: this arms the same command-in-flight state a typed line does,
+        // and a spawn-run that never announced it left the pane reading idle while its agent
+        // booted (and, before the foreground signal, left the cwd lane unpublished too).
+        this.publishCwd(this.cwdState.acceptCommandStart())
         this.writePty(spec.run + '\r')
       } else {
         // A dims-less spawn (an unmeasured pane — hidden workspace) with a launch: defer
@@ -799,7 +810,7 @@ class PaneSession {
     const pending = this.pendingLaunch
     if (!pending) return
     this.pendingLaunch = undefined
-    this.cwdState.acceptCommandStart()
+    this.publishCwd(this.cwdState.acceptCommandStart())
     this.writePty(pending.cmd + '\r')
   }
 
@@ -891,9 +902,25 @@ class PaneSession {
     return this.isRemote ? normalizeRemotePaneCwd(raw) : normalizePaneCwd(raw, { mustExist })
   }
   private publishCwd(changed?: PaneCwdSnapshot | null): void {
-    if (!changed) return
-    for (const s of this.subs) s.cwd(changed)
-    this.hooks.onCwdChange()
+    if (changed) {
+      for (const s of this.subs) s.cwd(changed)
+      this.hooks.onCwdChange()
+    }
+    // Liveness moves INDEPENDENTLY of the path: acceptCommandStart flips idle -> working
+    // without changing one character of the cwd, so this cannot ride the `changed` guard.
+    this.publishForeground()
+  }
+
+  /** Change-only, so an idle pane is silent. Reads BOTH grades of evidence: the shell
+   *  boundary from the cwd state machine (instant) and the process table's proof (~2s). */
+  private publishForeground(): void {
+    const active = this.cwdState.commandInFlight()
+    const pid = this.foregroundProc?.pid
+    const command = this.foregroundProc?.command
+    const prev = this.lastForeground
+    if (active === prev.active && pid === prev.pid && command === prev.command) return
+    this.lastForeground = { active, pid, command }
+    for (const s of this.subs) s.foreground?.(active, pid, command)
   }
   /** Authenticated active-context declaration from the universal CLI/MCP protocol. */
   applyCwdReport(raw: unknown, observedAt: number): CwdReportResult {
@@ -924,6 +951,7 @@ class PaneSession {
    * arbitrary CLI move the pane's active cwd without being mislabeled as a supported agent. */
   applyProcessContext(context: DetectedProcessContext | null): void {
     const cwd = context?.cwd ? this.normalizeObservedCwd(context.cwd, false) ?? undefined : undefined
+    this.foregroundProc = context ? { pid: context.pid, command: context.command } : null
     this.publishCwd(this.cwdState.acceptDetected(context ? { pid: context.pid, cwd } : null))
   }
   /** Still an untouched cold-start restore? (See `pristineRestore` — the app's cue that
@@ -1012,6 +1040,10 @@ class PaneSession {
     // daemon kept alive, and this replay is how the new app learns what runs in it — the
     // one path by which a hand-typed agent survives a restart with its identity intact.
     if (this.lastAgent) s.agent?.(this.lastAgent.agentId, this.lastAgent.cwd, this.lastAgent.sinceMs)
+    // ...and whether a foreground process owns this pane RIGHT NOW. Push-only would leave a
+    // reconnected app believing every pane idle until the next Enter — a pane that has been
+    // running `npm run dev` for an hour would then close with no warning.
+    s.foreground?.(this.lastForeground.active, this.lastForeground.pid, this.lastForeground.command)
   }
   unsubscribe(s: PaneSubscriber): void {
     this.subs.delete(s)

@@ -139,6 +139,43 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         await new Promise((r) => setTimeout(r, 250))
         return !!document.querySelector('.modal .ntm-body')
       })()`)
+      // The modal IS the wizard's painter now, over this workspace's real grid: the two
+      // terminals already open are drawn as LOCKED tiles, and every gesture that would
+      // disturb one is refused — a click does not open its picker or split it, and the
+      // lattice will not offer a grid too small to hold them. That refusal is what lets
+      // this dialog have no destructive confirm at all: it can only ever add.
+      const painter = await ES<{
+        shell: boolean
+        lockedTiles: number
+        tilesAfterLockedClick: number
+        menuAfterLockedClick: boolean
+        oneByOneBlocked: boolean
+        twoByTwoOffered: boolean
+      }>(`(async () => {
+        const q = (s) => document.querySelector(s)
+        const shell = !!q('.modal .ntm-body .grid-painter') && !!q('.modal .gp-lattice') && !!q('.modal .gp-canvas')
+        const tiles = () => document.querySelectorAll('.modal .gp-region').length
+        const lockedTiles = document.querySelectorAll('.modal .gp-region.is-locked').length
+        const before = tiles()
+        q('.modal .gp-region.is-locked')?.click()
+        await new Promise((r) => setTimeout(r, 150))
+        const cellAt = (r, c) => q('.modal .gp-cell[data-r="' + r + '"][data-c="' + c + '"]')
+        return {
+          shell,
+          lockedTiles,
+          tilesAfterLockedClick: tiles(),
+          menuAfterLockedClick: !!q('.context-menu'),
+          oneByOneBlocked: !!cellAt(0, 0)?.disabled,   // 1 tile < 2 open terminals
+          twoByTwoOffered: cellAt(1, 1)?.disabled === false
+        }
+      })()`)
+      const painterOk =
+        painter.shell &&
+        painter.lockedTiles === 2 &&
+        painter.tilesAfterLockedClick === painter.lockedTiles + 1 && // 2 locked + the 1 being added
+        !painter.menuAfterLockedClick &&
+        painter.oneByOneBlocked &&
+        painter.twoByTwoOffered
       // The modal's isolate box rides the SAME git preflight as the wizard's, and starts
       // unticked in a fresh profile (no remembered lineup). Poll it LIVE, then tick it: a box
       // that never enables for a repo folder is the "wasn't possible to isolate" bug class
@@ -239,7 +276,10 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
       //       arrangement drives the grid, not a canonical fallback;
       //   (c) because the drop closes live panes (the wizard panes carry sessions), the
       //       live-work CONFIRM fires first, and confirming preserves the survivors
-      //       (every surviving pane id existed before — none rebuilt).
+      //       (every surviving pane id existed before — none rebuilt);
+      //   (d) THE HOLE — an EQUAL-count reshape over a gap in the slot numbering closes
+      //       nothing, so it must not ask. This is the negative claim the whole feature
+      //       rests on; see the block comment where it runs.
       const reorg = await ES<{
         modalOpened: boolean
         modalClosed: boolean
@@ -248,6 +288,11 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         confirmShown: boolean
         topWide: boolean
         preserved: boolean
+        holeBefore: number[]
+        holeConfirm: boolean
+        holeApplied: boolean
+        holeAfter: number[]
+        holeOrderKept: boolean
       }>(`(async () => {
         const m = window.__mogging
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -274,13 +319,21 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         const modalClosed = !document.querySelector('.modal .grid-painter')
 
         // (b)+(c) apply a custom, smaller layout directly; the confirm must gate the drop.
-        // The plain shells that will close aren't "live", so make the HIGHEST-id pane busy
-        // (highest local ⇒ certainly in the closing set when shrinking to 3) — now the drop
-        // genuinely closes live work and the confirm is owed. Under the ALERTAGREE tracked
-        // gate a state only sticks on a TRACKED pane (as a real session's would be), so claim
-        // it first — else setPaneState falls on the floor and nothing reads as live.
+        // The plain shells that will close aren't "live", so make the doomed pane busy —
+        // now the drop genuinely closes live work and the confirm is owed. The closing set
+        // is decided by READING ORDER, not slot number (splitLine inserts a new leaf beside
+        // its target, so numbering stopped meaning position at the first split), so the
+        // victim is the BOTTOM-RIGHT pane: certainly outside the first 3 when shrinking to
+        // 3. Under the ALERTAGREE tracked gate a state only sticks on a TRACKED pane (as a
+        // real session's would be), so claim it first — else setPaneState falls on the floor
+        // and nothing reads as live.
+        const readingOrder = (ids) =>
+          ids
+            .map((id) => ({ id, r: box(id) }))
+            .sort((a, b) => a.r.top - b.r.top || a.r.left - b.r.left)
+            .map((e) => e.id)
         const beforeIds = m.layout.paneIds()
-        const victim = Math.max(...beforeIds)
+        const victim = readingOrder(beforeIds).at(-1)
         m.attention.setPaneTracked(victim, true)
         m.attention.setPaneState(victim, 'busy')
         await sleep(150)
@@ -301,8 +354,58 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
           return rects.slice(1).every((r) => rects[0].width >= r.width * 1.8) // top spans both columns
         })()
         const preserved = ids.every((id) => beforeIds.includes(id)) // survivors reused, none rebuilt
-        return { modalOpened, modalClosed, after: m.layout.paneCount(), rows: rowsOf(), confirmShown, topWide, preserved }
+        // Read the shrink's verdict NOW — phase (d) below reshapes the same workspace again.
+        const after = m.layout.paneCount()
+        const rows = rowsOf()
+
+        // (d) THE HOLE. Close a pane in the MIDDLE of the slot numbering and reorganize at
+        // the SAME count. Neither removeLeaf nor serializeTree renumbers, so the gap is real
+        // and outlives a restart; the chooser used to walk 1..N taking "live or free" and
+        // grabbed the hole AHEAD of the highest live slot — killing a running agent on a
+        // reshape that creates and destroys nothing. The proof is NEGATIVE: no confirm is
+        // owed, nothing dies, and the pane on the left is still the pane on the left.
+        const sorted = ids.slice().sort((a, b) => a - b)
+        const mid = sorted[sorted.length - 2] // second highest ⇒ the gap sits BELOW a live slot
+        const doomed = sorted[sorted.length - 1] // what the old chooser would have dropped
+        m.layout.close(mid)
+        for (let i = 0; i < 20 && m.layout.paneIds().length > 2; i++) {
+          await sleep(150)
+          document.querySelector('.modal-overlay:not(.is-closing) .btn--danger')?.click()
+        }
+        const holeBefore = m.layout.paneIds()
+        m.attention.setPaneTracked(doomed, true)
+        m.attention.setPaneState(doomed, 'busy')
+        await sleep(150)
+        const leftBefore = readingOrder(holeBefore)[0]
+        const evenSpec = { rows: 1, cols: 2, regions: [{ r: 0, c: 0, rs: 1, cs: 1 }, { r: 0, c: 1, rs: 1, cs: 1 }] }
+        const holeDone = m.layout.reorganizeApply(evenSpec)
+        let holeConfirm = false
+        for (let i = 0; i < 12 && !holeConfirm; i++) {
+          await sleep(100)
+          const btn = [...document.querySelectorAll('.modal button')].find((b) => /close panes and reorganize/i.test(b.textContent || ''))
+          if (btn) { holeConfirm = true; btn.click() } // click anyway, so the promise settles
+        }
+        const holeApplied = await holeDone
+        await sleep(400)
+        const holeAfter = m.layout.paneIds()
+        const holeOrderKept = readingOrder(holeAfter)[0] === leftBefore
+
+        return {
+          modalOpened, modalClosed, after, rows, confirmShown, topWide, preserved,
+          holeBefore, holeConfirm, holeApplied, holeAfter, holeOrderKept
+        }
       })()`)
+      // An equal-count reshape over a slot gap: it closes nothing, so it must neither ASK
+      // (holeConfirm) nor silently refuse (holeApplied — the old limit() clamp returned
+      // false with no message), no pane may die or be rebuilt, and the left pane must still
+      // be the left pane: a reshape is a resize, not a shuffle.
+      const holeOk =
+        reorg.holeBefore.length === 2 &&
+        reorg.holeConfirm === false &&
+        reorg.holeApplied === true &&
+        reorg.holeAfter.length === 2 &&
+        reorg.holeAfter.every((id) => reorg.holeBefore.includes(id)) &&
+        reorg.holeOrderKept
       const reorganizeOk =
         reorg.modalOpened &&
         reorg.modalClosed &&
@@ -310,7 +413,131 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         reorg.after === 3 &&
         JSON.stringify(reorg.rows) === JSON.stringify([1, 2]) &&
         reorg.topWide &&
-        reorg.preserved
+        reorg.preserved &&
+        holeOk
+
+      // ── PLACEMENT: the painted spec decides WHERE, on a fresh workspace so the claim
+      // is about geometry and not about whatever the earlier phases left behind. Applying
+      // "one full-width row on top, two below" to a 1-pane workspace must (a) keep the
+      // pane that was already there, (b) put it top-left, where its locked tile was, and
+      // (c) land the two new terminals in the bottom row. The old path could not express
+      // any of this: it split the FOCUSED pane along its longer axis, N times, off itself.
+      const placeDir = mkdtempSync(join(tmpdir(), 'mog-wiziso-place-'))
+      await ES(`window.__mogging.workspace.create({ name: 'Placement', cwd: ${JSON.stringify(placeDir)} })`)
+      await sleep(900)
+      const place = await ES<{
+        applied: boolean
+        before: number[]
+        after: number[]
+        kept: boolean
+        rows: number[]
+        topWide: boolean
+      }>(`(async () => {
+        const m = window.__mogging
+        const box = (id) => document.querySelector('.layout-slot[data-pane-id="' + id + '"]').getBoundingClientRect()
+        const before = m.layout.paneIds()
+        const spec = { rows: 2, cols: 2, regions: [
+          { r: 0, c: 0, rs: 1, cs: 2 }, { r: 1, c: 0, rs: 1, cs: 1 }, { r: 1, c: 1, rs: 1, cs: 1 }
+        ] }
+        const applied = await m.layout.newTerminalsApply({
+          spec,
+          // The pane ids, in the READING order the modal captures them in — a count
+          // cannot say which, and the controller now checks the set.
+          liveIds: m.layout.liveOrder(),
+          entries: [{ provider: 'shell' }, { provider: 'shell' }],
+          isolate: false
+        })
+        await new Promise((r) => setTimeout(r, 800))
+        const after = m.layout.paneIds()
+        const rects = after.map((id) => ({ id, r: box(id) })).sort((a, b) => a.r.top - b.r.top || a.r.left - b.r.left)
+        const tops = [...new Set(rects.map((e) => Math.round(e.r.top)))].sort((a, b) => a - b)
+        const bands = []
+        for (const t of tops) { if (!bands.length || t - bands[bands.length - 1] > 8) bands.push(t) }
+        return {
+          applied,
+          before,
+          after,
+          // The pane that already existed survives AND is the one in the full-width row.
+          kept: before.every((id) => after.includes(id)) && rects[0].id === before[0],
+          rows: bands.map((band) => rects.filter((e) => Math.abs(e.r.top - band) <= 8).length),
+          topWide: rects.slice(1).every((e) => rects[0].r.width >= e.r.width * 1.8)
+        }
+      })()`)
+      const placementOk =
+        place.applied &&
+        place.before.length === 1 &&
+        place.after.length === 3 &&
+        place.kept &&
+        JSON.stringify(place.rows) === JSON.stringify([1, 2]) &&
+        place.topWide
+
+      // ── RE-SEED: the workspace can change while the New-terminals dialog is up, and the
+      // dialog must REDRAW rather than dead-end. The locked prefix is positional — tile k
+      // stands for the k-th live pane — so a pane closing underneath invalidates the whole
+      // canvas, not just one tile. It must lose a locked tile AND say why.
+      const reseed = await ES<{ opened: boolean; lockedBefore: number; lockedAfter: number; note: string }>(`(async () => {
+        const m = window.__mogging
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+        const locked = () => document.querySelectorAll('.modal .gp-region.is-locked').length
+        m.layout.newTerminals()
+        await sleep(400)
+        const opened = !!document.querySelector('.modal .ntm-body .grid-painter')
+        const lockedBefore = locked()
+        // Close a pane from OUTSIDE the dialog — the control-API verb, not the dialog's own.
+        const victim = m.layout.paneIds().slice().sort((a, b) => a - b).at(-1)
+        m.layout.close(victim)
+        for (let i = 0; i < 20 && locked() === lockedBefore; i++) await sleep(200)
+        const note = document.querySelector('.modal .ntm-reseed')
+        const text = note && !note.hidden ? note.textContent || '' : ''
+        document.querySelector('.modal .btn--ghost')?.click()
+        await sleep(300)
+        return { opened, lockedBefore, lockedAfter: locked(), note: text }
+      })()`)
+      const reseedOk =
+        reseed.opened &&
+        reseed.lockedBefore === 3 &&
+        reseed.lockedAfter === 2 &&
+        /closed in this workspace/i.test(reseed.note)
+
+      // ── READING ORDER: the order the placement painter labels its locked tiles in.
+      // `paneIds()` is a depth-first TREE walk and diverges from what the screen reads the
+      // moment a split nests — split right, then split the left pane down, and the tree
+      // h[v[1,3],2] walks 1,3,2 while the eye reads 1,2,3. A painter that labels from one
+      // and lands through the other puts another terminal's name on every locked tile.
+      // Built with EXPLICIT directions, because auto-direction depends on the pane's aspect.
+      const orderDir = mkdtempSync(join(tmpdir(), 'mog-wiziso-order-'))
+      await ES(`window.__mogging.workspace.create({ name: 'Order', cwd: ${JSON.stringify(orderDir)} })`)
+      await sleep(900)
+      const order = await ES<{ tree: number[]; reading: number[]; byRect: number[]; nested: boolean }>(`(async () => {
+        const m = window.__mogging
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+        const box = (id) => document.querySelector('.layout-slot[data-pane-id="' + id + '"]').getBoundingClientRect()
+        m.layout.split('h')
+        await sleep(600)
+        // Split moved focus to the new pane; aim the second split at the FIRST one again.
+        // MOUSEDOWN, not click: grid-layout focuses on mousedown, and el.click() fires
+        // neither — the second split would land on the wrong pane and the tree would come
+        // out flat, which the nested check below would then (correctly) call a failure.
+        const first = m.layout.paneIds().slice().sort((a, b) => a - b)[0]
+        document
+          .querySelector('.layout-slot[data-pane-id="' + first + '"]')
+          ?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+        await sleep(200)
+        m.layout.split('v')
+        await sleep(800)
+        const tree = m.layout.paneIds()
+        const reading = m.layout.liveOrder()
+        const byRect = tree
+          .map((id) => ({ id, r: box(id) }))
+          .sort((a, b) => (Math.abs(a.r.top - b.r.top) > 8 ? a.r.top - b.r.top : a.r.left - b.r.left))
+          .map((e) => e.id)
+        return { tree, reading, byRect, nested: JSON.stringify(tree) !== JSON.stringify(byRect) }
+      })()`)
+      const readingOrderOk =
+        order.tree.length === 3 &&
+        // The fixture must actually be nested, or the claim below is vacuous.
+        order.nested &&
+        JSON.stringify(order.reading) === JSON.stringify(order.byRect)
 
       // ── The Pedro case: a folder wearing an EMPTY `.git` is NOT a repo. The manual
       // isolated row must refuse honestly — no pane, no worktree litter.
@@ -334,12 +561,16 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         cwdsAreWorktrees &&
         shellsIsolated &&
         menuClicked &&
+        painterOk &&
         manualBoxLive &&
         manualIsolated &&
         plainStaysPlain &&
         batchOk &&
         plainBatchOk &&
         reorganizeOk &&
+        placementOk &&
+        readingOrderOk &&
+        reseedOk &&
         fakeRefusedHonestly
       result = {
         pass,
@@ -354,6 +585,8 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         branches,
         shellsIsolated,
         menuClicked,
+        painterOk,
+        painter,
         manualBox,
         manualBoxLive,
         manualIsolated,
@@ -365,7 +598,14 @@ export function runWizardIsoSmoke(win: BrowserWindow): void {
         plainBatchOk,
         plainBatchAdded,
         reorganizeOk,
+        holeOk,
         reorg,
+        placementOk,
+        place,
+        readingOrderOk,
+        order,
+        reseedOk,
+        reseed,
         fakeRefusedHonestly
       }
     } catch (error) {

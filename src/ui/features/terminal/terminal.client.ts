@@ -2,6 +2,7 @@ import { TerminalChannels } from '@contracts'
 import type {
   AgentState,
   CwdEvent,
+  PaneForegroundEvent,
   DataEvent,
   ExitEvent,
   KillCommand,
@@ -71,5 +72,7 @@ export const terminalClient = {
   onState: (cb: (e: StateEvent) => void): (() => void) =>
     getBridge().on(TerminalChannels.state, (p) => cb(p as StateEvent)),
   onCwd: (cb: (e: CwdEvent) => void): (() => void) =>
-    getBridge().on(TerminalChannels.cwd, (p) => cb(p as CwdEvent))
+    getBridge().on(TerminalChannels.cwd, (p) => cb(p as CwdEvent)),
+  onForeground: (cb: (e: PaneForegroundEvent) => void): (() => void) =>
+    getBridge().on(TerminalChannels.foreground, (p) => cb(p as PaneForegroundEvent))
 }

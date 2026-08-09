@@ -1,23 +1,31 @@
-import { ProfileChannels, SystemChannels, WorktreeChannels } from '@contracts'
+import { SystemChannels, WorktreeChannels, ProfileChannels } from '@contracts'
 import type { AgentInfo, AgentProfile, WorktreePreflight } from '@contracts'
 import {
   Button,
-  clear,
   createCheckbox,
+  createGridPainter,
   createModal,
   createStepper,
   el,
-  icon,
-  openContextMenu,
   providerAccent,
   providerLogo,
   type CheckboxHandle,
-  type ContextMenuEntry,
+  type GridPainterHandle,
   type StepperHandle
 } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 import { getAgentRegistry, onAgentRegistryChange, refreshAgentRegistry } from '../../core/agents/registry'
-import { createAgentSetupPanel, type AgentSetupPanelHandle } from '../agents/setup-panel'
+import { createPlacementPalette } from '../agents/placement-palette'
+import {
+  expandAssignments,
+  normalizeSlots,
+  paintSlot,
+  pruneBrush,
+  pruneToRoster,
+  restoreLineup,
+  type SlotId
+} from '../agents/placement-model'
+import { specForCount, TEMPLATES, type GridSpecModel } from '../layout'
 import { isolationView, type IsolationProbe } from '../wizard/isolation-state'
 
 export interface NewTerminalEntry {
@@ -27,17 +35,63 @@ export interface NewTerminalEntry {
   profileId?: string
 }
 
-export interface NewTerminalModalOpts {
-  /** How many more panes this workspace can hold — the stepper's hard ceiling. */
+/** One terminal the workspace ALREADY runs, as the painter needs to draw it. */
+export interface LivePaneTile {
+  paneId: number
+  /** 'shell' · a roster id · 'custom:…' — what is running there now. */
+  provider: string
+  /** What to call it on its tile: the pane's title, else its provider's name. */
+  label: string
+}
+
+/** The painted result: a whole-grid spec plus what to launch in the tiles that are new. */
+export interface NewTerminalPlan {
+  /** Regions 0..liveIds.length-1 are the panes that already exist, in reading order. */
+  spec: GridSpecModel
+  /**
+   * The pane ids those first regions stood for, IN ORDER — not a count. A count cannot
+   * say WHICH: a simultaneous open and close leaves it intact while every locked tile
+   * comes to mean a different terminal, and the apply would then type an agent into a
+   * pane someone is using.
+   */
+  liveIds: number[]
+  /** One per ADDED region, reading order: entries[k] ⇔ spec.regions[liveIds.length + k]. */
+  entries: NewTerminalEntry[]
+  isolate: boolean
+}
+
+/** The workspace as this dialog needs to see it — re-resolved whenever it changes. */
+export interface LiveWorkspaceShape {
+  /** The terminals already open, in the READING order the painter draws them in. */
+  live: LivePaneTile[]
+  /** How many more panes this workspace can hold. */
   headroom: number
+}
+
+export interface NewTerminalModalOpts {
+  /** The terminals already open, in the order `templateLocals` will hand them back. */
+  live: LivePaneTile[]
+  /** How many more panes this workspace can hold — the painter's growth ceiling. */
+  headroom: number
+  /** Lattice bounds from the workspace's real capacity. */
+  maxRows: number
+  maxCols: number
   /** The workspace root — what the isolation preflight asks about. */
   cwd: string
-  onCreate: (entries: NewTerminalEntry[], isolate: boolean) => void
+  /**
+   * Re-resolve the workspace while the dialog is up, so a pane opening or closing under it
+   * redraws the canvas instead of dead-ending at a refusal. Owned by the CONTROLLER —
+   * pane identity, order and headroom are all its knowledge, and this dialog stays
+   * ignorant of slots and workspaces. Returns an unsubscribe, called on close.
+   */
+  subscribeLive?: (cb: (next: LiveWorkspaceShape) => void) => () => void
+  onCreate: (plan: NewTerminalPlan) => void
 }
 
 /** Remembered across opens (renderer display preference, same tier as the rail
  *  collapse): the last lineup's provider ids + the isolate tick. Never the custom
- *  command text — a command line can carry tokens, and this store is plaintext. */
+ *  command text — a command line can carry tokens, and this store is plaintext. Never
+ *  the geometry either: the grid it was painted against is gone by the next open. */
 const LAST_KEY = 'mogging.newTerminals.last'
 
 interface LastChoice {
@@ -65,214 +119,184 @@ function writeLast(choice: LastChoice): void {
   }
 }
 
-const plural = (n: number): string => (n === 1 ? 'terminal' : 'terminals')
+const plural = (n: number, one = 'terminal'): string => (n === 1 ? one : `${one}s`)
 
 /**
- * "New terminal…" (titlebar layout popover) — the wizard's placement palette, scaled
- * down to the panes being ADDED to a live workspace instead of a whole new grid.
+ * "New terminal…" (titlebar layout popover) — the wizard's LAYOUT PAINTER, brought to a
+ * live workspace.
  *
- * Same model, on purpose (user direction: whoever learned the wizard must already
- * know this dialog): a CHIP per installed agent (+ custom + shell) arms a brush, the
- * slot strip is the canvas — click or sweep to place, double-click a chip to fill
- * all, ▾ for fill menus, a bare click on a slot opens its own picker. Counts are
- * outputs on the chips, never inputs. What shrank is the canvas: a strip of the N
- * terminals to create, not a grid painter — arrangement belongs to the split the
- * controller performs, so there is nothing spatial to paint here.
+ * The canvas is the WHOLE resulting grid, not just the panes being added: the terminals
+ * you already have appear as locked tiles wearing their agent, and the new ones are yours
+ * to size, shape and paint. That is what lets this dialog answer "where do they go?" at
+ * all — the split it replaced could only ever cascade off the focused pane, along whatever
+ * axis happened to be longer.
+ *
+ * Same vocabulary as the wizard and Reorganize, on purpose (user direction: whoever
+ * learned the wizard must already know this): the SIZE lattice picks rows × cols, dragging
+ * across tiles merges them into a spanning terminal, a chip arms a brush, a bare click on
+ * a tile opens its own picker. Counts are outputs on the chips, never inputs.
+ *
+ * Because the lattice will not go below the live pane count and a merge cannot swallow a
+ * locked tile, this surface can only ever ADD. It therefore has no destructive confirm and
+ * needs none — every path out of it preserves every running terminal.
  */
 export function openNewTerminalModal(opts: NewTerminalModalOpts): void {
   const last = readLast()
-  const headroom = Math.max(1, opts.headroom)
+  // MUTABLE: the workspace can gain or lose a terminal while this dialog is up, and every
+  // one of these is keyed on the live set (the painter's locked prefix, the tile→slot
+  // mapping, the stepper's ceiling). See onLive.
+  let live = opts.live
+  let headroom = Math.max(1, opts.headroom)
 
-  let count = Math.min(Math.max(last?.providers.length ?? 1, 1), headroom)
-  // The remembered lineup restores only what is still installed — a provider that
-  // left the machine falls back to a plain shell, exactly like the wizard's
-  // applyRoster invariant (a launch would type a command the shell cannot find).
   let roster: AgentInfo[] = [...getAgentRegistry()]
-  const restorable = (id: string | undefined): string | null =>
-    id && id !== 'shell' && roster.some((a) => a.id === id && a.installed) ? id : null
-  let slots: (string | null)[] = Array.from({ length: count }, (_, i) => restorable(last?.providers[i]))
-  let brush: string | null = null
+  const installedIds = (): Set<string> =>
+    new Set(roster.filter((a) => a.installed).map((a) => a.id))
+
+  let added = Math.min(Math.max(last?.providers.length ?? 1, 1), headroom)
+  let slots: SlotId[] = restoreLineup(last?.providers ?? [], installedIds(), added)
+  let brush: SlotId = null
   let customCmd = ''
+  let profilesCache: AgentProfile[] = []
   let isolate = last?.isolate ?? false
   let isolateProbe: IsolationProbe = { kind: opts.cwd ? 'pending' : 'no-folder' }
-  let profilesCache: AgentProfile[] = []
-  const profileByProvider = new Map<string, string>()
-  const setupPanels: AgentSetupPanelHandle[] = []
   let open = true
 
-  // ── The placement model — the wizard's, verbatim, over `count` slots ─────
-  const assignedTotal = (): number => slots.filter(Boolean).length
-  const countOf = (id: string): number => slots.filter((s) => s === id).length
+  /** The painted grid. Its first `live.length` regions are the existing terminals. */
+  let spec: GridSpecModel = specForCount(live.length + added, TEMPLATES[live.length + added])
 
-  function normalizeSlots(): void {
-    if (slots.length < count) slots = [...slots, ...Array<string | null>(count - slots.length).fill(null)]
-    else if (slots.length > count) slots = slots.slice(0, count)
-    if (!customCmd.trim()) slots = slots.map((id) => (id === 'custom' ? null : id))
-  }
-
-  function expandAssignments(): string[] {
-    const cmd = customCmd.trim()
-    return Array.from({ length: count }, (_, i) => {
-      const id = slots[i]
-      if (!id) return 'shell'
-      if (id === 'custom') return cmd ? `custom:${cmd}` : 'shell'
-      return id
-    })
-  }
-
-  function setSlotCount(id: string, n: number): void {
-    let current = countOf(id)
-    for (let i = slots.length - 1; current > n && i >= 0; i--) {
-      if (slots[i] === id) {
-        slots[i] = null
-        current--
-      }
-    }
-    for (let i = 0; current < n && i < slots.length; i++) {
-      if (slots[i] === null) {
-        slots[i] = id
-        current++
-      }
-    }
-  }
-
-  function armBrush(id: string): void {
-    if (id === 'custom' && !customCmd.trim()) {
-      customInput.focus()
-      return
-    }
-    brush = brush === id ? null : id
-    render()
-  }
-
-  function fillAllWith(id: string): void {
-    if (id === 'custom' && !customCmd.trim()) {
-      customInput.focus()
-      return
-    }
-    slots = Array<string | null>(count).fill(id === 'shell' ? null : id)
-    render()
-  }
-
-  function fillEmptyWith(id: string): void {
-    if (id === 'custom' && !customCmd.trim()) {
-      customInput.focus()
-      return
-    }
-    slots = slots.map((s) => s ?? (id === 'shell' ? null : id))
-    render()
-  }
-
-  function paintSlot(i: number): void {
-    if (!brush || i < 0 || i >= slots.length) return
-    slots[i] = brush === 'shell' ? null : brush
-    render()
-  }
-
-  function providerName(id: string | null): string {
-    if (!id) return 'Shell'
-    if (id === 'custom') return 'Custom'
-    return roster.find((a) => a.id === id)?.name ?? id
-  }
-
-  /** The no-brush click on a slot: its own picker, anchored to the tile — the
-   *  zero-learning-curve path the wizard's canvas promises. */
-  function openSlotPicker(i: number, anchor: DOMRect): void {
-    const entries: ContextMenuEntry[] = roster
-      .filter((a) => a.installed)
-      .map((a) => ({
-        label: a.name,
-        hint: slots[i] === a.id ? 'current' : undefined,
-        onSelect: () => {
-          slots[i] = a.id
-          render()
-        }
-      }))
-    const cmd = customCmd.trim()
-    if (cmd) {
-      entries.push({
-        label: 'Custom command',
-        hint: cmd.length > 24 ? cmd.slice(0, 23) + '…' : cmd,
-        onSelect: () => {
-          slots[i] = 'custom'
-          render()
-        }
-      })
-    }
-    entries.push({ separator: true })
-    entries.push({
-      label: 'Plain shell',
-      hint: slots[i] === null ? 'current' : undefined,
-      onSelect: () => {
-        slots[i] = null
-        render()
-      }
-    })
-    openContextMenu({
-      items: entries,
-      x: anchor.left,
-      y: anchor.bottom + 4,
-      ariaLabel: `Terminal ${i + 1} — choose what runs here`
-    })
-  }
-
-  // ── Static skeleton ───────────────────────────────────────────────────────
-  const countStepper: StepperHandle = createStepper({
-    value: count,
-    min: 1,
-    max: headroom,
-    ariaLabel: 'How many terminals',
-    onChange: (n) => {
-      count = n
+  // ── The palette (shared with the wizard) ──────────────────────────────────
+  const palette = createPlacementPalette({
+    slots: () => slots,
+    count: () => added,
+    brush: () => brush,
+    roster: () => roster,
+    profiles: () => profilesCache,
+    customCmd: () => customCmd,
+    onSlots: (next) => {
+      slots = next
       render()
-    }
-  })
-  const countLabel = el('span', { class: 'ntm-count-label' })
-  const countHint = el('span', {
-    class: 'wizard-hint',
-    text: `Up to ${headroom} more ${plural(headroom)} on this grid`
-  })
-
-  const slotsHost = el('div', { class: 'ntm-slots', role: 'group', ariaLabel: 'New terminals' })
-  const brushesHost = el('span', { class: 'wizard-palette-group' })
-  const missingHost = el('span', { class: 'wizard-palette-group' })
-  const clearHost = el('span', { class: 'wizard-palette-clear' })
-  const paletteHost = el('div', { class: 'wizard-palette ntm-palette', role: 'toolbar', ariaLabel: 'Agents' }, [
-    brushesHost,
-    missingHost,
-    clearHost
-  ])
-  const brushHint = el('p', { class: 'wizard-hint wizard-brush-hint' })
-  const setupHost = el('div', { class: 'wizard-setup-host' })
-  const profilesHost = el('div', { class: 'wizard-profiles' })
-
-  const customStepper: StepperHandle = createStepper({
-    value: 0,
-    min: 0,
-    max: 0,
-    ariaLabel: 'Custom command count',
-    onChange: (n) => {
-      setSlotCount('custom', n)
+    },
+    onBrush: (next) => {
+      brush = next
       render()
-    }
-  })
-  const customInput = el('input', {
-    class: 'input input--mono wizard-custom-input',
-    type: 'text',
-    placeholder: 'Custom command…',
-    title: 'Any CLI, verbatim — e.g. aider --model gpt-4o',
-    ariaLabel: 'Custom command',
-    onInput: (e) => {
-      customCmd = (e.target as HTMLInputElement).value
+    },
+    onCustomCmd: (text) => {
+      customCmd = text
       if (!customCmd.trim() && brush === 'custom') brush = null
       render()
     }
-  }) as HTMLInputElement
-  const customRow = el('div', { class: 'wizard-agent-row wizard-custom-row' }, [
-    el('span', { class: 'wizard-agent-head' }, [providerLogo('custom:', 16), customInput]),
-    el('span', { class: 'wizard-agent-tail' }, [customStepper.el])
+  })
+
+  // ── The painter ───────────────────────────────────────────────────────────
+  /** Painter tile index → the added-slot index it stands for. Negative for a locked tile. */
+  const slotOfTile = (tile: number): number => tile - live.length
+
+  /** The logo id for a live pane's provider, or null for "no badge, just a shell dot". */
+  const markFor = (provider: string): string | null => {
+    if (!provider || provider === 'shell') return null
+    if (provider.startsWith('custom:')) return 'custom:'
+    return roster.some((a) => a.id === provider) ? provider : null
+  }
+
+  const painter: GridPainterHandle = createGridPainter({
+    value: spec,
+    maxRows: Math.min(opts.maxRows, 8),
+    maxCols: Math.min(opts.maxCols, 12),
+    // Thunks, not numbers: both move when the workspace does.
+    maxPanes: () => live.length + headroom,
+    lockedCount: () => live.length,
+    onChange: (next) => {
+      spec = next
+      // The count follows the canvas: merging two tiles into one is a way of asking for
+      // one fewer new terminal, and the stepper must not then disagree with what is drawn.
+      added = Math.max(0, spec.regions.length - live.length)
+      slots = normalizeSlots(slots, added, customCmd)
+      render()
+    },
+    brush: () => brush,
+    onPaint: (tile) => {
+      const i = slotOfTile(tile)
+      if (i < 0 || !brush) return
+      slots = paintSlot(slots, i, brush)
+      render()
+    },
+    onPickSlot: (tile, anchor) => {
+      const i = slotOfTile(tile)
+      if (i < 0) return
+      palette.openPicker(i, anchor, slots[i] ?? null)
+    },
+    slotChip: (tile) => {
+      const i = slotOfTile(tile)
+      if (i < 0) {
+        const pane = live[tile]!
+        // Only a provider we RECOGNISE earns a mark. A live pane's provider comes off the
+        // manifest or a detected session, and anything else there (a stale row, a bare
+        // shell that set its own OSC title) would otherwise be drawn with the fallback
+        // glyph — a plain shell wearing an agent's badge.
+        const id = markFor(pane.provider)
+        return {
+          color: id ? providerAccent(id) : '',
+          mark: id ? providerLogo(id, 14) : null,
+          label: pane.label
+        }
+      }
+      const id = slots[i] ?? null
+      const logoId = id === 'custom' ? 'custom:' : id
+      return {
+        color: logoId ? providerAccent(logoId) : '',
+        mark: logoId ? providerLogo(logoId, 14) : null,
+        label: palette.nameFor(id)
+      }
+    }
+  })
+
+  // ── Summary column (the wizard's, verbatim) ───────────────────────────────
+  const countStepper: StepperHandle = createStepper({
+    value: added,
+    min: 0,
+    max: headroom,
+    ariaLabel: 'How many new terminals',
+    onChange: (n) => {
+      added = n
+      // A count change re-seeds the SHAPE — the canonical grid for the new total. Merges
+      // are a refinement of a size, so changing the size honestly starts over.
+      spec = specForCount(live.length + added, TEMPLATES[live.length + added])
+      slots = normalizeSlots(slots, added, customCmd)
+      painter.set(spec)
+      render()
+    }
+  })
+  const summaryCount = el('span', { class: 'wizard-summary-count' })
+  const summaryLine = el('span', { class: 'wizard-summary-line' })
+  const summaryShape = el('span', { class: 'wizard-summary-line' })
+  const capacityHint = el('span', { class: 'wizard-hint' })
+  // The painter's truth line for screen readers (and the gates): visually hidden, but it
+  // is the only place the arrangement is stated in words rather than drawn.
+  const readout = el('span', { class: 'wizard-layout-readout', role: 'status' })
+  /** Says what happened when the workspace changed under the dialog. STICKY for the life
+   *  of the dialog: someone looking at the palette when the canvas redrew has to be able
+   *  to find out afterwards why their merges are gone. */
+  const reseedNote = el('p', { class: 'ntm-reseed', role: 'status', hidden: true })
+  const resetBtn = Button({
+    label: 'Reset grid',
+    size: 'sm',
+    variant: 'ghost',
+    title: 'Back to the canonical grid for this many terminals',
+    onClick: () => {
+      spec = specForCount(live.length + added, TEMPLATES[live.length + added])
+      painter.set(spec)
+      render()
+    }
+  })
+  const summary = el('div', { class: 'wizard-layout-summary' }, [
+    summaryCount,
+    summaryLine,
+    summaryShape,
+    capacityHint,
+    resetBtn
   ])
 
+  // ── Isolation ─────────────────────────────────────────────────────────────
   const isolateBox: CheckboxHandle = createCheckbox({
     checked: false,
     disabled: true,
@@ -304,20 +328,17 @@ export function openNewTerminalModal(opts: NewTerminalModalOpts): void {
       }
     }
   }) as HTMLButtonElement
-  const isolateRow = el('div', { class: 'wizard-option-row' }, [isolateBox.el, isolateHint, isolateFix])
 
+  // ── Shell ─────────────────────────────────────────────────────────────────
   const createBtn = Button({
     label: 'Open terminal',
     variant: 'primary',
     onClick: () => {
-      normalizeSlots()
-      const assignments = expandAssignments()
+      const assignments = expandAssignments(slots, added, customCmd)
       const entries: NewTerminalEntry[] = assignments.map((provider) => ({
         provider,
         profileId:
-          provider !== 'shell' && !provider.startsWith('custom:') && profileByProvider.has(provider)
-            ? profileByProvider.get(provider)
-            : undefined
+          provider !== 'shell' && !provider.startsWith('custom:') ? palette.profileFor(provider) : undefined
       }))
       // The isolate WANT persists even when this folder refused it (wizard rule: the
       // user's intent is not evidence about the filesystem) — but the CREATE honors
@@ -325,31 +346,46 @@ export function openNewTerminalModal(opts: NewTerminalModalOpts): void {
       const view = isolationView({ probe: isolateProbe, want: isolate })
       writeLast({ providers: assignments.map((p) => (p.startsWith('custom:') ? 'shell' : p)), isolate })
       modal.close()
-      opts.onCreate(entries, view.enabled && view.checked)
+      opts.onCreate({ spec, liveIds: live.map((tile) => tile.paneId), entries, isolate: view.enabled && view.checked })
     }
   })
 
   const modal = createModal({
     title: 'New terminals',
-    subtitle: 'They split off the focused pane — pick what runs in each.',
+    subtitle: 'Paint where they go. The terminals you already have keep their panes.',
     variant: 'dialog',
-    width: 560,
+    // Wide enough for the lattice, the canvas and the summary to stand in one row — the
+    // wizard's layout section, which was designed against a 1040px page.
+    width: 940,
     onClose: () => {
       open = false
       unsubRoster()
-      for (const panel of setupPanels.splice(0)) panel.dispose()
+      unsubLive()
+      palette.dispose()
     }
   })
+
+  /** The wizard's section: an uppercase label over a hairline, an optional hint, and a
+   *  right-hand control slot. The rhythm is the whole reason this reads as one family. */
+  const section = (label: string, hint: string | null, right: HTMLElement | null, children: (Node | null)[]) =>
+    el('section', { class: 'wizard-sec' }, [
+      el('div', { class: 'wizard-sec-head' }, [
+        el('span', { class: 'wizard-sec-label', text: label }),
+        hint ? el('span', { class: 'wizard-sec-hint', text: hint }) : null,
+        right ? el('span', { class: 'wizard-sec-right' }, [right]) : null
+      ]),
+      ...children
+    ])
+
   modal.setBody(
     el('div', { class: 'ntm-body' }, [
-      el('div', { class: 'ntm-count-row' }, [countLabel, countStepper.el, countHint]),
-      slotsHost,
-      paletteHost,
-      brushHint,
-      customRow,
-      setupHost,
-      profilesHost,
-      isolateRow
+      section('Grid', null, countStepper.el, [
+        el('div', { class: 'wizard-layout-row' }, [painter.el, summary]),
+        reseedNote,
+        readout
+      ]),
+      section('Agents', null, null, [palette.el, palette.hintEl, palette.customRow, palette.setupEl, palette.profilesEl]),
+      section('Options', null, null, [el('div', { class: 'wizard-option-row' }, [isolateBox.el, isolateHint, isolateFix])])
     ])
   )
   modal.setFooter(
@@ -359,179 +395,7 @@ export function openNewTerminalModal(opts: NewTerminalModalOpts): void {
     ])
   )
 
-  // ── Renders — the wizard's cadences: placement vs roster ─────────────────
-  function renderSlots(): void {
-    clear(slotsHost)
-    const expanded = expandAssignments()
-    for (let i = 0; i < count; i++) {
-      const id = slots[i]
-      const name = providerName(id)
-      const tile = el(
-        'button',
-        {
-          class: `ntm-slot${id ? ' is-assigned' : ''}`,
-          type: 'button',
-          title: brush ? `Place ${providerName(brush === 'shell' ? null : brush)} here` : `${name} — click to change`,
-          ariaLabel: `Terminal ${i + 1} — runs ${name}`,
-          onClick: (e) => {
-            // Painting happens on pointerdown (below); the click is the bare-handed
-            // path — no brush armed, the slot opens its own picker.
-            if (!brush) openSlotPicker(i, (e.currentTarget as HTMLElement).getBoundingClientRect())
-          }
-        },
-        [
-          id ? providerLogo(id === 'custom' ? 'custom:' : id, 16) : icon('terminal', 16),
-          el('span', { class: 'ntm-slot-name', text: name })
-        ]
-      )
-      // Sweep support, the strip-sized version of the canvas drag: press on one
-      // tile, cross the others with the button held, and the brush follows.
-      // (el() has no pointer props — attached by hand, released with the tile.)
-      tile.addEventListener('pointerdown', () => {
-        if (brush) paintSlot(i)
-      })
-      tile.addEventListener('pointerenter', (e) => {
-        if (brush && e.buttons === 1) paintSlot(i)
-      })
-      const accent = expanded[i] !== 'shell' ? providerAccent(id === 'custom' ? 'custom:' : (id as string)) : ''
-      if (accent) tile.style.setProperty('--ntm-accent', accent)
-      slotsHost.append(tile)
-    }
-  }
-
-  /** One chip: logo · name · live ×N · a ▾ fills menu — the wizard's anatomy and
-   *  classes, so the two surfaces cannot drift apart visually. */
-  function paletteChip(id: string, name: string): HTMLElement {
-    const armed = brush === id
-    const n = id === 'shell' ? count - assignedTotal() : countOf(id)
-    const body = el(
-      'button',
-      {
-        class: `wizard-chip${armed ? ' is-armed' : ''}`,
-        type: 'button',
-        title: armed ? `Placing ${name} — click to stop` : `Place ${name} on the terminals below`,
-        ariaLabel: `${name} brush${n ? ` — ${n} assigned` : ''}`,
-        onClick: () => armBrush(id),
-        onDblclick: () => fillAllWith(id)
-      },
-      [
-        providerLogo(id === 'custom' ? 'custom:' : id, 14),
-        el('span', { class: 'wizard-chip-name', text: name }),
-        n > 0 ? el('span', { class: 'wizard-chip-count', text: `×${n}` }) : null
-      ]
-    )
-    body.dataset.chip = id
-    body.setAttribute('aria-pressed', String(armed))
-    if (id === 'shell') return el('span', { class: 'wizard-chip-wrap' }, [body])
-    const empty = count - assignedTotal()
-    const menu = el(
-      'button',
-      {
-        class: 'wizard-chip-menu',
-        type: 'button',
-        ariaLabel: `${name} — fill options`,
-        onClick: (e) => {
-          e.stopPropagation()
-          const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-          openContextMenu({
-            items: [
-              { label: `Fill all ${count} ${plural(count)}`, onSelect: () => fillAllWith(id) },
-              { label: `Fill ${empty} empty ${plural(empty)}`, disabled: empty === 0, onSelect: () => fillEmptyWith(id) }
-            ],
-            x: r.left,
-            y: r.bottom + 4,
-            returnFocus: e.currentTarget as HTMLElement,
-            ariaLabel: `${name} fills`
-          })
-        }
-      },
-      [icon('chevron-down', 12)]
-    )
-    return el('span', { class: 'wizard-chip-wrap' }, [body, menu])
-  }
-
-  function renderPalette(): void {
-    const focused = (document.activeElement as HTMLElement | null)?.dataset?.chip ?? null
-    clear(brushesHost)
-    for (const a of roster.filter((agent) => agent.installed)) brushesHost.append(paletteChip(a.id, a.name))
-    if (customCmd.trim() || countOf('custom') > 0) brushesHost.append(paletteChip('custom', 'Custom'))
-    brushesHost.append(paletteChip('shell', 'Shell'))
-    clear(clearHost)
-    clearHost.append(
-      Button({
-        label: 'Clear',
-        size: 'sm',
-        variant: 'danger',
-        title: 'Every terminal back to a plain shell',
-        onClick: () => {
-          slots = Array<string | null>(count).fill(null)
-          brush = null
-          render()
-        }
-      })
-    )
-    if (focused) brushesHost.querySelector<HTMLElement>(`[data-chip="${focused}"]`)?.focus()
-    brushHint.textContent = !brush
-      ? ''
-      : brush === 'shell'
-        ? 'Click the terminals above to clear them back to shells.'
-        : `Click the terminals above to place ${brush === 'custom' ? 'the custom command' : providerName(brush)} — double-click the chip fills all.`
-    brushHint.hidden = !brushHint.textContent
-  }
-
-  /** Providers with a real profile CHOICE, and only those this lineup places —
-   *  the wizard's row, filtered to what is being created (compact pass). */
-  function renderProfiles(): void {
-    clear(profilesHost)
-    for (const a of roster.filter((agent) => agent.installed && countOf(agent.id) > 0)) {
-      const mine = profilesCache.filter((p) => p.provider === a.id).sort((x, y) => x.order - y.order)
-      if (mine.length < 2) continue
-      const sel = el('select', { class: 'input input-sm wizard-profile-select', ariaLabel: `${a.name} profile` }) as HTMLSelectElement
-      for (const p of mine) sel.append(new Option(p.name, p.id))
-      sel.value = profileByProvider.get(a.id) ?? mine[0].id
-      sel.addEventListener('change', () => profileByProvider.set(a.id, sel.value))
-      profilesHost.append(
-        el('label', { class: 'wizard-profile-row' }, [
-          providerLogo(a.id, 13),
-          el('span', { class: 'wizard-profile-name', text: `${a.name} profile` }),
-          el('span', { class: 'wizard-select' }, [sel])
-        ])
-      )
-    }
-  }
-
-  /** Roster cadence: missing CLIs as grayed chips whose one click installs —
-   *  the same anatomy the wizard renders, setup progress unfolding below. */
-  function renderMissing(): void {
-    clear(missingHost)
-    clear(setupHost)
-    for (const panel of setupPanels.splice(0)) panel.dispose()
-    for (const a of roster) {
-      if (a.installed || !a.installHint) continue
-      const panel = createAgentSetupPanel({
-        agentId: a.id,
-        name: a.name,
-        compact: true,
-        iconOnly: true,
-        onInstalled: () => void refreshAgentRegistry()
-      })
-      setupPanels.push(panel)
-      setupHost.append(panel.el)
-      const body = el(
-        'button',
-        {
-          class: 'wizard-chip is-missing',
-          type: 'button',
-          title: `${a.name} isn’t installed — one click sets it up, dependencies included`,
-          ariaLabel: `Install ${a.name}`,
-          onClick: () => panel.action.querySelector('button')?.click()
-        },
-        [providerLogo(a.id, 14), el('span', { class: 'wizard-chip-name', text: a.name })]
-      )
-      missingHost.append(el('span', { class: 'wizard-chip-wrap is-missing' }, [body, panel.action]))
-    }
-  }
-
+  // ── Renders ───────────────────────────────────────────────────────────────
   function syncIsolate(): void {
     const view = isolationView({ probe: isolateProbe, want: isolate })
     isolateBox.setDisabled(!view.enabled)
@@ -563,32 +427,87 @@ export function openNewTerminalModal(opts: NewTerminalModalOpts): void {
   }
 
   function render(): void {
-    normalizeSlots()
-    countLabel.textContent = `${count} ${plural(count)}`
-    countStepper.setValue(count)
-    customStepper.setMax(countOf('custom') + (count - assignedTotal()))
-    customStepper.setValue(countOf('custom'))
-    customStepper.setDisabled(!customCmd.trim())
-    renderSlots()
-    renderPalette()
-    renderProfiles()
-    // The label span, not textContent on the button — Button() nests its label.
-    const label = `Open ${count === 1 ? 'terminal' : `${count} terminals`}`
+    slots = normalizeSlots(slots, added, customCmd)
+    countStepper.setValue(added)
+    painter.refreshChips()
+    palette.render()
+
+    const total = live.length + added
+    const merged = spec.regions.some((r) => r.rs > 1 || r.cs > 1)
+    summaryCount.textContent = String(added)
+    summaryLine.textContent = `${plural(added, 'new terminal')} · ${live.length} already open`
+    summaryShape.textContent = `${total} in all · ${merged ? 'custom' : `${spec.rows}×${spec.cols}`}`
+    capacityHint.textContent =
+      headroom - added > 0 ? `Room for ${headroom - added} more on this grid.` : 'This grid is full.'
+    readout.textContent = `${plural(total)} · ${merged ? 'custom arrangement' : `${spec.rows} by ${spec.cols}`}`
+
+    // Merging every added tile away leaves a pure rearrange — still worth applying, and
+    // the button must not promise terminals it will not open.
+    const label = added === 0 ? 'Apply layout' : `Open ${added === 1 ? 'terminal' : `${added} terminals`}`
     const span = createBtn.querySelector('span')
     if (span) span.textContent = label
     createBtn.setAttribute('aria-label', label)
   }
 
+  /**
+   * The workspace changed under the dialog. Two tiers, because a reorder and a set change
+   * invalidate different things:
+   *
+   *   same ids, new order (a drag-rearrange) — every locked tile now stands for a
+   *     different terminal, so the LABELS must be re-aimed; nothing the user painted is
+   *     invalidated, so every merge is kept.
+   *   the set moved — `slotOfTile` is keyed on live.length, so the canvas and the tiles it
+   *     stands for have to be re-seeded IN THE SAME BREATH. A spec with fewer regions than
+   *     live.length would read as all-locked and quietly drop open terminals off the grid.
+   */
+  const onLive = (next: LiveWorkspaceShape): void => {
+    if (!open) return
+    const before = live
+    live = next.live
+    headroom = Math.max(0, next.headroom)
+    countStepper.setMax(headroom)
+    const beforeIds = before.map((tile) => tile.paneId).join(',')
+    const afterIds = live.map((tile) => tile.paneId).join(',')
+    const overHeadroom = added > headroom
+    if (beforeIds === afterIds) {
+      // A pure re-publish, or panes opened in ANOTHER workspace: the set here is
+      // unchanged, so the canvas is still true — but the ceiling may have tightened
+      // under it, and a count the grid can no longer hold must not stay on screen.
+      if (!overHeadroom) return
+      added = headroom
+      spec = specForCount(live.length + added, TEMPLATES[live.length + added])
+      slots = normalizeSlots(slots, added, customCmd)
+      painter.set(spec)
+      reseedNote.hidden = false
+      reseedNote.textContent = `Terminals opened elsewhere, so this workspace has less room. The grid was redrawn.`
+      render()
+      return
+    }
+    if (before.length === live.length && !overHeadroom) {
+      painter.refreshChips()
+      render()
+      return
+    }
+    const grew = live.length > before.length
+    const hadMerges = spec.regions.some((r) => r.rs > 1 || r.cs > 1)
+    added = Math.min(added, headroom)
+    spec = specForCount(live.length + added, TEMPLATES[live.length + added])
+    slots = normalizeSlots(slots, added, customCmd)
+    painter.set(spec)
+    reseedNote.hidden = false
+    reseedNote.textContent = `A terminal ${grew ? 'opened' : 'closed'} in this workspace. The grid was redrawn${
+      hadMerges ? ', so your merges were reset' : `, and now starts from ${live.length} open`
+    }.`
+    render()
+  }
+
   const unsubRoster = onAgentRegistryChange((next) => {
     if (!open) return
     roster = [...next]
-    // A provider that vanished cannot stay placed (or armed) — same invariant as
-    // the wizard's applyRoster: a launch would type a command the shell cannot find.
-    slots = slots.map((id) => (id && id !== 'custom' && !roster.some((a) => a.id === id && a.installed) ? null : id))
-    if (brush && brush !== 'custom' && brush !== 'shell' && !roster.some((a) => a.id === brush && a.installed)) {
-      brush = null
-    }
-    renderMissing()
+    const installed = installedIds()
+    slots = pruneToRoster(slots, installed)
+    brush = pruneBrush(brush, installed)
+    palette.renderRoster()
     render()
   })
 
@@ -597,13 +516,16 @@ export function openNewTerminalModal(opts: NewTerminalModalOpts): void {
     .then((profiles) => {
       if (!open) return
       profilesCache = profiles ?? []
-      renderProfiles()
+      palette.render()
     })
     .catch(() => undefined)
 
-  renderMissing()
+  palette.renderRoster()
   render()
   syncIsolate()
   probeIsolation()
+  // Subscribed last: the port replays immediately and `onLive` touches the painter and the
+  // stepper, both of which must exist. The replay lands as a no-op (same ids).
+  const unsubLive = opts.subscribeLive?.(onLive) ?? ((): void => {})
   modal.open()
 }

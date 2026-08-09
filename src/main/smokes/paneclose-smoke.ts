@@ -119,6 +119,20 @@ const SCRIPT = `(async () => {
   const liveUndone = m.layout.paneCount() === 3 && (await settle(P3, 'LIVE_UNDO_ALIVE'))
   m.attention.setPaneState(P3, 'idle')
   m.attention.setPaneTracked(P3, false)
+  // Liveness has a THIRD reason now — a foreground process in the shell — and settle()
+  // above types an echo into a real PTY, which arms it instantly. Clearing the
+  // attention lane alone no longer makes a pane idle. WAIT for the shell to come back to
+  // its prompt and ASSERT it: a blind clear would paper over a genuine latch, and the
+  // blocks below (which never assert "asked nothing") would then fail obscurely on a
+  // dialog they never expected.
+  const waitForegroundIdle = async (id) => {
+    for (let i = 0; i < 24; i++) {
+      if (!m.terminal?.foreground(id)?.active) return true
+      await sleep(250)
+    }
+    return false
+  }
+  const foregroundSettled = await waitForegroundIdle(P3)
   await sleep(300)
 
   // ── RESHAPE: split during the grace; Undo must tear nothing down ─────────────────────
@@ -138,6 +152,8 @@ const SCRIPT = `(async () => {
   const reshapeSplitAlive = splitLanded ? await settle(splitId, 'RESHAPE_SPLIT_ALIVE') : false
 
   // ── LAPSE: the grace runs out and the pane is disposed for real ──────────────────────
+  // RESHAPE's settle() calls typed into both panes; wait them out for the same reason.
+  const foregroundSettledAgain = (await waitForegroundIdle(P3)) && (splitLanded ? await waitForegroundIdle(splitId) : true)
   xClose(P3)
   await sleep(6800)
   const lapsedHandleGone = !pane(P3)
@@ -151,6 +167,7 @@ const SCRIPT = `(async () => {
     undoCount && undoInGrid && undoVisible && undoFocused && aliveAfterUndo &&
     parkedEchoed && historyIntact &&
     liveAsks && copyPromisesUndo && cancelKept && liveSoftClosed && liveUndone &&
+    foregroundSettled && foregroundSettledAgain &&
     splitLanded && reshapeCount && reshapeBothPresent && reshapeClosedAlive && reshapeSplitAlive &&
     lapsedHandleGone && lapsedSlotGone && lapsedCount && survivorAlive
 
@@ -160,6 +177,7 @@ const SCRIPT = `(async () => {
     parked: { parkedSameObject, parkedEchoedLive, parkedEchoed },
     undo: { undoCount, undoInGrid, undoVisible, undoFocused, aliveAfterUndo, historyIntact },
     copy: { liveAsks, copyPromisesUndo, cancelKept, liveSoftClosed, liveUndone, liveMsg },
+    foreground: { foregroundSettled, foregroundSettledAgain },
     reshape: { splitLanded, splitId, reshapeCount, reshapeBothPresent, reshapeClosedAlive, reshapeSplitAlive },
     lapse: { lapsedHandleGone, lapsedSlotGone, lapsedCount, survivorAlive }
   }

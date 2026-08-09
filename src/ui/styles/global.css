@@ -172,6 +172,13 @@
   --r-md: 10px;
   --r-lg: 14px;
   --r-full: 999px;
+  /* The shared ROW CONTROL height: chips, selects, the custom-command input and the
+     steppers that sit beside them all key off it, so a palette row reads as one band.
+     Declared here rather than on .wizard because the palette is no longer the wizard's
+     alone — the New-terminals modal renders the same .wizard-chip/.wizard-select markup
+     outside #view-wizard, where a --wz-ctl scoped to .wizard was invalid at
+     computed-value time and every control silently collapsed to `height: auto`. */
+  --wz-ctl: 28px;
   /* Readable-column caps. Prose past ~70ch costs the eye its return sweep;
      pages past --page-max stop feeling like a document. */
   --measure: 68ch; /* prose / captions inside a card */
@@ -2163,65 +2170,47 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
-/* "New terminal…" modal (new-terminal-modal.ts) — the wizard's placement palette over
-   the panes being added, so .wizard-chip/.wizard-palette/.wizard-profile-row styling is
-   shared wholesale. Only the count row and the slot strip (the strip-sized canvas the
-   brushes paint) are new. */
+/* "New terminal…" modal (new-terminal-modal.ts) — the wizard's LAYOUT PAINTER and
+   placement palette, brought to a live workspace: the canvas shows the whole resulting
+   grid with the terminals you already have as locked tiles. Everything visual is the
+   wizard's (.wizard-sec / .wizard-chip / .grid-painter / .wizard-layout-summary); this
+   block only declares the container the wizard's own @container rules read, and the
+   section rhythm they were spaced for.
+
+   It replaces a flat sp-3 stack of bare rows plus a bespoke .ntm-slot pill strip — the
+   strip had no spatial meaning (there was nowhere to say WHERE a terminal went) and its
+   border-radius named an --r-2 token that has never existed, so every tile rendered as a
+   hard square while the rest of the palette was pills. */
 .ntm-body {
+  container-type: inline-size;
+  container-name: wizard;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--sp-4);
 }
-.ntm-count-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
+/* Never wider than the window it floats in — .modal itself sets no max-width, and this is
+   the widest dialog in the app. */
+.modal:has(.ntm-body) {
+  max-width: calc(100vw - 2 * var(--sp-5));
 }
-.ntm-count-label {
-  font-size: var(--fs-13);
-  color: var(--text-hi);
-  min-width: 5.5em; /* "12 terminals" — the row must not shimmy as the count moves */
-  font-variant-numeric: tabular-nums;
-}
-.ntm-slots {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
-}
-/* A slot tile is a terminal-to-be: logo + name, the assigned provider's accent as a
-   left bar (the pane chrome's own vocabulary for "who runs here"). */
-.ntm-slot {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
+/* The workspace changed under the dialog and the grid was redrawn. Sticky, not a toast:
+   someone who was looking at the palette when the canvas moved has to be able to find out
+   afterwards why their merges are gone. Attention-toned, because it reports a loss. */
+.ntm-reseed {
+  margin: 0;
   padding: var(--sp-2) var(--sp-3);
-  font-size: var(--fs-12);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--border);
-  border-radius: var(--r-2);
-  background: var(--bg-inset);
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
   color: var(--text-mid);
-  cursor: pointer;
-  transition:
-    border-color var(--dur-1) var(--ease),
-    color var(--dur-1) var(--ease);
+  font-size: var(--fs-11);
 }
-.ntm-slot:hover {
-  border-color: var(--border-strong);
-  color: var(--text-hi);
-}
-.ntm-slot.is-assigned {
-  border-left-color: var(--ntm-accent, var(--accent-ink));
-  color: var(--text-hi);
-}
-.ntm-slot-name {
-  max-width: 9em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ntm-palette {
-  padding-top: var(--sp-1);
+/* The compact lattice, unconditionally. The wizard picks 18px from a container query, but
+   here the size that matters is not the modal's — it is whether the lattice, the canvas and
+   the summary still stand side by side. At 24px they do not, and the summary wraps under
+   the painter into a full-width slab. */
+.ntm-body .grid-painter {
+  --gp-cell: 18px;
 }
 
 #workspace-host {
@@ -4445,10 +4434,10 @@ body.pane-dragging * {
   color: var(--text-lo);
   font-size: var(--fs-12);
 }
-/* The scrolling column. --wz-ctl unifies the row control heights that used
-   to be four different values (stepper 24 / select 28 / copy 22 / pill). */
+/* The scrolling column. (--wz-ctl, which unifies the row control heights that used to be
+   four different values — stepper 24 / select 28 / copy 22 / pill — is a :root token now:
+   the same rows render inside the New-terminals modal, outside this element.) */
 .wizard {
-  --wz-ctl: 28px;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -5007,6 +4996,24 @@ body.pane-dragging * {
 .gp-region.is-merge-invalid {
   border-color: var(--danger-ink);
   background: var(--danger-weak);
+}
+/* A LOCKED tile is a terminal that already exists (New terminals, on a live workspace):
+   it shows who runs there and refuses every gesture. Inset and solid — the recessed
+   surface reads as "part of the wall", where a paintable tile sits proud of it — and
+   never the accent border, which throughout the painter means "this responds to you". */
+.gp-region.is-locked {
+  background: var(--bg-inset);
+  border-style: solid;
+  cursor: default;
+}
+.gp-region.is-locked .gp-slot {
+  color: var(--text-mid);
+}
+.gp-region.is-locked:hover {
+  border-color: var(--border);
+}
+.gp-canvas.is-painting .gp-region.is-locked {
+  cursor: not-allowed;
 }
 .gp-chip {
   display: inline-flex;

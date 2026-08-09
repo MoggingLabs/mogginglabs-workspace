@@ -14,6 +14,17 @@ export {
 export { TEMPLATES, TEMPLATE_COUNTS, type GridSpec } from './templates'
 export { serializeTree, MIN_PANE_HEIGHT_PX, MIN_PANE_WIDTH_PX } from './layout-tree'
 export {
+  checkResolvedSet,
+  orderLiveSlots,
+  selectLayoutSlots,
+  ROW_BAND_PX,
+  type ResolvedNow,
+  type ResolvedRefusal,
+  type ResolvedSet,
+  type ResolvedSlot,
+  type SlotSelection
+} from './slot-selection'
+export {
   effectivePaneCapacity,
   machinePaneBudget,
   paneCapacity,
@@ -29,6 +40,7 @@ export {
 export {
   expandToWholeRegions,
   mergeRegions,
+  mergeRespectsLock,
   sortRegions,
   specForCount,
   treeForRegions,

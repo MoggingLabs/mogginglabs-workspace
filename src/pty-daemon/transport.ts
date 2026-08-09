@@ -131,7 +131,8 @@ export function createServer(sessions: SessionManager, token: string, hooks: Tra
             locality: location.locality
           }),
         limit: () => send({ t: 'limit', id, gen }),
-        agent: (agentId, cwd, sinceMs) => send({ t: 'agent', id, gen, agentId, cwd, sinceMs })
+        agent: (agentId, cwd, sinceMs) => send({ t: 'agent', id, gen, agentId, cwd, sinceMs }),
+        foreground: (active, pid, command) => send({ t: 'foreground', id, gen, active, pid, command })
       }
       subscriptions.set(id, { sub, session })
       session.subscribe(sub)

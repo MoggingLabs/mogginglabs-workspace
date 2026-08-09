@@ -45,7 +45,7 @@ export function openReorganizeModal(opts: ReorganizeModalOpts): void {
 
   const modal = createModal({
     title: 'Reorganize layout',
-    subtitle: 'Pick the grid size, then drag across cells to merge them. Terminals you already have are kept where they fit.',
+    subtitle: 'Pick the grid size, then drag across cells to merge them. Terminals you already have stay open, near where they already are.',
     // dialog (content-sized), not wizard: the wizard variant is a fixed 640px flow shell
     // and the painter left a lot of it empty. width overrides the dialog default.
     variant: 'dialog',

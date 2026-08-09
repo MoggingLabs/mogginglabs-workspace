@@ -15,7 +15,8 @@ export function createTerminalModule(): FeatureModule {
         exit: (e) => ctx.emit(TerminalChannels.exit, e),
         state: (e) => ctx.emit(TerminalChannels.state, e),
         cwd: (e) => ctx.emit(TerminalChannels.cwd, e),
-        agent: (e) => ctx.emit(TerminalChannels.agent, e) // typed-launch detection
+        agent: (e) => ctx.emit(TerminalChannels.agent, e), // typed-launch detection
+        foreground: (e) => ctx.emit(TerminalChannels.foreground, e)
       })
       ctx.handle(TerminalChannels.spawn, (p) => service!.spawn(p))
       // Platform truth a pane needs BEFORE its first byte: the same probe every spawn

@@ -16,7 +16,8 @@ export const TerminalChannels = {
   cwd: 'terminal:cwd', // backend -> renderer: a pane reported its cwd (OSC 7)
   setRole: 'terminal:setRole', // renderer -> daemon: swarm role manifest (Phase-4/01)
   limit: 'terminal:limit', // daemon -> renderer: a pane's agent hit a usage limit (Phase-4/04)
-  agent: 'terminal:agent' // backend -> renderer: an agent CLI process appeared in / left a pane's PTY subtree
+  agent: 'terminal:agent', // backend -> renderer: an agent CLI process appeared in / left a pane's PTY subtree
+  foreground: 'terminal:foreground' // backend -> renderer: the pane's shell is waiting on a child process (destructive confirms ONLY — never the attention port)
 } as const
 
 export const ContextChannels = {

@@ -12,7 +12,6 @@ import {
   leafCount,
   leafIds,
   lineOfLeaf,
-  MAX_LEAVES,
   MIN_PANE_HEIGHT_PX,
   MIN_PANE_WIDTH_PX,
   minimumLayoutHeight,
@@ -35,6 +34,13 @@ import {
   type SplitNode
 } from './layout-tree'
 import { effectivePaneCapacity, type PaneCapacity } from './pane-capacity'
+import {
+  checkResolvedSet,
+  orderLiveSlots,
+  selectLayoutSlots,
+  type ResolvedRefusal,
+  type ResolvedSet
+} from './slot-selection'
 import { treeForRegions, type GridSpecModel } from './grid-regions'
 import { machineSpec } from '../../core/system/machine-port'
 import { notifyPanesRevealed } from '../../core/layout/reveal-port'
@@ -43,9 +49,9 @@ export { parseTree, leafIds, MIN_PANE_WIDTH_PX, minimumLayoutWidth } from './lay
 export type { LayoutTreeNode, SplitDir } from './layout-tree'
 
 /** The canonical grid shape for a pane count: the curated template shape, else
- *  near-square — exactly what `apply(n)` builds. Exported so the layout popover's
- *  "Reorganize" row can NAME the shape it will snap to ("Reorganize into 2×3")
- *  without a second formula that could drift from the one the grid actually uses. */
+ *  near-square — exactly what `apply(n)` builds. Exported so any surface that has to
+ *  NAME the shape a count will land on ("2×3") reads it from the one formula the grid
+ *  actually uses, rather than growing a second that could drift. */
 export function gridShapeFor(n: number): GridSpec {
   const spec = TEMPLATES[n]
   if (spec) return spec
@@ -256,7 +262,8 @@ export class GridLayout {
       if (typeof id === 'number' && Number.isInteger(id) && id >= 1) this.setSlotId(i + 1, id)
     })
     if (initial) this.applyTree(initial)
-    else this.apply(1)
+    // Mint and spend in one breath — nothing can move in between, so this cannot refuse.
+    else this.apply(this.resolveTemplate(1))
   }
 
   get paneCount(): number {
@@ -283,9 +290,25 @@ export class GridLayout {
     return effectivePaneCapacity(this.scrollHost, machineSpec(), elsewhere)
   }
 
-  /** Live pane ids (closed slots excluded) — the source of truth for attention scans. */
+  /** Live pane ids (closed slots excluded) — the source of truth for attention scans.
+   *  TREE order (`leafIds` walks depth-first). Use `liveOrder()` when the order is meant
+   *  to match what the user SEES. */
   paneIds(): PaneId[] {
     return this.liveLocals().map((id) => this.globalOf(id))
+  }
+
+  /**
+   * Live pane ids in READING order — top-left to bottom-right — which is the order
+   * `templateLocals` hands live slots back, and therefore the order a placement painter
+   * must draw its locked prefix in.
+   *
+   * NOT `paneIds()`. That is tree order, and the two DIVERGE the moment a split nests:
+   * split pane 1 right, then split pane 1 down, and the tree is `h[v[1,3], 2]` — depth
+   * first walks 1,3,2 while the screen reads 1,2,3. A surface that labels tiles from
+   * `paneIds()` and lands them through `templateLocals` names the wrong terminals.
+   */
+  liveOrder(): PaneId[] {
+    return orderLiveSlots(this.liveLocals(), this.leafRects).map((local) => this.globalOf(local))
   }
 
   /** Leaves that still HOST a pane (a detached one's leaf outlives it — see `detached`). */
@@ -340,37 +363,79 @@ export class GridLayout {
     return gridShapeFor(n)
   }
 
-  /** Apply an N-pane template grid (any 1..16; template counts keep their curated
-   *  shapes). Resets the tree — custom arrangement/sizes yield to the template. */
-  apply(n: number): void {
-    const locals = this.templateLocals(n)
+  /** Apply an N-pane template grid over an ALREADY-RESOLVED set (any 1..16; template
+   *  counts keep their curated shapes). Resets the tree — custom arrangement/sizes yield
+   *  to the template — but never the panes: live slots are kept and land in reading order
+   *  over where they already sit, so only a genuine SHRINK closes anything (from the
+   *  bottom-right).
+   *
+   *  Returns FALSE when the set no longer describes this grid. "apply() always lands" is
+   *  retired deliberately: landing a set the confirm dialog never named IS the defect. */
+  apply(set: ResolvedSet): boolean {
+    if (this.checkResolved(set)) return false
+    const locals = set.slots.map((slot) => slot.local)
     this.clearExpand()
     this.root = treeForGrid(locals, this.shapeFor(locals.length).cols)
     this.rebuild()
     this.onLayoutChange?.()
+    return true
   }
 
   /**
-   * The slots an `apply(n)` would land on. Not simply `1..n` any more: a slot this
-   * workspace no longer holds may still have its FORMULA id in use — that is a pane that
-   * moved to another workspace and took its id with it. Growing back into that slot would
-   * hand its id out twice. Live slots are kept (they already own their id, override or
-   * not); the rest are filled from the lowest slot whose id is free everywhere.
+   * The slots an `apply(n)` would land on, in the order the new layout READS them
+   * (entry 0 = the top-left region). The rule itself is pure and unit-tested — see
+   * `selectLayoutSlots` — and this is only its binding to live grid state.
+   *
+   * Not simply `1..n`: a slot this workspace no longer holds may still have its FORMULA
+   * id in use — that is a pane that moved to another workspace and took its id with it,
+   * and growing back into that slot would hand its id out twice. And no longer an
+   * ascending "live or free" walk, which took a free HOLE ahead of a live slot and so
+   * killed a running terminal on a reshape that created and destroyed nothing.
    */
   private templateLocals(n: number): number[] {
-    const count = Math.max(1, Math.min(this.limit(), Math.floor(n)))
-    const live = new Set(this.liveLocals())
-    const locals: number[] = []
-    for (let local = 1; locals.length < count && local <= MAX_LEAVES; local++) {
-      if (live.has(local) || !paneIdInUse((this.baseId + local) as PaneId)) locals.push(local)
-    }
-    return locals
+    return selectLayoutSlots({
+      count: n,
+      liveLocals: this.liveLocals(),
+      // Read before `rebuild`, so these rects are the arrangement on screen — which is
+      // exactly the thing the ordering preserves.
+      rects: this.leafRects,
+      limit: this.limit(),
+      // A DETACHED leaf's slot is not free either: its pane moved out and kept its id, so
+      // `globalOf` would name a pane living in another workspace entirely.
+      isFree: (local) => !this.detached.has(local) && !paneIdInUse((this.baseId + local) as PaneId)
+    })
   }
 
-  /** What `apply(n)` will produce, per slot — the controller seeds/scrubs the panes it is
-   *  about to CREATE before their slots exist (a pane reads its cwd + remote at spawn). */
-  peekTemplate(n: number): Array<{ local: number; paneId: PaneId }> {
-    return this.templateLocals(n).map((local) => ({ local, paneId: this.globalOf(local) }))
+  /**
+   * Mint the set an N-pane apply will land on. THE resolution — not a peek you may repeat:
+   * every door resolves once, before the confirm it shows, and spends that value.
+   *
+   * The controller seeds/scrubs the panes this will CREATE before their slots exist (a
+   * pane reads its cwd + remote at spawn), which is why each slot says whether it is a
+   * keep or a create.
+   */
+  resolveTemplate(n: number): ResolvedSet {
+    const locals = this.templateLocals(n)
+    const liveNow = this.liveLocals()
+    const live = new Set(liveNow)
+    const slots = locals.map((local) => ({ local, paneId: this.globalOf(local) as number, live: live.has(local) }))
+    const kept = new Set(slots.filter((slot) => slot.live).map((slot) => slot.local))
+    return {
+      slots,
+      liveAtResolve: liveNow,
+      closing: liveNow.filter((local) => !kept.has(local)).map((local) => this.globalOf(local) as number),
+      source: this.source
+    }
+  }
+
+  /** Does a set minted earlier still describe this grid? `null` = yes, spend it. */
+  checkResolved(set: ResolvedSet): ResolvedRefusal | null {
+    return checkResolvedSet(set, {
+      source: this.source,
+      liveLocals: this.liveLocals(),
+      globalOf: (local) => this.globalOf(local) as number,
+      isFree: (local) => !this.detached.has(local) && !paneIdInUse((this.baseId + local) as PaneId)
+    })
   }
 
   /** Apply a restored split tree (validated by `parseTree` — leaf ids are 1..n). */
@@ -384,18 +449,23 @@ export class GridLayout {
   /**
    * Apply a PAINTED layout — the reorganize panel's arbitrary count + arrangement.
    * The spec's reading-order region slots (1..N) map onto this workspace's local ids
-   * with `templateLocals` — LIVE panes reused first — so reorganizing preserves every
-   * terminal that still fits (its PTY untouched) and only the tail closes when the
-   * count drops; a raised count opens fresh slots at the end. Same slot resolution as
-   * `apply(n)`, so `peekTemplate(count)` names exactly the panes this creates/keeps.
-   * Returns false for a non-guillotine spec (the painter can't emit one) or over cap.
+   * with `templateLocals` — EVERY live pane first, ordered by where it already sits — so
+   * reorganizing preserves every terminal that still fits (its PTY untouched) and lands
+   * it in the region nearest the one it occupied: a reshape reads as a resize, not a
+   * shuffle. A raised count opens fresh slots after them; only a genuine shrink closes
+   * anything, and it closes from the bottom-right in reading order. Same slot resolution
+   * as `apply`, over the SAME resolved set the caller's confirm named.
+   * Returns false for a non-guillotine spec (the painter can't emit one), for a set whose
+   * size disagrees with the spec, or for a set that no longer describes this grid.
    */
-  applyRegions(spec: GridSpecModel): boolean {
+  applyRegions(spec: GridSpecModel, set: ResolvedSet): boolean {
     const shape = treeForRegions(spec) // leaf ids = reading-order region slots 1..N
     if (!shape) return false
-    const count = spec.regions.length
-    const locals = this.templateLocals(count)
-    if (locals.length < count) return false
+    // The old `locals.length < count` guard, restated at the type level: a resolution short
+    // of the spec means the slot-id space ran out.
+    if (set.slots.length !== spec.regions.length) return false
+    if (this.checkResolved(set)) return false
+    const locals = set.slots.map((slot) => slot.local)
     const remap = (node: LayoutTreeNode): LayoutTreeNode =>
       isSplit(node) ? { ...node, children: node.children.map(remap) } : { id: locals[node.id - 1]! }
     this.clearExpand()
@@ -405,7 +475,8 @@ export class GridLayout {
     return true
   }
 
-  /** The persisted form of the current layout (ids renumbered to slot order). */
+  /** The persisted form of the current layout. Leaf ids are preserved verbatim, NOT
+   *  renumbered to slot order — see `serializeTree` for why renumbering broke restores. */
   serialize(): string {
     return serializeTree(this.root)
   }

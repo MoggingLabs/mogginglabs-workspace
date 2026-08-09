@@ -6,6 +6,8 @@ import type {
   DataEvent,
   ExitEvent,
   KillCommand,
+  PaneForegroundEvent,
+  PaneId,
   ResizeCommand,
   SpawnRequest,
   SpawnResult,
@@ -43,6 +45,8 @@ export interface TerminalSink {
   cwd(event: CwdEvent): void
   /** Typed-launch detection: an agent CLI process appeared in / left the pane's subtree. */
   agent(event: AgentDetectedEvent): void
+  /** FOREGROUND WORK: the pane's shell is waiting on a child process. */
+  foreground(event: PaneForegroundEvent): void
 }
 
 /**
@@ -63,6 +67,11 @@ export class PtyService {
   private readonly cwdStates = new Map<number, PaneCwdState>()
   private readonly gitContexts = new Map<number, GitContextObserver>()
   private readonly generations = new Map<number, string>()
+  /** The last foreground fact PUBLISHED per pane (change-only), and the detector's proven
+   *  foreground process. Two maps for the same reason the daemon keeps two: the cwd state
+   *  forgets a pid whose cwd it could not read, and liveness must not. */
+  private readonly foregrounds = new Map<number, { active: boolean; pid?: number; command?: string }>()
+  private readonly foregroundProcs = new Map<number, { pid: number; command?: string }>()
   private nextGeneration = 1
   /** Typed-launch detection (the in-proc twin of the daemon's — one detector, all panes). */
   private readonly agentProcs = new AgentProcessDetector(
@@ -75,15 +84,31 @@ export class PtyService {
 
   private publishCwd(id: number, changed?: PaneCwdSnapshot | null): void {
     const generation = this.generations.get(id)
-    if (!changed || !generation) return
-    this.sink.cwd({
-      id,
-      cwd: changed.cwd,
-      generation,
-      revision: changed.revision,
-      source: changed.source,
-      locality: changed.locality
-    })
+    if (!generation) return // no session, no events
+    if (changed) {
+      this.sink.cwd({
+        id,
+        cwd: changed.cwd,
+        generation,
+        revision: changed.revision,
+        source: changed.source,
+        locality: changed.locality
+      })
+    }
+    // Liveness moves independently of the path — see the daemon twin.
+    this.publishForeground(id, generation)
+  }
+
+  /** Change-only, so an idle pane is silent. */
+  private publishForeground(id: number, generation: string): void {
+    const state = this.cwdStates.get(id)
+    if (!state) return
+    const proc = this.foregroundProcs.get(id)
+    const next = { active: state.commandInFlight(), pid: proc?.pid, command: proc?.command }
+    const prev = this.foregrounds.get(id)
+    if (prev && prev.active === next.active && prev.pid === next.pid && prev.command === next.command) return
+    this.foregrounds.set(id, next)
+    this.sink.foreground({ id: id as PaneId, generation, ...next })
   }
 
   private applyAgentProc(id: number, det: DetectedAgentProc | null): void {
@@ -104,6 +129,8 @@ export class PtyService {
     const state = this.cwdStates.get(id)
     if (!state) return
     const cwd = context?.cwd ? normalizePaneCwd(context.cwd, { mustExist: false }) ?? undefined : undefined
+    if (context) this.foregroundProcs.set(id, { pid: context.pid, command: context.command })
+    else this.foregroundProcs.delete(id)
     this.publishCwd(id, state.acceptDetected(context ? { pid: context.pid, cwd } : null))
   }
 
@@ -265,6 +292,14 @@ export class PtyService {
         this.agentProcs.untrack(String(req.id))
         this.gitContexts.get(req.id)?.dispose()
         this.gitContexts.delete(req.id)
+        // A pane whose shell died is running nothing, and it stays mounted showing
+        // "[process exited]" — say so before the exit, or the last verdict stands forever.
+        const gen = this.generations.get(req.id)
+        if (gen && this.foregrounds.get(req.id)?.active) {
+          this.sink.foreground({ id: req.id as PaneId, generation: gen, active: false })
+        }
+        this.foregrounds.delete(req.id)
+        this.foregroundProcs.delete(req.id)
         this.sink.exit({ id: req.id, exitCode })
         this.ptys.delete(req.id)
         this.sizes.delete(req.id)
@@ -357,6 +392,8 @@ export class PtyService {
     this.buffers.delete(id)
     this.cwdStates.delete(id)
     this.generations.delete(id)
+    this.foregrounds.delete(id)
+    this.foregroundProcs.delete(id)
   }
 
   disposeAll(): void {
@@ -371,5 +408,7 @@ export class PtyService {
     this.buffers.clear()
     this.cwdStates.clear()
     this.generations.clear()
+    this.foregrounds.clear()
+    this.foregroundProcs.clear()
   }
 }

@@ -1,6 +1,7 @@
 import {
   expandToWholeRegions,
   mergeRegions,
+  mergeRespectsLock,
   uniformSpec,
   unmergeRegion,
   type GridSpecModel
@@ -32,7 +33,10 @@ export interface GridPainterOpts {
   /** Lattice bounds (default 4×5) and the hard pane cap (default 16). */
   maxRows?: number
   maxCols?: number
-  maxPanes?: number
+  /** A THUNK is allowed for the same reason `lockedCount` is one: the cap is a property of
+   *  the workspace — panes open elsewhere, the grid gains and loses terminals — not of
+   *  construction. Callers with a fixed cap keep passing a number. */
+  maxPanes?: number | (() => number)
   onChange: (spec: GridSpecModel) => void
   /** Chip content for slot k (0-based, reading order); null = plain shell tile. */
   slotChip?: (slot: number) => { color: string; mark: HTMLElement | null; label: string } | null
@@ -49,6 +53,18 @@ export interface GridPainterOpts {
   onPaint?: (slot: number) => void
   /** A plain no-brush click (or Enter) on an unmerged tile — open the per-terminal picker. */
   onPickSlot?: (slot: number, anchor: DOMRect) => void
+  /**
+   * LOCKED PREFIX (New terminals, on a live workspace). The first N regions in reading
+   * order are terminals that already exist: they cannot be repainted, picked, split or
+   * swallowed by a merge, and the lattice will not offer a grid with fewer tiles than N.
+   *
+   * A count rather than a set of indices, because merging renumbers regions — and it
+   * provably preserves the prefix (see `mergeRespectsLock`). It is also exactly the
+   * invariant `GridLayout.templateLocals` enforces on apply (all live slots first, in
+   * reading order), so the painter and the relayout cannot disagree about which tile is
+   * which pane without either of them tracking pane identity.
+   */
+  lockedCount?: () => number
 }
 
 export interface GridPainterHandle {
@@ -64,7 +80,10 @@ export interface GridPainterHandle {
 export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
   const maxRows = opts.maxRows ?? 4
   const maxCols = opts.maxCols ?? 5
-  const maxPanes = opts.maxPanes ?? 16
+  const maxPanes = (): number => {
+    const raw = typeof opts.maxPanes === 'function' ? opts.maxPanes() : (opts.maxPanes ?? 16)
+    return Math.max(1, Math.floor(raw))
+  }
   let spec = opts.value
 
   const root = el('div', { class: 'grid-painter' })
@@ -89,8 +108,39 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
       cell.classList.toggle('is-active', r < spec.rows && c < spec.cols)
     })
   }
+  const locked = (): number => Math.max(0, Math.floor(opts.lockedCount?.() ?? 0))
+  /** A lattice size is refused when it is over the pane cap — or UNDER the terminals that
+   *  already exist. The floor is what makes the locked prefix an honest promise: a surface
+   *  that only ever ADDS must not offer a grid too small to hold what is open. */
+  const sizeBlocked = (panes: number): boolean => panes > maxPanes() || panes < locked()
+  const syncLattice = (): void => {
+    const floor = locked()
+    cells.forEach((cell) => {
+      const r = Number(cell.dataset.r)
+      const c = Number(cell.dataset.c)
+      const panes = (r + 1) * (c + 1)
+      const blocked = sizeBlocked(panes)
+      cell.disabled = blocked
+      cell.classList.toggle('is-blocked', blocked)
+      const shape = `${r + 1}×${c + 1}`
+      cell.title =
+        panes > maxPanes()
+          ? `${panes} — max ${maxPanes()} terminals`
+          : panes < floor
+            ? `${shape} — fewer tiles than the ${floor} terminals already open`
+            : `${shape} — ${panes} ${panes === 1 ? 'terminal' : 'terminals'}`
+      cell.setAttribute(
+        'aria-label',
+        panes > maxPanes()
+          ? `${r + 1} by ${c + 1} — over the ${maxPanes()}-terminal cap`
+          : panes < floor
+            ? `${r + 1} by ${c + 1} — too few for the ${floor} terminals already open`
+            : `${r + 1} by ${c + 1} grid, ${panes} terminals`
+      )
+    })
+  }
   const commitSize = (r: number, c: number): void => {
-    if ((r + 1) * (c + 1) > maxPanes) return
+    if (sizeBlocked((r + 1) * (c + 1))) return
     spec = uniformSpec(r + 1, c + 1)
     render()
     opts.onChange(spec)
@@ -104,25 +154,19 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
   let suppressClick = false
   for (let r = 0; r < maxRows; r++) {
     for (let c = 0; c < maxCols; c++) {
-      const panes = (r + 1) * (c + 1)
-      const blocked = panes > maxPanes
-      const cell = el('button', {
-        class: 'gp-cell' + (blocked ? ' is-blocked' : ''),
-        type: 'button',
-        title: blocked ? `${panes} — max ${maxPanes} terminals` : `${r + 1}×${c + 1} — ${panes} ${panes === 1 ? 'terminal' : 'terminals'}`,
-        ariaLabel: blocked ? `${r + 1} by ${c + 1} — over the ${maxPanes}-terminal cap` : `${r + 1} by ${c + 1} grid, ${panes} terminals`
-      }) as HTMLButtonElement
+      const cell = el('button', { class: 'gp-cell', type: 'button' }) as HTMLButtonElement
       cell.dataset.r = String(r)
       cell.dataset.c = String(c)
-      if (blocked) cell.disabled = true
+      // Blocked state is re-derived every render (`syncLattice`) rather than frozen here:
+      // the locked-prefix floor is a property of the workspace, not of construction.
       cell.addEventListener('pointerenter', () => {
-        if (!blocked) paintHover(r + 1, c + 1)
+        if (!sizeBlocked((r + 1) * (c + 1))) paintHover(r + 1, c + 1)
       })
       // Keyboard commits land here (Enter/Space on the focused cell). Pointer commits
       // land on the lattice's pointerup below — which then swallows the click this
       // very gesture synthesizes, or a plain click would commit twice.
       cell.addEventListener('click', () => {
-        if (blocked) return
+        if (sizeBlocked((r + 1) * (c + 1))) return
         if (suppressClick) {
           suppressClick = false
           return
@@ -160,7 +204,7 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
   const trackSizeDrag = (event: PointerEvent): void => {
     const cell = latticeCellAt(event)
     if (!cell || !sizeDrag) return
-    sizeDrag = { ...cell, valid: (cell.r + 1) * (cell.c + 1) <= maxPanes }
+    sizeDrag = { ...cell, valid: !sizeBlocked((cell.r + 1) * (cell.c + 1)) }
     if (sizeDrag.valid) paintHover(cell.r + 1, cell.c + 1)
   }
   lattice.addEventListener('pointerdown', (event) => {
@@ -225,8 +269,10 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
       r1: drag.current.r,
       c1: drag.current.c
     })
-    const valid =
-      mergeRegions(spec, { r0: drag.anchor.r, c0: drag.anchor.c, r1: drag.current.r, c1: drag.current.c }) !== null
+    const rect = { r0: drag.anchor.r, c0: drag.anchor.c, r1: drag.current.r, c1: drag.current.c }
+    // A box over a locked tile previews as refused for the same reason a pinwheel does:
+    // the painter only ever shows layouts it will actually commit.
+    const valid = mergeRespectsLock(spec, rect, locked()) && mergeRegions(spec, rect) !== null
     tiles.forEach((tile, i) => {
       const region = spec.regions[i]!
       const inside =
@@ -245,6 +291,9 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
     if (!cell) return
     const index = regionAt(cell)
     if (index < 0 || paintDrag.has(index)) return
+    // Skip a locked tile without ending the stroke: sweeping ACROSS an existing terminal
+    // to reach the empty ones beyond it is the natural gesture, not a mistake.
+    if (index < locked()) return
     paintDrag.add(index)
     opts.onPaint?.(index)
   }
@@ -288,12 +337,8 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
     paintMergePreview()
     if (!commit) return
     if (state.moved) {
-      const merged = mergeRegions(spec, {
-        r0: state.anchor.r,
-        c0: state.anchor.c,
-        r1: state.current.r,
-        c1: state.current.c
-      })
+      const rect = { r0: state.anchor.r, c0: state.anchor.c, r1: state.current.r, c1: state.current.c }
+      const merged = mergeRespectsLock(spec, rect, locked()) ? mergeRegions(spec, rect) : null
       if (merged) {
         spec = merged
         render()
@@ -311,6 +356,7 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
     const index = regionAt(state.anchor)
     const region = spec.regions[index]
     if (!region) return
+    if (index < locked()) return // an existing terminal: nothing to choose, nothing to split
     if (region.rs > 1 || region.cs > 1) {
       spec = unmergeRegion(spec, index)
       render()
@@ -325,7 +371,9 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
 
   const render = (): void => {
     paintActive()
+    syncLattice()
     paintHover(0, 0)
+    const lockedPrefix = locked()
     canvas.innerHTML = ''
     // An armed brush changes what a press means — the cursor should say so before the press.
     canvas.classList.toggle('is-painting', !!opts.brush?.())
@@ -334,22 +382,27 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
     spec.regions.forEach((region, i) => {
       const merged = region.rs > 1 || region.cs > 1
       const chip = opts.slotChip?.(i) ?? null
+      const isLocked = i < lockedPrefix
       const tile = el(
         'button',
         {
-          class: 'gp-region' + (merged ? ' is-merged' : ''),
+          class: 'gp-region' + (merged ? ' is-merged' : '') + (isLocked ? ' is-locked' : ''),
           type: 'button',
           // The tile's tooltip is the placement model's quiet teacher (compact pass): a
-          // bare tile says a click will choose, an assigned one says it can change.
-          title: merged
-            ? 'Merged terminal — click to split it back'
-            : chip?.label
-              ? `${chip.label} — click to change`
-              : 'Click to choose what runs here',
+          // bare tile says a click will choose, an assigned one says it can change, and a
+          // locked one says it is already running and is staying.
+          title: isLocked
+            ? `${chip?.label || 'Terminal'} — already open, it stays here`
+            : merged
+              ? 'Merged terminal — click to split it back'
+              : chip?.label
+                ? `${chip.label} — click to change`
+                : 'Click to choose what runs here',
           ariaLabel:
             `Terminal ${i + 1}` +
             (chip ? ` — ${chip.label}` : '') +
-            (merged ? ` — spans ${region.rs} by ${region.cs}, press Enter to split` : '')
+            (isLocked ? ' — already open' : '') +
+            (merged && !isLocked ? ` — spans ${region.rs} by ${region.cs}, press Enter to split` : '')
         },
         [
           chip?.mark ? el('span', { class: 'gp-chip' }, [chip.mark]) : el('span', { class: 'gp-chip gp-chip--shell' }),
@@ -358,12 +411,16 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
       ) as HTMLButtonElement
       tile.style.gridArea = `${region.r + 1} / ${region.c + 1} / span ${region.rs} / span ${region.cs}`
       if (chip?.color) tile.style.setProperty('--gp-accent', chip.color)
+      // aria-disabled, NOT disabled: a disabled button leaves the tab ring and stops being
+      // announced, and a keyboard user must still be able to READ which pane sits where.
+      if (isLocked) tile.setAttribute('aria-disabled', 'true')
       // Pointer gestures live on the canvas; the keyboard rides the button itself and
       // mirrors the no-brush click exactly: merged splits, unmerged opens its picker.
       // (With a brush armed, Enter paints — the keyboard's brushstroke.)
       tile.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return
         event.preventDefault()
+        if (isLocked) return // inert, but focusable and announced
         if (opts.brush?.()) return opts.onPaint?.(i)
         if (merged) {
           spec = unmergeRegion(spec, i)
@@ -387,6 +444,8 @@ export function createGridPainter(opts: GridPainterOpts): GridPainterHandle {
     value: () => spec,
     refreshChips: render,
     mergeRect(r0, c0, r1, c1) {
+      // The same predicate the pointer runs, or a gate could paint a state no user can.
+      if (!mergeRespectsLock(spec, { r0, c0, r1, c1 }, locked())) return false
       const merged = mergeRegions(spec, { r0, c0, r1, c1 })
       if (!merged) return false
       spec = merged

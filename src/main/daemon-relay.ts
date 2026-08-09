@@ -161,6 +161,13 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
         // accumulate ids for panes that no longer exist.
         forgetAssignedSession(Number(id))
         onPaneGoneForBridge(Number(id)) // ...and the bridge forgets it, so a reused id has no history
+        // A pane whose shell died is running nothing. It stays mounted showing
+        // "[process exited]", so without this its last foreground verdict would stand.
+        getWebContents()?.send(TerminalChannels.foreground, {
+          id: Number(id),
+          active: false,
+          generation: generation(gen)
+        })
         getWebContents()?.send(TerminalChannels.exit, { id: Number(id), exitCode })
       },
       onState: (id, state, gen) => {
@@ -211,6 +218,21 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
           revision,
           source,
           locality
+        })
+      },
+      // FOREGROUND WORK. Double-gated exactly as cwd is: the CONNECTION (a dead client's
+      // queued events must not speak for the live one) and the GENERATION (a stale pane id
+      // must never smear its successor — a `vim` verdict landing on a brand-new pane would
+      // put a warning on a close that destroys nothing, which is how confirms get trained
+      // away). No revision counter: within one connection the socket is ordered.
+      onForeground: (id, active, pid, command, gen) => {
+        if (connection !== activeConnection || !current(id, gen)) return
+        getWebContents()?.send(TerminalChannels.foreground, {
+          id: Number(id),
+          active,
+          pid,
+          command,
+          generation: generation(gen)
         })
       },
       onOwners: (claims) => getWebContents()?.send(LedgerChannels.owners, { claims }),

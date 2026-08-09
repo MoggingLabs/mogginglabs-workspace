@@ -163,6 +163,42 @@ export interface CwdEvent {
   locality: PaneCwdLocality
 }
 
+/**
+ * FOREGROUND WORK: this pane's shell is currently waiting on a child process.
+ *
+ * Deliberately NOT a cwd fact and deliberately NOT an agent fact. It answers exactly one
+ * question — "would closing this pane kill something the user started?" — for the
+ * destructive confirms and the layout popover's live count, and it reaches nothing else.
+ * It must never route through the attention port: those verdicts light dots, outlines,
+ * rail counts and toasts, and a red dot for `vim` is precisely the cross-surface lie the
+ * tracked gate (ui/core/attention/attention-port.ts) exists to forbid.
+ *
+ * TWO GRADES OF EVIDENCE, because they arrive at different times and are wrong in
+ * different directions:
+ *   - `active` is the SHELL's own answer: a line was submitted and no prompt has come back
+ *     (PaneCwdState.commandInFlight). It flips on the Enter keypress — zero latency, zero
+ *     cost — and is retired by a prompt marker or by the detector's negative verdict.
+ *     THIS is the field the confirms read, and it reads the same on every platform.
+ *   - `pid`/`command` are the PROCESS TABLE's answer ~2s later: the foreground descendant
+ *     that owns the pane, and its executable BASENAME. Absent means "something is running
+ *     and we cannot yet name it" — never "nothing is running". POSIX proves ownership
+ *     (pgid === tpgid); Windows has no such field and falls back to prompt boundaries plus
+ *     the shallowest live descendant, so on Windows the NAME can be wrong where the
+ *     verdict is not. Remote panes are never process-tracked at all: they warn, unnamed.
+ *
+ * `command` is a basename only ('vim', 'node', 'ping') — never a path, never argv, never
+ * env (ADR 0002/0005). It is rendered as text and must never reach telemetry.
+ */
+export interface PaneForegroundEvent {
+  id: PaneId
+  active: boolean
+  /** The PTY session generation. An event from a retired generation is dropped, so a
+   *  disposed pane's straggler cannot smear its successor (the CwdEvent discipline). */
+  generation: string
+  pid?: number
+  command?: string
+}
+
 /** TYPED-LAUNCH DETECTION: an agent CLI process appeared in — or vanished from — this pane's
  *  PTY subtree. The backend knows this from the PROCESS TABLE (the pane's shell is its child,
  *  so the agent is its descendant), not from parsing terminal output: a user who types
