@@ -12,7 +12,7 @@ import { ControlChannels } from '@contracts'
 //   × -> Close -> let the grace lapse -> disposed for good.
 
 export function runWsCloseSmoke(win: BrowserWindow): void {
-  setTimeout(() => app.exit(1), 120000) // +2 phases (idle skip, copy) over the original 90s
+  setTimeout(() => app.exit(1), 165000) // +3 phases (idle skip, bare command, copy) over the original 90s
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -55,6 +55,46 @@ export function runWsCloseSmoke(win: BrowserWindow): void {
       const idleSoftClosed = (await count()) === 0 && (await ES<boolean>(`!!document.querySelector('.toast-action')`))
       const idleSkipsConfirm = idleAskedNothing && idleSoftClosed
       await sleep(6200) // let its grace lapse: disposed for good, rail empty for the run below
+
+      // 0a ── THE NEW FACT: a plain shell running a real command IS live work. No agent, no
+      // session, no attention state — just a child process the close would kill. Typed into
+      // the pane's own PTY, so the whole chain is proved: process table -> daemon -> relay
+      // -> foreground port -> confirm. The command is one we choose, so this can never
+      // depend on a binary the developer happens to have.
+      // TWO panes, so the × hits the SINGLE-pane door (closing a workspace's last pane
+      // delegates to the workspace close, whose copy cannot name a command).
+      await ES('window.__mogging.workspace.create({ name: "Busy", paneCount: 2 })')
+      await sleep(2000)
+      const busyMeta = await ES<{ id: string; ordinal: number }>('window.__mogging.workspace.active()')
+      const busyPane = busyMeta.ordinal * 100 + 1
+      const longCmd = process.platform === 'win32' ? 'ping -n 30 127.0.0.1' : 'sleep 30'
+      // Never tracked, never given a state: the ONLY reason this pane can read as live is
+      // the foreground process.
+      await ES(
+        `(window.__mogging.panes.find((p) => p.id === ${busyPane})?.write(${JSON.stringify(longCmd)} + String.fromCharCode(13)), 1)`
+      )
+      let bareCommandAsks = false
+      let bareCommandMsg = ''
+      for (let attempt = 0; attempt < 16 && !bareCommandAsks; attempt++) {
+        await sleep(500)
+        await ES(`document.querySelector('.layout-slot[data-pane-id="${busyPane}"] .pane-act-close')?.click()`)
+        await sleep(300)
+        bareCommandMsg = await modalText()
+        // The SAME predicate as the busy-shell arm below: a plain command reads as running
+        // and never as an agent.
+        // ...and NAMES it: the process table's basename is what turns "something is
+        // running" into a sentence the user can act on.
+        bareCommandAsks =
+          /still running/i.test(bareCommandMsg) &&
+          !/agent/i.test(bareCommandMsg) &&
+          new RegExp(longCmd.split(' ')[0], 'i').test(bareCommandMsg)
+        await ES(`document.querySelector('.modal .btn--ghost')?.click()`)
+        await sleep(200)
+      }
+      await xClick(busyMeta.id)
+      await sleep(400)
+      await ES(`(document.querySelector('.modal .btn--danger')?.click(), 1)`) // it WILL confirm now
+      await sleep(6200) // let its grace lapse, so the run below still sees exactly one
 
       await ES('window.__mogging.workspace.create({ name: "Alpha", paneCount: 3 })')
       await sleep(1500)
@@ -197,11 +237,13 @@ export function runWsCloseSmoke(win: BrowserWindow): void {
       const disposed = (await count()) === 0 && !(await ES<boolean>(`!!document.querySelector('.workspace-tab[data-ws-id="${wsId}"]')`))
 
       const pass =
-        idleSkipsConfirm && copyIsHonest &&
+        idleSkipsConfirm && bareCommandAsks && copyIsHonest &&
         allEntryPointsSafe && dialogShown && cancelKept && softClosed && restored && disposed
       result = {
         pass,
         idleSkipsConfirm,
+        bareCommandAsks,
+        bareCommandMsg,
         idleAskedNothing,
         idleSoftClosed,
         copyIsHonest,

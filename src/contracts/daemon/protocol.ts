@@ -35,7 +35,14 @@ import type { ReviewSnapshot } from '../ipc/review.ipc'
 // and `welcome` gained `otherClients` — the count the stamp-war retire guard needs before
 // it may fire (daemon-client.ts ensureDaemon: a mismatched daemon with a live client is
 // left running; retiring it starts a war that kills every pane's process each round).
-export const DAEMON_PROTOCOL_VERSION = 11
+// v12: panes report FOREGROUND WORK — whether the shell is waiting on a child process —
+// as a first-class message, so a destructive confirm can warn about `vim` or `npm run dev`
+// and not only about panes holding an agent session. A v11 daemon has no such message and
+// the daemon OUTLIVES the app: it would keep every pane it owns silently un-warnable until
+// the machine reboots, and the user would lose work behind a dialog that said nothing. The
+// same shape as v8's `done` — a message only a NEW daemon emits — so the bump forces the
+// migrate-and-retire hand-off rather than shipping a feature that does nothing.
+export const DAEMON_PROTOCOL_VERSION = 12
 
 // v9: burned by v0.11.1 to DELIVER a daemon-side behaviour fix (the tracker's done-chime
 // grace — a finished turn's own bell no longer latches the pane red). The fix changed no
@@ -323,6 +330,12 @@ export type ServerMessage =
       source: PaneCwdSource
       locality: PaneCwdLocality
     }
+  // FOREGROUND WORK (v12): the pane's shell is waiting on a child process. `active` is the
+  // shell-boundary fact (a line was submitted, no prompt back — instant); `pid`/`command`
+  // are the process table's proof when the detector has it (~2s, basename only, never a
+  // command line — ADR 0002/0005). Replayed on (re)attach like `agent`, because a push-only
+  // signal would leave a reconnected app believing every pane idle until the next Enter.
+  | { t: 'foreground'; id: string; gen: number; active: boolean; pid?: number; command?: string }
   | { t: 'panes'; panes: PaneInfo[] }
   | { t: 'pong' }
   | { t: 'notified'; id: string; ok: boolean } // ack for a `notify` (ok=false: unknown pane id)

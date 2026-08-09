@@ -123,6 +123,36 @@ export function mergeRegions(
   return next
 }
 
+/**
+ * May this rect be merged when the first `locked` regions are terminals that ALREADY
+ * EXIST? False if the (expanded) box would swallow one of them.
+ *
+ * Locked regions are identified by a PREFIX COUNT rather than a set of indices, and that
+ * is only sound because merging preserves the prefix: the merged region takes the sort
+ * key of the inside region at the box's top-left, so when the box excludes every locked
+ * region, every inside key is ≥ every locked key and `sortRegions` leaves 0..locked-1
+ * exactly where they were. `unmergeRegion` splits into keys ≥ its own, so it preserves the
+ * prefix too. That property is asserted in tests/unit/grid-lock.test.ts rather than
+ * trusted — it is what lets the painter and `templateLocals` agree on which tile is which
+ * pane without either of them tracking identity.
+ */
+export function mergeRespectsLock(
+  spec: GridSpecModel,
+  rect: { r0: number; c0: number; r1: number; c1: number },
+  locked: number
+): boolean {
+  if (locked <= 0) return true
+  const box = expandToWholeRegions(spec, rect)
+  return !spec.regions.some(
+    (region, i) =>
+      i < locked &&
+      region.r >= box.r0 &&
+      region.c >= box.c0 &&
+      region.r + region.rs - 1 <= box.r1 &&
+      region.c + region.cs - 1 <= box.c1
+  )
+}
+
 /** Split one merged region back into its 1×1 cells. */
 export function unmergeRegion(spec: GridSpecModel, index: number): GridSpecModel {
   const region = spec.regions[index]

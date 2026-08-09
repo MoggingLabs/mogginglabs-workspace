@@ -197,7 +197,7 @@ function wireFingerprint() {
 // tripped a WIRE gate. That is the gate crying wolf on its own stated scope, and the fourth
 // "byte-different body, identical wire" re-pin in this file's history. Splitting the predicates
 // out is the same move gen.ts made, and it retires that class of false alarm.
-const PINNED = { version: 11, fingerprint: '3f91289ea9f4e362' }
+const PINNED = { version: 12, fingerprint: '7608e11b4600979f' }
 
 const actualWire = wireFingerprint()
 if (actualWire !== PINNED.fingerprint) {

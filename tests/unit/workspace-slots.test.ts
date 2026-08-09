@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { pathKeyOf } from '@contracts'
+import { bodyWithoutComments } from './source-body'
 
 // FOUR CONTROLLER DEFECTS, ONE THEME: a manifest row is trusted about a pane the grid may not
 // have, or may not own.
@@ -54,12 +55,14 @@ describe('the manifest follows the layout, not the other way round', () => {
   // persisted regardless — saving a manifest whose pane count did not match its own tree.
   it('writes paneCount only after the layout actually took', () => {
     expect(body).toMatch(/if \(!apply\(\)\) return/)
-    expect(body.indexOf('if (!apply()) return')).toBeLessThan(body.indexOf('a.meta.paneCount = count'))
+    expect(body.indexOf('if (!apply()) return')).toBeLessThan(body.indexOf('a.meta.paneCount ='))
   })
 
   it('the refusal is not discarded at the reorganize door', () => {
     // `void view.layout.applyRegions(spec)` threw the answer away.
-    expect(src).toMatch(/applyResolvedLayout\(view, count, \(\) => view\.layout\.applyRegions\(spec\)\)/)
+    expect(src).toMatch(
+      /applyResolvedLayout\(view, resolved, \(\) => view\.layout\.applyRegions\(spec, resolved\)\)/
+    )
     expect(src, 'void discards the refusal').not.toMatch(/\(\) => void view\.layout\.applyRegions/)
   })
 })
@@ -78,8 +81,30 @@ describe('seeding walks the slots the grid HAS', () => {
     )
   })
 
-  it('reads the template once and reuses it', () => {
-    expect(body.match(/peekTemplate\(count\)/g) ?? [], 'two reads can disagree').toHaveLength(1)
+  it('is HANDED the resolved set — it never resolves one of its own', () => {
+    // It used to read peekTemplate(count) itself, so the set the dialog NAMED and the set
+    // this scrubbed and applied were two independent reads of state that moves.
+    expect(body, 'a second resolution can disagree with the one the dialog named').not.toMatch(
+      /resolveTemplate\(|peekTemplate\(/
+    )
+    expect(body).toMatch(/resolved\.slots/)
+  })
+
+  it('every door resolves BEFORE its first yield, exactly once', () => {
+    // THE property this replaces "read the template once" with. peekTemplate ran before
+    // `await confirmDialog(...)` and the apply re-read after it — so a ResizeObserver, a
+    // pane opening or closing, or a limit() drop in between made the dialog and the apply
+    // describe different terminals.
+    for (const door of ['async requestApplyTemplate(', 'async requestReorganize(', 'async createTerminalsFromSpec(']) {
+      // Comments stripped: this very assertion is explained in a comment containing the
+      // word "await", and a test its own prose can fail proves nothing.
+      const b = bodyWithoutComments(src, door)
+      const at = b.indexOf('.resolveTemplate(')
+      expect(at, `${door} must resolve`).toBeGreaterThan(-1)
+      expect(b.match(/\.resolveTemplate\(/g) ?? [], `${door} resolves twice`).toHaveLength(1)
+      const firstAwait = b.indexOf('await ')
+      if (firstAwait >= 0) expect(at, `${door} resolves after a yield`).toBeLessThan(firstAwait)
+    }
   })
 
   // Same family: a role left on a slot the tree no longer holds published against another

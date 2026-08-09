@@ -929,17 +929,59 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
           const applied = await applyTemplate(count)
           templates[count] = { ...read(count), ...applied }
         }
-        await applyTemplate(1)
+        // THE PALETTE SEAM. Every layout assertion above drives __mogging.layout.apply —
+        // the VERB. Nothing anywhere proved the ROW that reaches it: that "Layout: N panes"
+        // is registered, searchable, and runs the same confirming door. This reset back to
+        // one pane had no assertion attached, so it becomes the proof for free.
+        const paletteApply = async (label) => {
+          const before = m.layout.paneCount()
+          document.querySelector('.palette-trigger').click()
+          await sleep(140)
+          const input = document.querySelector('.palette-input')
+          input.value = label
+          input.dispatchEvent(new Event('input'))
+          await sleep(160)
+          const row = [...document.querySelectorAll('.palette-item')]
+            .find((r) => (r.querySelector('.palette-item-title')?.textContent || '').trim() === label)
+          const found = { rowFound: !!row, disabled: !!row?.classList.contains('is-disabled'),
+                          reason: row?.querySelector('.palette-item-reason')?.textContent ?? '' }
+          // CLICK the row we found, rather than Enter-on-active: several Layout rows match
+          // this query and the ranked-first one is not necessarily the one under test. An
+          // Enter that ran the wrong row would leave the overlay open, and the overlay
+          // makes #app inert — every later stage would then click into nothing.
+          row?.click()
+          await sleep(220)
+          const danger = document.querySelector('.modal-overlay:not(.is-closing) .btn--danger')
+          if (danger) danger.click()
+          await sleep(320)
+          // Belt and braces: never hand the next stage an open palette.
+          const overlay = document.querySelector('.palette-overlay')
+          if (overlay && !overlay.hidden) {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+            await sleep(160)
+          }
+          return { ...found, confirmed: !!danger, panes: m.layout.paneCount(),
+                   closed: !!document.querySelector('.palette-overlay')?.hidden, before }
+        }
+        const paletteRow = await paletteApply('Layout: 1 pane')
         m.layout.split('h'); await sleep(120)
         m.layout.split('v'); await sleep(120)
         m.layout.split('h'); await sleep(180)
         const nested = read(4)
         const scrollsWhenNeeded = shrink16.hostScrollWidth > shrink16.hostClientWidth && shrink16.scrollReachable &&
           nested.hostScrollWidth > nested.hostClientWidth && nested.scrollReachable
+        // The row exists, is runnable on a grid, and REACHES THE VERB — it really shrank the
+        // grid. Whether it also had to CONFIRM is not asserted here and must not be: by this
+        // point the template sweep above has already closed the pane that held the adopted
+        // session, so there is no live work left to warn about. The confirm itself is proven
+        // by the applyTemplate helper throughout this same stage.
+        const paletteSeam = paletteRow.rowFound && !paletteRow.disabled &&
+          paletteRow.before > 1 && paletteRow.panes === 1 && paletteRow.closed === true
         return {
           ok: shrink16.ok && Object.values(templates).every(x => x.ok) && nested.ok &&
-            scrollsWhenNeeded && scrollDismissesMenu.ok && fullViewport.ok && rowViewport.ok,
-          shrink16, templates, nested, scrollsWhenNeeded, scrollDismissesMenu, fullViewport, rowViewport
+            scrollsWhenNeeded && scrollDismissesMenu.ok && fullViewport.ok && rowViewport.ok && paletteSeam,
+          shrink16, templates, nested, scrollsWhenNeeded, scrollDismissesMenu, fullViewport, rowViewport,
+          paletteSeam, paletteRow
         }
       })()`)
       l.ok = Boolean(l.ok && lWide.ok)

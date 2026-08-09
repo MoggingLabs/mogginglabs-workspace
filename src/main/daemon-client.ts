@@ -367,6 +367,15 @@ export interface DaemonEvents {
    *  (`agentId` null = gone). Also REPLAYED on (re)attach, which is how a restarted app
    *  re-learns the identity of an agent the daemon kept alive but the app never launched. */
   onAgent?: (id: string, agentId: string | null, cwd: string | undefined, sinceMs: number | undefined, gen: number) => void
+  /** FOREGROUND WORK: the pane's shell is waiting on a child process. Replayed on
+   *  (re)attach — a reconnect must re-assert liveness the way it re-asserts dims. */
+  onForeground?: (
+    id: string,
+    active: boolean,
+    pid: number | undefined,
+    command: string | undefined,
+    gen: number
+  ) => void
   /** Reviewer-gate sign-off list — replies AND pushes on change (4/03 polish). */
   onApprovals?: (list: Approval[]) => void
   onClose?: () => void
@@ -566,6 +575,9 @@ export class DaemonClient {
         break
       case 'agent':
         this.events.onAgent?.(m.id, m.agentId, m.cwd, m.sinceMs, m.gen)
+        break
+      case 'foreground':
+        this.events.onForeground?.(m.id, m.active, m.pid, m.command, m.gen)
         break
       case 'approvals': {
         const waiter = this.approvalWaiters.shift()

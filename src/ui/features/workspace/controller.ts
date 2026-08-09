@@ -1,20 +1,47 @@
 import { formulaPaneId, GitChannels, pathKeyOf, TerminalChannels, WorktreeChannels } from '@contracts'
 import type { AgentState, CreateWorktreeResult, PaneId, RemoveWorktreeResult } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
-import { GridLayout, parseTree, leafIds, specForCount, TEMPLATES, type GridSpecModel, type LayoutTreeNode } from '../layout'
+import {
+  GridLayout,
+  parseTree,
+  leafIds,
+  specForCount,
+  TEMPLATES,
+  treeForRegions,
+  type GridSpecModel,
+  type LayoutTreeNode,
+  type ResolvedRefusal,
+  type ResolvedSet
+} from '../layout'
 import { confirmDialog, icon, showToast, TOAST_DEFAULT_MS } from '../../components'
-import { batchSlots, clearSlots, publishSlots } from '../../core/layout/slots'
+import { batchSlots, clearSlots, onSlots, publishSlots } from '../../core/layout/slots'
 import { openMovePaneModal, type MoveTarget } from './move-pane-modal'
 import { openReorganizeModal } from './reorganize-modal'
-import { openNewTerminalModal, type NewTerminalEntry } from './new-terminal-modal'
+import {
+  openNewTerminalModal,
+  type LivePaneTile,
+  type LiveWorkspaceShape,
+  type NewTerminalPlan
+} from './new-terminal-modal'
 import { setFocusedPane } from '../../core/layout/focus'
 import { setPaneCwd, getPaneCwd, getPaneCwdProjection } from '../../core/layout/pane-cwd'
-import { setPaneRole, setPaneRemote, clearPaneRemote, setPaneLabel, setPaneUserTitle, getPaneRemote } from '../../core/layout/pane-meta'
+import {
+  setPaneRole,
+  setPaneRemote,
+  clearPaneRemote,
+  setPaneLabel,
+  setPaneUserTitle,
+  getPaneRemote,
+  getPaneLabel,
+  getPaneUserTitle
+} from '../../core/layout/pane-meta'
 import { paneState, paneFinished, acknowledgeFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { announce } from '../../core/a11y/live-region'
 import { clearPaneLaunch } from '../../core/agents/toolplan-panes'
 import { requestAgentLaunch } from '../../core/agents/launch-port'
 import { getPaneAgentSession } from '../../core/agents/agent-session-port'
+import { getPaneForeground } from '../../core/terminal/foreground-port'
+import { describeLive, describePaneLive, inspectLiveness, plural, type LivePanes } from './live-panes'
 import { activeView, setActiveView, onViewChange } from '../../core/shell/view-port'
 import { entitlementLimit, entitlementPlan } from '../../core/entitlements/entitlements-store'
 import { getTelemetry } from '../../core/telemetry'
@@ -25,6 +52,10 @@ import { type WorkspaceMeta, isWorkspaceColor, newWorkspaceId, nextColor, paneId
  *  as clicked. Must outlast the 1.2s swell (and grid-layout's own 1400ms class timer), or the
  *  acknowledgement would clear `data-alert` out from under the animation that rides on it. */
 const PULSE_SETTLE_MS = 1400
+
+/** What a layout apply did. `stale` means the resolved set no longer described the grid —
+ *  the workspace moved while a confirm was up — and NOTHING was changed. */
+type ApplyOutcome = 'applied' | 'stale' | 'refused'
 
 interface WorkspaceView {
   meta: WorkspaceMeta
@@ -89,29 +120,6 @@ export interface SwitchOpts {
   reveal?: boolean
 }
 
-/**
- * What a close would actually destroy. ONE definition of "live", shared by the three
- * destructive paths (close workspace / close pane / shrink layout) so the predicate and the
- * copy can't drift — they had. Every one of them counted `session || state !== idle` and then
- * told the user those panes had "an agent still working". A session is an ASSIGNMENT, not
- * activity: an agent parked at its prompt still has one.
- *
- * `running` is now exact, which it could not be before: the state machine used to mark a pane
- * busy from plain OUTPUT, so a bare `npm run build` was reported as an agent at work. Under the
- * verdict law busy means an agent actually said it was working (agent-state/activity.ts).
- *
- * The two reasons are counted separately because they are separately true, and a pane can be
- * live for both (an agent mid-turn): `sessions` and `running` overlap, `panes` is the union and
- * is the number that decides whether we prompt at all.
- */
-interface LivePanes {
-  /** Panes live for either reason — the union. Empty ⇒ no confirmation is warranted. */
-  panes: PaneId[]
-  /** Live because an agent session is assigned, working or not. */
-  sessions: PaneId[]
-  /** Live because the pane is still producing output (agent turn, or any command). */
-  running: PaneId[]
-}
 
 /**
  * One pane's row in the slot-indexed manifest: the provider assigned to it, the worktree it
@@ -128,36 +136,27 @@ interface PaneManifest {
   profileId?: string | null
 }
 
+/** The impure adapter: read the three ports, hand the pure rule its rows. */
 function inspectLive(paneIds: number[]): LivePanes {
-  const live: LivePanes = { panes: [], sessions: [], running: [] }
-  for (const raw of paneIds) {
-    const paneId = raw as PaneId
-    const hasSession = !!getPaneAgentSession(paneId)
-    // Live work, named exactly: an agent mid-turn (busy) or one blocked waiting on you
-    // (attention) — closing the pane kills both. `done` and `idle` are not running, and
-    // `unknown` means the pane never spoke a verdict, so we must not claim anything about it.
-    // (This was `!== 'idle'`, which read a never-spoken pane as "still producing output".)
-    const s = paneState(paneId)
-    const isRunning = s === 'busy' || s === 'attention'
-    if (hasSession) live.sessions.push(paneId)
-    if (isRunning) live.running.push(paneId)
-    if (hasSession || isRunning) live.panes.push(paneId)
-  }
-  return live
+  return inspectLiveness(
+    paneIds.map((raw) => {
+      const paneId = raw as PaneId
+      // `done`/`idle` are not running, and `unknown` means the pane never spoke a verdict,
+      // so we must not claim anything about it.
+      const state = paneState(paneId)
+      const foreground = getPaneForeground(paneId)
+      return {
+        id: raw,
+        hasSession: !!getPaneAgentSession(paneId),
+        working: state === 'busy' || state === 'attention',
+        // The third reason, and the ONLY one a plain shell can ever produce.
+        foreground: foreground?.active === true,
+        command: foreground?.command
+      }
+    })
+  )
 }
 
-const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
-
-/** Name the live panes for what they are. Never says "agent" about a pane we only know is
- *  noisy; never says "working" about an agent we only know is assigned. */
-function describeLive(live: LivePanes): string {
-  const parts: string[] = []
-  if (live.sessions.length > 0) parts.push(`${plural(live.sessions.length, 'pane has', 'panes have')} an agent session`)
-  if (live.running.length > 0) {
-    parts.push(`${plural(live.running.length, 'pane is', 'panes are')} still running`)
-  }
-  return parts.join(', and ')
-}
 
 /**
  * Owns the set of workspaces: one rail item + one hidden/visible container + one `GridLayout`
@@ -386,7 +385,7 @@ export class WorkspaceController {
     // built or torn down by it. Any doubt about the persisted tree (parseTree returned
     // null) falls back to the template grid for the count.
     if (restoredTree) layout.applyTree(restoredTree)
-    else layout.apply(meta.paneCount)
+    else layout.apply(layout.resolveTemplate(meta.paneCount))
     this.publishRoles(meta, slots) // swarm manifest -> role chips + daemon PaneInfo (4/01)
 
     if (opts.activate !== false) {
@@ -862,11 +861,9 @@ export class WorkspaceController {
     if (live.panes.length > 0) {
       // Session and running are separately true, and both can hold: say what this pane
       // actually is, not "an agent session" over a pane that is only a busy plain shell.
-      const what = live.sessions.length
-        ? live.running.length
-          ? 'An agent session is assigned to this pane and is still running.'
-          : 'An agent session is assigned to this pane.'
-        : 'This pane is still running.'
+      // With a third kind of evidence (a plain foreground process) the ladder would be
+      // seven-way, so it lives in live-panes.ts beside the multi-pane clause.
+      const what = describePaneLive(live)
       const ok = await confirmDialog({
         title: `Close pane ${paneId}?`,
         // Only the door that actually offers the undo may promise one.
@@ -1332,25 +1329,40 @@ export class WorkspaceController {
    * label, or manifest assignment — a re-opened slot is a fresh plain terminal at the
    * workspace root. Then seed the new panes' cwd BEFORE `apply` spawns them (a pane
    * reads its cwd at spawn; published afterwards it started in the daemon's directory).
-   * `count` and `apply` MUST resolve the same slot set — both go through templateLocals,
-   * so peekTemplate(count) names exactly what `apply` lands on.
+   *
+   * It is HANDED the resolved set and never mints one: the whole point of the resolution
+   * is that the slots named in the caller's confirm dialog are the slots this lands on,
+   * and a second read here could disagree with the first. `count` is gone with it —
+   * `resolved.slots.length` IS the count, so the two can no longer drift apart.
    */
-  private applyResolvedLayout(a: WorkspaceView, count: number, apply: () => boolean): void {
-    const live = new Set(a.layout.paneIds())
-    const template = a.layout.peekTemplate(count)
-    for (const { local, paneId } of template) {
-      if (live.has(paneId)) continue
-      clearPaneRemote(paneId)
-      setPaneRole(paneId, '')
-      setPaneLabel(paneId, '')
-      setPaneUserTitle(paneId, '')
-      this.scrubManifestSlot(a.meta, local - 1, '')
+  private applyResolvedLayout(
+    a: WorkspaceView,
+    resolved: ResolvedSet,
+    apply: () => boolean,
+    /** Launch cwd for a slot this apply CREATES (worktree isolation). Without it the
+     *  scrub would clear the very override the new pane has to spawn in. */
+    seedCwd?: (local: number) => string | undefined
+  ): ApplyOutcome {
+    // Ask BEFORE the scrub. The scrub is irreversible and the apply below would refuse
+    // anyway; with the set pre-resolved the question can finally be asked first.
+    if (a.layout.checkResolved(resolved)) return 'stale'
+    for (const { local, paneId, live } of resolved.slots) {
+      if (live) continue
+      clearPaneRemote(paneId as PaneId)
+      setPaneRole(paneId as PaneId, '')
+      setPaneLabel(paneId as PaneId, '')
+      setPaneUserTitle(paneId as PaneId, '')
+      this.scrubManifestSlot(a.meta, local - 1, seedCwd?.(local) ?? '')
     }
     // The layout FIRST, and only then the manifest. applyRegions returns false without
     // touching the tree, and this wrote paneCount + persisted regardless — leaving a saved
     // manifest whose pane count did not match its own tree.
-    if (!apply()) return
-    a.meta.paneCount = count
+    if (!apply()) return 'refused'
+    // What LANDED, not what was asked for. `templateLocals` can return fewer slots than
+    // `count` when the id space is exhausted, and `apply` then builds the shorter grid — a
+    // manifest claiming the larger count fails parseTree's `ids.length !== expectedCount`
+    // on the next restore, and the whole arrangement is thrown away for a template.
+    a.meta.paneCount = a.layout.paneCount
     // The SPARSE slots this template actually lands on, not a dense 1..paneCount walk.
     // paneIdForSlot returns the formula id when the manifest has no override, and a pane that
     // MOVED to another workspace keeps its id — so a dense walk called setPaneCwd on ids
@@ -1358,29 +1370,60 @@ export class WorkspaceController {
     // computed three lines above, then discarded.
     this.publishPaneCwds(
       a.meta,
-      template.map((slot) => slot.local)
+      resolved.slots.map((slot) => slot.local)
     ) // seed the new panes' pty cwd + per-pane git (2/03)
     this.refreshAttention()
     this.onChange()
+    return 'applied'
   }
 
-  /** Apply an N-pane template to the active workspace. */
-  applyTemplate(n: number): void {
-    const a = this.active()
-    if (!a) return
-    this.applyResolvedLayout(a, n, () => {
-      a.layout.apply(n)
-      return true // apply() always lands; applyRegions is the one that can refuse
+  /** The ONE stale refusal, worded identically at every door. A dialog NAMED a set of
+   *  terminals; if that set moved while it was up, refusing loudly is the whole point —
+   *  applying a different one is the defect this exists to make impossible. */
+  private refuseStaleLayout(reason: ResolvedRefusal): void {
+    showToast({
+      tone: 'attention',
+      title: reason === 'foreign' ? 'You changed workspace' : 'The workspace changed',
+      body:
+        reason === 'foreign'
+          ? 'Nothing was changed — the layout was chosen for a workspace you are no longer looking at.'
+          : 'A pane opened or closed while the dialog was up. Nothing was changed — try the layout again.'
     })
-    getTelemetry().captureEvent({ name: 'layout.applied', props: { panes: n } })
+  }
+
+  /** Apply an ALREADY-RESOLVED template to the active workspace. */
+  applyTemplate(resolved: ResolvedSet): ApplyOutcome {
+    const a = this.active()
+    if (!a) return 'stale'
+    const out = this.applyResolvedLayout(a, resolved, () => a.layout.apply(resolved))
+    if (out === 'applied') {
+      getTelemetry().captureEvent({ name: 'layout.applied', props: { panes: resolved.slots.length } })
+    }
+    return out
   }
 
   /** Layout shrink shares the pane-close policy; growth is non-destructive. */
   async requestApplyTemplate(n: number): Promise<boolean> {
     const view = this.active()
     if (!view) return false
-    const keep = new Set<number>(view.layout.peekTemplate(n).map((s) => s.paneId))
-    const live = inspectLive(view.layout.paneIds().filter((paneId) => !keep.has(paneId)))
+    // THE CAP, on the door. `templateLocals` clamps to the GRID's budget (limit()) and
+    // knows nothing about the plan, so every caller here — the palette's "Layout: N panes"
+    // rows, the control API, the dev handle — could ask for 16 on a plan that allows 4 and
+    // get it. Floored at the current count for the same reason openReorganize is:
+    // rearranging what already exists allocates nothing.
+    //
+    // REFUSED, not clamped. A template is a whole-grid request behind a row that says
+    // "16 panes"; quietly landing 6 is the same dishonesty as the bypass. (split/batch
+    // clamp because a BATCH has meaningful partial success — a template does not.)
+    const plan = this.effectiveMaxPanes(view)
+    if (n > Math.max(view.layout.paneCount, plan)) {
+      this.refusePaneCap(view, plan)
+      return false
+    }
+    // ONE resolution, before the only yield. The dialog names `resolved.closing` and the
+    // apply spends the same value, so the terminals warned about are the terminals closed.
+    const resolved = view.layout.resolveTemplate(n)
+    const live = inspectLive([...resolved.closing])
     if (live.panes.length > 0) {
       const ok = await confirmDialog({
         title: `Switch to ${plural(n, 'pane', 'panes')}?`,
@@ -1390,7 +1433,15 @@ export class WorkspaceController {
       })
       if (!ok) return false
     }
-    this.applyTemplate(n)
+    const out = this.applyTemplate(resolved)
+    if (out === 'stale') {
+      this.refuseStaleLayout(view.layout.checkResolved(resolved) ?? 'live-set-moved')
+      return false
+    }
+    if (out === 'refused') {
+      showToast({ tone: 'attention', title: 'Could not apply that layout', body: 'The grid refused it.' })
+      return false
+    }
     return true
   }
 
@@ -1401,6 +1452,14 @@ export class WorkspaceController {
    *  account-less install behaves exactly as the redesign shipped it. */
   private effectiveMaxPanes(view: WorkspaceView): number {
     return Math.min(view.layout.limit(), Math.max(1, Math.floor(entitlementLimit('maxPanes'))))
+  }
+
+  /** The ceiling the palette's "Layout: N" rows grey themselves against. Deliberately
+   *  LEAN — not layoutStatus(), whose inspectLive walks every pane through the liveness
+   *  ports, and which the palette would run on every keystroke times every Layout row. */
+  layoutCeiling(): number | null {
+    const view = this.active()
+    return view ? Math.max(view.layout.paneCount, this.effectiveMaxPanes(view)) : null
   }
 
   /** The ONE cap refusal, quoted identically at every door (split, batch-isolate):
@@ -1440,9 +1499,19 @@ export class WorkspaceController {
     const view = this.active()
     if (!view) return
     const cap = view.layout.capacity()
-    const maxPanes = this.effectiveMaxPanes(view)
+    // The painter's ceiling never sits BELOW the panes this workspace already runs.
+    // `effectiveMaxPanes` charges the machine budget for terminals in OTHER workspaces
+    // (capacity() -> effectivePaneCapacity), so on a busy small machine it can fall under
+    // the grid you are looking at — and Reorganize would open seeded below your own pane
+    // count, unable to repaint the grid you already have. Rearranging what exists
+    // allocates nothing; the GROWTH doors (split, the wizard, New terminals) still ask
+    // effectiveMaxPanes and are unchanged.
+    const maxPanes = Math.max(view.layout.paneCount, this.effectiveMaxPanes(view))
+    // COUNT AND SHAPE FROM THE SAME NUMBER. This used to clamp the count but take the
+    // shape from the unclamped one, seeding a lattice that did not match its own regions.
+    const seed = Math.min(view.layout.paneCount, maxPanes)
     openReorganizeModal({
-      spec: specForCount(Math.min(view.layout.paneCount, maxPanes), TEMPLATES[view.layout.paneCount]),
+      spec: specForCount(seed, TEMPLATES[seed]),
       maxRows: cap.maxRows,
       maxCols: cap.maxCols,
       maxPanes,
@@ -1452,15 +1521,25 @@ export class WorkspaceController {
 
   /** Apply a painted layout to the active workspace: confirm first if the new count
    *  would close panes holding live work (the SAME shrink policy as a template change),
-   *  then rebuild to the chosen count + arrangement. Live terminals are preserved where
-   *  they map (applyRegions reuses live slots first — a pane's PTY is never killed by
-   *  rearranging); only the tail closes when the count drops. */
+   *  then rebuild to the chosen count + arrangement. Every live terminal is preserved
+   *  and lands in the region nearest where it already sits — applyRegions takes ALL live
+   *  slots first, in reading order, so a pane's PTY is never killed by rearranging and a
+   *  reshape reads as a resize. Only a genuine shrink closes anything, from the
+   *  bottom-right, which is why the confirm can fire on a drop and never on a grow. */
   async requestReorganize(spec: GridSpecModel): Promise<boolean> {
     const view = this.active()
     if (!view) return false
     const count = spec.regions.length
-    const keep = new Set<number>(view.layout.peekTemplate(count).map((s) => s.paneId))
-    const live = inspectLive(view.layout.paneIds().filter((paneId) => !keep.has(paneId)))
+    // The same cap gate: `reorganizeApply` takes an arbitrary spec with no modal in front
+    // of it, and the modal's own ceiling is frozen at open time while the plan's is not.
+    const plan = this.effectiveMaxPanes(view)
+    if (count > Math.max(view.layout.paneCount, plan)) {
+      this.refusePaneCap(view, plan)
+      return false
+    }
+    // ONE resolution, before the only yield — see requestApplyTemplate.
+    const resolved = view.layout.resolveTemplate(count)
+    const live = inspectLive([...resolved.closing])
     if (live.panes.length > 0) {
       const ok = await confirmDialog({
         title: `Reorganize to ${plural(count, 'pane', 'panes')}?`,
@@ -1472,7 +1551,15 @@ export class WorkspaceController {
     }
     // NOT `void`. applyRegions returns false without touching the tree, and discarding that
     // is what let the manifest record a pane count its own layout had refused.
-    this.applyResolvedLayout(view, count, () => view.layout.applyRegions(spec))
+    const out = this.applyResolvedLayout(view, resolved, () => view.layout.applyRegions(spec, resolved))
+    if (out === 'stale') {
+      this.refuseStaleLayout(view.layout.checkResolved(resolved) ?? 'live-set-moved')
+      return false
+    }
+    if (out === 'refused') {
+      showToast({ tone: 'attention', title: 'Could not apply that layout', body: 'The grid refused it.' })
+      return false
+    }
     getTelemetry().captureEvent({ name: 'layout.reorganized', props: { panes: count, rows: spec.rows, cols: spec.cols } })
     return true
   }
@@ -1642,9 +1729,9 @@ export class WorkspaceController {
     }
   }
 
-  /** "New terminal…" (titlebar layout popover): the wizard's placement palette over
-   *  the panes being ADDED to this workspace. The modal collects the lineup; the
-   *  split + launch below is splitActiveLineup's. */
+  /** "New terminal…" (titlebar layout popover): the wizard's layout PAINTER over this
+   *  workspace's real grid. The modal paints where the new terminals go and what runs in
+   *  each; `createTerminalsFromSpec` below applies it. */
   openNewTerminals(): void {
     const view = this.active()
     if (!view) return
@@ -1654,41 +1741,121 @@ export class WorkspaceController {
       this.refusePaneCap(view, cap)
       return
     }
+    const capacity = view.layout.capacity()
     openNewTerminalModal({
+      live: this.livePaneTiles(view),
       headroom,
+      maxRows: capacity.maxRows,
+      maxCols: capacity.maxCols,
       cwd: view.meta.cwd,
-      onCreate: (entries, isolate) => void this.splitActiveLineup(entries, isolate)
+      subscribeLive: (cb) => this.subscribeLivePanes(view, cb),
+      onCreate: (plan) => void this.createTerminalsFromSpec(plan)
     })
   }
 
-  /** Split the ACTIVE workspace's focused pane into one terminal per entry and launch
-   *  each non-shell provider into its pane THROUGH THE LAUNCH PORT — the workspace's
-   *  own subscription records every request as that slot's manifest assignment (+
-   *  profile + launch cwd), so a modal lineup survives restore exactly like a
-   *  wizard one. `isolate` gives EVERY created terminal its own worktree, agents and
-   *  shells alike: this path replaced both popover rows, and "New isolated terminal"
-   *  always isolated plain shells too (the wizard's checkbox scopes to agents only
-   *  because there the shells are just the rest of the grid). Same 3/03 contract as
-   *  splitActiveIsolated: each worktree is created FIRST, a refused split takes its
-   *  pane-less worktree back out, and a mid-batch failure stops with an honest toast.
-   *  Returns true only when every requested terminal opened. */
-  async splitActiveLineup(entries: readonly NewTerminalEntry[], isolate: boolean): Promise<boolean> {
+  /**
+   * Re-resolve the New-terminals dialog's world while it is up, so a pane opening or
+   * closing under it redraws the canvas instead of dead-ending at a refusal.
+   *
+   * The slots port republishes on EVERY rebuild, including drag-rearranges and other
+   * re-publishes where the set did not change — so this emits only when the ORDERED id
+   * signature moves. Ordered, not a set: a rearrange keeps the same terminals but re-aims
+   * every locked tile, and the dialog has to relabel them.
+   */
+  private subscribeLivePanes(view: WorkspaceView, cb: (next: LiveWorkspaceShape) => void): () => void {
+    let last = ''
+    return onSlots(() => {
+      if (!this.views.has(view.meta.id)) return // the workspace closed under the dialog
+      const live = this.livePaneTiles(view)
+      const signature = live.map((tile) => tile.paneId).join(',')
+      if (signature === last) return
+      last = signature
+      cb({ live, headroom: Math.max(0, this.effectiveMaxPanes(view) - view.layout.paneCount) })
+    })
+  }
+
+  /** The terminals this workspace already runs, IN THE ORDER `templateLocals` will hand
+   *  them back — which is the order the painter draws them in, and the whole reason its
+   *  locked prefix can be a count instead of a set of pane ids.
+   *
+   *  `liveOrder()`, NOT `paneIds()`: the latter is tree order, and it diverges from
+   *  reading order as soon as a split nests — which had every locked tile in a nested
+   *  layout wearing another terminal's name. */
+  private livePaneTiles(view: WorkspaceView): LivePaneTile[] {
+    return view.layout.liveOrder().map((paneId) => {
+      const id = paneId as PaneId
+      const slot = view.layout.slotOf(id)
+      const session = getPaneAgentSession(id)
+      const provider = session?.provider || (slot ? view.meta.assignments?.[slot - 1] : null) || 'shell'
+      const label = getPaneUserTitle(id) || getPaneLabel(id) || (provider === 'shell' ? 'Shell' : provider)
+      return { paneId, provider, label }
+    })
+  }
+
+  /**
+   * Apply a PAINTED grid from the New-terminals modal: reshape to the spec, then launch
+   * each non-shell entry into the pane its tile stands for.
+   *
+   * ONE relayout, not N splits. `splitPane` cannot express placement at all — it splits
+   * the focused pane along its longer axis and refocuses the result, so a batch cascades
+   * off itself and "the tile at row 2, column 3" has nowhere to go. `applyRegions` maps
+   * the spec's reading-order regions onto `templateLocals`, which takes every live slot
+   * first in the order they already sit on screen — so the existing terminals keep their
+   * PTYs and land under their own locked tiles, and the new regions fall to fresh slots
+   * after them. One apply also means one persist, one capacity check, and no half-built
+   * grid to unwind. What it costs is hand-dragged seam sizes, which reset to equal shares
+   * exactly as Reorganize already resets them; the modal's subtitle says so.
+   *
+   * Launches go THROUGH THE LAUNCH PORT — the workspace's own subscription records each
+   * request as that slot's manifest assignment (+ profile + launch cwd), so a painted
+   * lineup survives restore exactly like a wizard one. Typed delivery, not
+   * `deliver: 'spawn'`: a spawn-armed request must be emitted before the pane exists, and
+   * `noteAgentLaunch` cannot resolve a slot for a pane the layout does not hold yet — the
+   * lineup would launch and then silently fail to persist.
+   *
+   * `isolate` gives EVERY created terminal its own worktree, agents and shells alike:
+   * this path replaced both popover rows, and "New isolated terminal" always isolated
+   * plain shells too (the wizard's checkbox scopes to agents only because there the
+   * shells are just the rest of a fresh grid).
+   */
+  async createTerminalsFromSpec(plan: NewTerminalPlan): Promise<boolean> {
     const a = this.active()
-    if (!a || entries.length === 0) return false
-    const want = entries.length
+    if (!a) return false
+    const count = plan.spec.regions.length
     const cap = this.effectiveMaxPanes(a)
-    const headroom = cap - a.layout.paneCount
-    if (headroom <= 0) {
+    if (count > cap) {
       this.refusePaneCap(a, cap)
       return false
     }
-    const goal = Math.min(want, headroom)
+    // Pre-flight the shape here too: the painter cannot emit a non-guillotine spec, but
+    // the plan crosses a public dev-API boundary, and applyResolvedLayout scrubs manifest
+    // rows before it learns that `apply` refused.
+    if (!treeForRegions(plan.spec)) {
+      showToast({ tone: 'attention', title: 'That arrangement can’t be built', body: 'Try a different merge.' })
+      return false
+    }
+    // ONE resolution, before any await — worktree creation below is a real yield. Both
+    // reads this used to make (the new slots here, and applyResolvedLayout's own) come off
+    // this single value, so they cannot disagree.
+    const resolved = a.layout.resolveTemplate(count)
+    // The locked prefix is a promise about the panes that existed when the modal opened.
+    // A SET check, not a count: a simultaneous open and close leaves the count intact
+    // while tile k names a different terminal, and an agent would then be typed into a
+    // pane someone is using.
+    const lineupNow = resolved.slots.filter((slot) => slot.live).map((slot) => slot.paneId)
+    const sameLineup =
+      lineupNow.length === plan.liveIds.length && lineupNow.every((id, i) => id === plan.liveIds[i])
+    if (!sameLineup || count - plan.liveIds.length !== plan.entries.length) {
+      this.refuseStaleLayout('live-set-moved')
+      return false
+    }
+
     const repo = a.meta.cwd
-    let added = 0
+    const worktrees: Array<string | undefined> = plan.entries.map(() => undefined)
     try {
-      if (isolate) {
-        // Same honesty as the wizard's checkbox: refuse a non-repo BEFORE touching
-        // the filesystem — the modal's preflight said yes, but folders change.
+      if (plan.isolate) {
+        // Same honesty as the wizard's checkbox: refuse a non-repo BEFORE touching the
+        // filesystem — the modal's preflight said yes, but folders change.
         if (!repo || (await getBridge().invoke(GitChannels.query, repo)) == null) {
           showToast({
             tone: 'attention',
@@ -1697,72 +1864,91 @@ export class WorkspaceController {
           })
           return false
         }
-      }
-      for (; added < goal; added++) {
-        const entry = entries[added]
-        let worktree: string | undefined
-        if (isolate) {
-          const wt = (await getBridge().invoke(WorktreeChannels.create, { repo })) as CreateWorktreeResult
-          if (!wt.ok || !wt.path) {
-            showToast({
-              tone: 'attention',
-              title: 'Could not create a worktree',
-              body: `${added > 0 ? `Opened ${added} of ${goal} terminals — then ` : ''}${wt.error || 'git refused.'}`
-            })
-            return false
-          }
-          worktree = wt.path
-        }
-        // The id the split WILL use — peeked the same way splitPane itself does, so
-        // the launch request below names the pane the split just built.
-        const newId = a.layout.peekNextPaneId()
-        const before = a.layout.paneCount
-        this.splitPane(a.meta.id, a.layout.focusedPaneId(), undefined, worktree)
-        if (a.layout.paneCount === before) {
-          // Refused after all (the live limit can shift mid-batch — splitPane already
-          // toasted why). A worktree with no pane to serve is litter: take it back out.
-          if (worktree) void getBridge().invoke(WorktreeChannels.remove, { repo, path: worktree, force: false })
+        // Every job SETTLES before any verdict (the wizard's contract): a rollback that
+        // ran on the first rejection could not name the worktrees still being created.
+        const made = await Promise.all(
+          plan.entries.map(() =>
+            getBridge()
+              .invoke(WorktreeChannels.create, { repo })
+              .then((r) => r as CreateWorktreeResult)
+              .catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }) as CreateWorktreeResult)
+          )
+        )
+        made.forEach((wt, i) => (worktrees[i] = wt.ok ? (wt.path ?? undefined) : undefined))
+        const failed = made.find((wt) => !wt.ok || !wt.path)
+        if (failed) {
+          await this.rollbackWorktrees(repo, worktrees)
+          showToast({
+            tone: 'attention',
+            title: 'Could not create a worktree',
+            body: `${failed.error || 'git refused.'} Nothing was opened.`
+          })
           return false
         }
-        if (entry.provider && entry.provider !== 'shell') {
-          // Typed delivery into the live pane (whenPaneLive holds the command until
-          // first output) — the palette's own path, so no spawn-run arming needed.
-          const cwd = worktree ?? getPaneCwdProjection(newId as PaneId)?.cwd ?? a.meta.cwd
-          requestAgentLaunch({
-            paneId: newId as PaneId,
-            provider: entry.provider,
-            cwd,
-            resume: false,
-            profileId: entry.profileId
-          })
-        }
       }
+
+      // The slots the apply WILL land on — the SAME resolution, so `newSlots[k]` is the
+      // pane the k-th added region becomes.
+      const newSlots = resolved.slots.slice(plan.liveIds.length)
+      const seedByLocal = new Map<number, string | undefined>()
+      newSlots.forEach((slot, k) => seedByLocal.set(slot.local, worktrees[k]))
+
+      const out = this.applyResolvedLayout(
+        a,
+        resolved,
+        () => a.layout.applyRegions(plan.spec, resolved),
+        (local) => seedByLocal.get(local)
+      )
+      if (out !== 'applied') {
+        await this.rollbackWorktrees(repo, worktrees)
+        if (out === 'stale') this.refuseStaleLayout(a.layout.checkResolved(resolved) ?? 'live-set-moved')
+        else showToast({ tone: 'attention', title: 'Could not apply that layout', body: 'The grid refused it.' })
+        return false
+      }
+
+      plan.entries.forEach((entry, k) => {
+        if (!entry.provider || entry.provider === 'shell') return
+        const paneId = newSlots[k]?.paneId as PaneId | undefined
+        if (paneId == null) return
+        const cwd = worktrees[k] ?? getPaneCwdProjection(paneId)?.cwd ?? a.meta.cwd
+        requestAgentLaunch({ paneId, provider: entry.provider, cwd, resume: false, profileId: entry.profileId })
+      })
+
       getTelemetry().captureEvent({
         name: 'workspace.split_lineup',
         props: {
-          panes: goal,
-          agents: entries.slice(0, goal).filter((e) => e.provider && e.provider !== 'shell').length,
-          isolated: isolate // a boolean — never the paths (ADR 0005)
+          panes: plan.entries.length,
+          agents: plan.entries.filter((e) => e.provider && e.provider !== 'shell').length,
+          rows: plan.spec.rows,
+          cols: plan.spec.cols,
+          merged: plan.spec.regions.some((r) => r.rs > 1 || r.cs > 1),
+          isolated: plan.isolate // a boolean — never the paths (ADR 0005)
         }
       })
-      if (goal < want) {
-        showToast({
-          title: `Opened ${goal} of ${want} terminals`,
-          body:
-            cap < a.layout.limit()
-              ? `Your ${entitlementPlan()} plan runs up to ${cap} terminals per workspace.`
-              : `A workspace holds at most ${cap} terminals on this screen.`
-        })
-      }
-      return goal === want
+      return true
     } catch (error) {
+      await this.rollbackWorktrees(repo, worktrees)
       showToast({
         tone: 'attention',
         title: 'Could not open the terminals',
-        body: `${added > 0 ? `Opened ${added} of ${goal} terminals — then ` : ''}${error instanceof Error ? error.message : String(error)}`
+        body: error instanceof Error ? error.message : String(error)
       })
       return false
     }
+  }
+
+  /** Take back worktrees that have no pane to serve. Best effort and never throwing —
+   *  it runs on paths that are already reporting a failure. */
+  private async rollbackWorktrees(repo: string, paths: ReadonlyArray<string | undefined>): Promise<void> {
+    await Promise.all(
+      paths
+        .filter((p): p is string => !!p)
+        .map((path) =>
+          getBridge()
+            .invoke(WorktreeChannels.remove, { repo, path, force: false })
+            .catch(() => undefined)
+        )
+    )
   }
 
   /** Reusing slot `i` for a fresh plain terminal: the persisted manifest must agree,
@@ -2152,6 +2338,12 @@ export class WorkspaceController {
   /** Live pane ids of the active workspace (closed slots excluded). */
   activePaneIds(): number[] {
     return (this.active()?.layout.paneIds() ?? []) as number[]
+  }
+
+  /** The same panes in READING order — what a placement painter draws, and what
+   *  `templateLocals` lands on. Diverges from `activePaneIds` on any nested split. */
+  activeLiveOrder(): number[] {
+    return (this.active()?.layout.liveOrder() ?? []) as number[]
   }
 
   /** Focus an existing workspace for `cwd`, or create one (the `mogging .` entry point). */

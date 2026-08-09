@@ -50,6 +50,7 @@ import { onPaneLabel, getPaneLabel, setPaneLabel, onPaneUserTitle, getPaneUserTi
 import { setPaneState, clearPaneState, paneState, paneFinished, onAttentionChange } from '../../core/attention/attention-port'
 import { completionsFor } from '../../core/attention/completions'
 import { applyPaneCwdEvent, clearPaneCwd, getPaneCwd, getPaneCwdProjection } from '../../core/layout/pane-cwd'
+import { applyPaneForegroundEvent, clearPaneForeground } from '../../core/terminal/foreground-port'
 import { getPaneRole, onPaneRole, getPaneRemote, getPaneProfile, onPaneProfile, setPaneProfile } from '../../core/layout/pane-meta'
 import {
   clearPaneCli,
@@ -437,6 +438,11 @@ export class TerminalPane {
           applyPaneCwdEvent(e)
           if (e.locality === 'remote') markPaneRemoteReady(this.id)
         }
+      }),
+      // FOREGROUND WORK — read ONLY by the destructive confirms. Deliberately not routed
+      // through the attention port: that one drops untracked panes and lights dots.
+      terminalClient.onForeground((e) => {
+        if (e.id === this.id && !this.disposed) applyPaneForegroundEvent(e)
       })
     )
     // Input into a dead pane is GATED, not forwarded: the daemon has no session for the
@@ -2507,6 +2513,7 @@ export class TerminalPane {
     }
     clearPaneState(this.id)
     clearPaneCwd(this.id) // stops the backend git watch for this pane (git feature unwatches)
+    clearPaneForeground(this.id) // a verdict about a SHELL, not an id — the reuse discipline
     retirePaneLife(this.id) // marks describe a SHELL, not an id
     setPaneBufferReader(this.id, null) // a recycled id must not read a dead xterm
     forgetSpawnRun(this.id) // armed builds/outcomes too — a recycled id must start clean

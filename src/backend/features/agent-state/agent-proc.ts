@@ -74,6 +74,12 @@ export interface DetectedAgentProc {
 export interface DetectedProcessContext {
   pid: number
   cwd?: string
+  /** The foreground executable's BASENAME, as ProcRow already parses it for BIN_TO_AGENT —
+   *  free, no extra listing. A basename is not argv, but it IS user-shaped data that lands
+   *  in a dialog, so it is bounded and text-rendered downstream and never telemetered
+   *  (ADR 0002/0005). Interpreters name themselves ('node', not 'npm run dev'): resolving
+   *  the SCRIPT would need argv to leave this module, which those ADRs forbid. */
+  command?: string
   sinceMs: number
 }
 
@@ -810,6 +816,7 @@ export class AgentProcessDetector {
           const nextContext: DetectedProcessContext = {
             pid: foreground.pid,
             cwd: contextCwd ?? undefined,
+            command: byPid.get(foreground.pid)?.base || undefined,
             sinceMs:
               previousContext?.pid === foreground.pid
                 ? previousContext.sinceMs
@@ -820,7 +827,8 @@ export class AgentProcessDetector {
           t.pendingSubmits = 0 // subsequent Enter keys belong to this foreground program
           if (
             previousContext?.pid !== nextContext.pid ||
-            previousContext?.cwd !== nextContext.cwd
+            previousContext?.cwd !== nextContext.cwd ||
+            previousContext?.command !== nextContext.command
           ) {
             this.emitContext(paneId, nextContext)
           }

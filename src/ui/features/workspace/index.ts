@@ -15,12 +15,18 @@ import { getBridge } from '../../core/ipc/bridge'
 import { TEMPLATE_COUNTS, type GridSpecModel } from '../layout'
 import { Button, IconButton, clear, el, icon, showToast } from '../../components'
 import { WorkspaceController, type CreateOpts } from './controller'
+import type { NewTerminalPlan } from './new-terminal-modal'
 import { resolveColors } from './model'
 import { workspaceClient } from './workspace.client'
 import { DEFAULT_THEME_ID } from '../../core/theme/themes'
 import { setTheme, currentThemeId, onThemeChange } from '../../core/theme/theme-state'
 import { isModKey } from '../../core/commands/shortcuts'
-import { requiresGrid, shortcutsBlocked } from '../../core/commands/context'
+import {
+  requiresGrid,
+  shortcutsBlocked,
+  type CommandAvailability,
+  type CommandContext
+} from '../../core/commands/context'
 import { setWorkspaceOpener } from '../../core/workspace/open-service'
 import { setSessionRestorer } from '../../core/workspace/restore-port'
 import {
@@ -30,6 +36,7 @@ import {
 import { openWizard } from '../../core/workspace/wizard-port'
 import { onAgentLaunchRequest, onProfileFailover } from '../../core/agents/launch-port'
 import { onPaneAgentSession } from '../../core/agents/agent-session-port'
+import { getPaneForeground } from '../../core/terminal/foreground-port'
 import { activeView, setActiveView } from '../../core/shell/view-port'
 import { setCommands } from '../../core/commands/command-port'
 import { setPaneState, setPaneTracked } from '../../core/attention/attention-port'
@@ -574,7 +581,7 @@ export const workspaceFeature: UiFeature = {
         {
           class: 'menu-item layout-menu-add',
           type: 'button',
-          title: 'Choose what runs in each new terminal — agents, count, worktree isolation',
+          title: 'Paint where the new terminals go and what runs in each — count, agents, worktree isolation',
           onClick: () => {
             layoutMenu.hidden = true
             controller.openNewTerminals()
@@ -592,7 +599,7 @@ export const workspaceFeature: UiFeature = {
         {
           class: 'menu-item layout-menu-add layout-menu-reorganize',
           type: 'button',
-          title: 'Choose a new grid size and arrangement — your terminals are kept where they fit',
+          title: 'Choose a new grid size and arrangement — your terminals stay open, near where they already are',
           onClick: () => {
             layoutMenu.hidden = true
             controller.openReorganize()
@@ -796,10 +803,22 @@ export const workspaceFeature: UiFeature = {
           enabled: requiresGrid,
           run: () => controller.openReorganize()
         },
+        // These alone carried no `enabled` — so they read as runnable on Home, where the
+        // verb silently returns false, and as runnable past the plan's cap, where it now
+        // refuses with a toast. The palette's own rule is that a command which cannot run
+        // says so HERE, not in an apology afterwards.
         ...TEMPLATE_COUNTS.map((n) => ({
           id: `layout:${n}`,
           title: `Layout: ${n} pane${n === 1 ? '' : 's'}`,
           hint: 'Layout',
+          enabled: (ctx: CommandContext): CommandAvailability => {
+            const grid = requiresGrid(ctx)
+            if (grid !== true) return grid
+            const cap = controller.layoutCeiling()
+            return cap == null || n <= cap
+              ? true
+              : { enabled: false, reason: `Over this workspace’s ${cap}-terminal limit` }
+          },
           run: () => void controller.requestApplyTemplate(n)
         })),
         ...wsCommands
@@ -882,13 +901,18 @@ function exposeForDev(controller: WorkspaceController): void {
   w.__mogging.layout = {
     apply: (n: number) => controller.requestApplyTemplate(n),
     paneCount: () => controller.activePaneCount(),
-    paneIds: () => controller.activePaneIds(),
+    paneIds: () => controller.activePaneIds(), // TREE order
+    liveOrder: () => controller.activeLiveOrder(), // READING order — what the painter draws
     zoom: () => controller.toggleZoom(),
     expand: (paneId: number, mode: 'full' | 'col' | 'row') => controller.expandPane(paneId, mode),
     split: (dir?: 'h' | 'v', count?: number) => controller.splitActive(dir, count),
     splitIsolated: (dir?: 'h' | 'v', count?: number) => controller.splitActiveIsolated(dir, count),
     reorganize: () => controller.openReorganize(), // opens the painter panel
     reorganizeApply: (spec: GridSpecModel) => controller.requestReorganize(spec), // paint result, no UI
+    newTerminals: () => controller.openNewTerminals(), // opens the placement painter
+    // The painted result, no UI — the twin of reorganizeApply, so a gate can assert WHERE
+    // a terminal landed without simulating a pointer sweep across the canvas.
+    newTerminalsApply: (plan: NewTerminalPlan) => controller.createTerminalsFromSpec(plan),
     status: () => controller.layoutStatus(),
     // The CONTROL API's close verb, not the ✕'s — `layout.close` sits beside `apply` and
     // `split` and means the same kind of thing they do: a programmatic layout edit that is
@@ -925,6 +949,11 @@ function exposeForDev(controller: WorkspaceController): void {
       // The active workspace confers the role — the same scope publishRoles sends.
       return getBridge().invoke(TerminalChannels.setRole, { id: paneId as PaneId, role, workspaceId: controller.activeMeta()?.id ?? '' })
     }
+  }
+  // FOREGROUND WORK, read-only. Smokes ASSERT a pane has gone idle rather than blindly
+  // clearing it, so a real latch fails loudly instead of being papered over.
+  w.__mogging.terminal = {
+    foreground: (id: number) => getPaneForeground(id as PaneId) ?? null
   }
   w.__mogging.attention = {
     setPaneState: (id: number, state: string) => setPaneState(id as PaneId, state as AgentState),

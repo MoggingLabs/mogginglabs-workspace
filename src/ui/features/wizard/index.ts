@@ -19,18 +19,14 @@ import {
   createFolderBrowser,
   createGridPainter,
   createPathInput,
-  createStepper,
   el,
   icon,
-  openContextMenu,
   providerAccent,
   providerLogo,
-  type ContextMenuEntry,
   type ElChild,
   type FolderBrowserHandle,
   type GridPainterHandle,
-  type PathInputHandle,
-  type StepperHandle
+  type PathInputHandle
 } from '../../components'
 import {
   TEMPLATES,
@@ -58,7 +54,17 @@ import { getBridge } from '../../core/ipc/bridge'
 import { wizardClient } from './wizard.client'
 import { createPathSelection, type PathOrigin, type PathSelectionHandle, type PathState } from './path-selection'
 import { getAgentRegistry, onAgentRegistryChange, refreshAgentRegistry } from '../../core/agents/registry'
-import { createAgentSetupPanel, type AgentSetupPanelHandle } from '../agents/setup-panel'
+import { createPlacementPalette, type PlacementPaletteHandle } from '../agents/placement-palette'
+import {
+  assignedTotal,
+  countOf,
+  expandAssignments as expandSlots,
+  fillAll,
+  normalizeSlots,
+  paintSlot,
+  pruneBrush,
+  pruneToRoster
+} from '../agents/placement-model'
 
 // Provider identity (accent + official mark) lives in components/provider-logo —
 // one source for the wizard, settings, usage, and pane chrome.
@@ -241,13 +247,11 @@ export const wizardFeature: UiFeature = {
     const applyRoster = (next: readonly AgentInfo[]): void => {
       roster = [...next]
       // A CLI removed while this page is open cannot remain invisibly assigned — its
-      // terminals fall back to plain shells. ('custom' and 'shell' are not roster ids.)
-      slots = slots.map((id) =>
-        id && id !== 'custom' && !roster.some((agent) => agent.id === id && agent.installed) ? null : id
-      )
-      if (brush && brush !== 'custom' && brush !== 'shell' && !roster.some((a) => a.id === brush && a.installed)) {
-        brush = null // the armed brush's CLI is gone; painting nothing beats painting a ghost
-      }
+      // terminals fall back to plain shells, and the armed brush goes down with them
+      // (painting nothing beats painting a ghost).
+      const installed = new Set(roster.filter((a) => a.installed).map((a) => a.id))
+      slots = pruneToRoster(slots, installed)
+      brush = pruneBrush(brush, installed)
       normalizeAssignmentsToCapacity()
       renderRoster()
     }
@@ -272,7 +276,7 @@ export const wizardFeature: UiFeature = {
       openGeneration++
       selection?.dispose()
       cdLine?.dispose()
-      for (const panel of setupPanels.splice(0)) panel.dispose()
+      palette?.dispose()
       launching = false
     }
 
@@ -455,26 +459,13 @@ export const wizardFeature: UiFeature = {
      *  resize keeps what it can and a shrink drops from the end — the same terminals the
      *  shrink itself removed. Custom entries with no command cannot survive either. */
     function normalizeAssignmentsToCapacity(): void {
-      if (slots.length < paneCount) slots = [...slots, ...Array<string | null>(paneCount - slots.length).fill(null)]
-      else if (slots.length > paneCount) slots = slots.slice(0, paneCount)
-      if (!customCmd.trim()) slots = slots.map((id) => (id === 'custom' ? null : id))
+      slots = normalizeSlots(slots, paneCount, customCmd)
     }
-
-    const assignedTotal = (): number => slots.filter(Boolean).length
-
-    /** How many terminals `id` owns right now — the chips' ×N readouts. */
-    const countOf = (id: string): number => slots.filter((s) => s === id).length
 
     /** The per-terminal assignment, in slot order — THE launch manifest. Unlike the old
      *  counts expansion, this preserves WHERE the user put each agent. */
     function expandAssignments(): string[] {
-      const cmd = customCmd.trim()
-      return Array.from({ length: paneCount }, (_, i) => {
-        const id = slots[i]
-        if (!id) return 'shell'
-        if (id === 'custom') return cmd ? `custom:${cmd}` : 'shell'
-        return id
-      })
+      return expandSlots(slots, paneCount, customCmd)
     }
 
     const providerColor = (id: string): string => providerAccent(id)
@@ -698,14 +689,8 @@ export const wizardFeature: UiFeature = {
     let summaryCount!: HTMLElement
     let summaryShape!: HTMLElement
     let painter!: GridPainterHandle
-    let rosterHost!: HTMLElement
-    let paletteHost!: HTMLElement
-    let brushesHost!: HTMLElement
-    let missingHost!: HTMLElement
-    let clearHost!: HTMLElement
-    let setupHost!: HTMLElement
-    let brushHint!: HTMLElement
-    let profilesHost!: HTMLElement
+    /** The agent brush palette — shared with the New-terminals modal. */
+    let palette!: PlacementPaletteHandle
     let presetsHost!: HTMLElement
     /** Why the last preset save/delete failed, or empty. Cleared by the next render. */
     let presetError = ''
@@ -723,20 +708,6 @@ export const wizardFeature: UiFeature = {
     /** Which job the fix button currently has — set by syncIsolate from the derived view. */
     let isolateFixKind: 'path' | 'recheck' | null = null
     let launchAlert!: HTMLElement
-    let customInput!: HTMLInputElement
-    let customStepper: StepperHandle | null = null
-    /** Live setup panels on the roster's missing-CLI cards — each owns an IPC subscription. */
-    const setupPanels: AgentSetupPanelHandle[] = []
-
-    /** Push the slots' truth back into the custom row — value, ceiling, enablement. */
-    function syncCustom(): void {
-      if (!customInput || !customStepper) return
-      if (customInput.value !== customCmd) customInput.value = customCmd
-      const mine = countOf('custom')
-      customStepper.setValue(mine)
-      customStepper.setMax(mine + (paneCount - assignedTotal()))
-      customStepper.setDisabled(!customCmd.trim())
-    }
 
     /** One flat section: uppercase label + inline hint (+ a right-aligned live slot),
      *  the house division hairline, then the content. Nothing folds — the redesign's
@@ -763,7 +734,9 @@ export const wizardFeature: UiFeature = {
       cdLine?.dispose()
       clear(body)
       clear(footer)
-      customStepper = null
+      // The palette owns live IPC subscriptions through its setup panels; the page is
+      // about to throw away the DOM that held them.
+      palette?.dispose()
       chosenLine = el('p', { class: 'wizard-chosen' }) // the selection's subscriber writes it
       // Rebuilt with the page: its subscribers close over this render's DOM.
       selection = createPathSelection({ listDir: (p) => wizardClient.listDir({ path: p }), gitQuery: wizardClient.gitQuery })
@@ -1014,8 +987,8 @@ export const wizardFeature: UiFeature = {
         // paints agents; bare, a click on a terminal opens its own picker. Structural
         // gestures (drag-merge, click-splits-merged) are untouched.
         brush: () => brush,
-        onPaint: paintSlot,
-        onPickSlot: openSlotPicker,
+        onPaint: paintSlotAt,
+        onPickSlot: (slot, anchor) => palette.openPicker(slot, anchor, slots[slot] ?? null),
         slotChip: (slot) => {
           const id = expandAssignments()[slot]
           if (!id || id === 'shell') return null
@@ -1124,336 +1097,70 @@ export const wizardFeature: UiFeature = {
       // the ▾ menu occupies — same anatomy, different state, no separate card grid. The
       // sub-hosts are display:contents so the row wraps as one flex line; Clear sits at
       // the row's far end, spatially apart from the brushes it destroys.
-      paletteHost = el('div', { class: 'wizard-palette', role: 'toolbar', ariaLabel: 'Agents' })
-      brushesHost = el('span', { class: 'wizard-palette-group' })
-      missingHost = el('span', { class: 'wizard-palette-group' })
-      clearHost = el('span', { class: 'wizard-palette-clear' })
-      paletteHost.append(brushesHost, missingHost, clearHost)
-      brushHint = el('p', { class: 'wizard-hint wizard-brush-hint' })
-      profilesHost = el('div', { class: 'wizard-profiles' })
-      setupHost = el('div', { class: 'wizard-setup-host' })
-      rosterHost = el('div', { class: 'wizard-agents' })
-
-      // Custom command — any CLI, verbatim. Label only; never a stored credential. The
-      // stepper survived the redesign as a VIEW over the slots (value = how many
-      // terminals run the custom command; stepping assigns/releases them) — it is also
-      // the keyboard path KBAPG pins: spinbutton semantics, clamping, disabled-when-blank.
-      customStepper = createStepper({
-        value: countOf('custom'),
-        min: 0,
-        max: countOf('custom') + (paneCount - assignedTotal()),
-        ariaLabel: 'Custom command count',
-        onChange: (n) => {
-          setSlotCount('custom', n)
+      //
+      // The palette itself is SHARED with the New-terminals modal (features/agents/
+      // placement-palette): both surfaces answer "what runs where", and while the markup
+      // lived here twice they could drift apart on any edit.
+      palette = createPlacementPalette({
+        slots: () => slots,
+        count: () => paneCount,
+        brush: () => brush,
+        roster: () => roster,
+        profiles: () => profilesCache,
+        customCmd: () => customCmd,
+        profilesFilter: 'all',
+        profileStore: profileByProvider,
+        emptyNote: 'Looking for agent CLIs (Claude Code, Codex, Gemini, Aider, OpenCode)…',
+        onSlots: (next) => {
+          slots = next
           renderAgentControls()
-        }
-      })
-      customInput = el('input', {
-        class: 'input input--mono wizard-custom-input',
-        type: 'text',
-        value: customCmd,
-        placeholder: 'Custom command…',
-        title: 'Any CLI, verbatim — e.g. aider --model gpt-4o',
-        ariaLabel: 'Custom command',
-        onInput: (e) => {
-          customCmd = (e.target as HTMLInputElement).value
+        },
+        onBrush: (next) => {
+          brush = next
+          renderAgentControls()
+        },
+        onCustomCmd: (text) => {
+          customCmd = text
           // An empty command can own no panes: normalize strips its slots, and an armed
           // custom brush goes down with them.
           if (!customCmd.trim() && brush === 'custom') brush = null
           renderAgentControls()
-        }
+        },
+        onFill: () => getTelemetry().captureEvent({ name: 'wizard.fill_one', props: { panes: paneCount } })
       })
-      customStepper.setDisabled(!customCmd.trim())
-      const customRow = el('div', { class: 'wizard-agent-row wizard-custom-row' }, [
-        el('span', { class: 'wizard-agent-head' }, [providerLogo('custom:', 16), customInput]),
-        el('span', { class: 'wizard-agent-tail' }, [customStepper.el])
-      ])
 
       return section('Agents', '', el('span', { class: 'wizard-agents-tools' }, [meter]), [
-        paletteHost,
-        brushHint,
-        customRow,
-        profilesHost,
-        setupHost,
-        rosterHost
+        palette.el,
+        palette.hintEl,
+        palette.customRow,
+        palette.profilesEl,
+        palette.setupEl,
+        palette.emptyEl
       ])
-    }
-
-    /** Contextual, not standing (compact pass): silent at rest — the chips and the
-     *  canvas's own tooltips carry discovery — and ONE short line while a brush is
-     *  armed, because painting is the moment that needs narrating. */
-    function brushHintText(): string {
-      if (!brush) return ''
-      if (brush === 'shell') return 'Sweep the grid to clear terminals back to shells.'
-      const name = brush === 'custom' ? 'the custom command' : (roster.find((a) => a.id === brush)?.name ?? brush)
-      return `Sweep the grid to place ${name} — double-click fills all.`
-    }
-
-    /** Grow or shrink `id`'s slot count to n: new ones take the first empty terminals,
-     *  releases come off the end — the stepper's view of the same placement model. */
-    function setSlotCount(id: string, n: number): void {
-      let current = countOf(id)
-      for (let i = slots.length - 1; current > n && i >= 0; i--) {
-        if (slots[i] === id) {
-          slots[i] = null
-          current--
-        }
-      }
-      for (let i = 0; current < n && i < slots.length; i++) {
-        if (slots[i] === null) {
-          slots[i] = id
-          current++
-        }
-      }
-    }
-
-    /** Arm (or disarm) a brush. A custom brush with no command is refused by pointing at
-     *  the problem: the input takes focus instead of the chip taking state. */
-    function armBrush(id: string): void {
-      if (id === 'custom' && !customCmd.trim()) {
-        customInput?.focus()
-        return
-      }
-      brush = brush === id ? null : id
-      renderAgentControls()
-    }
-
-    function fillAllWith(id: string): void {
-      if (id === 'custom' && !customCmd.trim()) {
-        customInput?.focus()
-        return
-      }
-      slots = Array<string | null>(paneCount).fill(id === 'shell' ? null : id)
-      renderAgentControls()
-      getTelemetry().captureEvent({ name: 'wizard.fill_one', props: { panes: paneCount } })
-    }
-
-    function fillEmptyWith(id: string): void {
-      if (id === 'custom' && !customCmd.trim()) {
-        customInput?.focus()
-        return
-      }
-      slots = slots.map((s) => s ?? (id === 'shell' ? null : id))
-      renderAgentControls()
-    }
-
-    function clearAssignments(): void {
-      slots = Array<string | null>(paneCount).fill(null)
-      brush = null
-      renderAgentControls()
     }
 
     /** Paint one terminal with the armed brush (the painter's onPaint). The full control
      *  refresh, not just the canvas: the chips' ×N readouts move WITH the stroke, which
      *  is what makes painting feel accounted for. */
-    function paintSlot(slot: number): void {
-      if (!brush || slot < 0 || slot >= slots.length) return
-      slots[slot] = brush === 'shell' ? null : brush
+    function paintSlotAt(slot: number): void {
+      if (!brush) return
+      slots = paintSlot(slots, slot, brush)
       renderAgentControls()
-    }
-
-    /** The no-brush click on a terminal: its own picker, anchored to the tile. */
-    function openSlotPicker(slot: number, anchor: DOMRect): void {
-      const entries: ContextMenuEntry[] = roster
-        .filter((a) => a.installed)
-        .map((a) => ({
-          label: a.name,
-          hint: slots[slot] === a.id ? 'current' : undefined,
-          onSelect: () => {
-            slots[slot] = a.id
-            renderAgentControls()
-          }
-        }))
-      // The custom entry EARNS its row by existing (review shot: a disabled "type one
-      // below first" line was noise in a four-item menu — type the command and the row
-      // appears). Plain shell sits behind a separator: it is the exit, not one more agent.
-      const cmd = customCmd.trim()
-      if (cmd) {
-        entries.push({
-          label: 'Custom command',
-          hint: cmd.length > 24 ? cmd.slice(0, 23) + '…' : cmd,
-          onSelect: () => {
-            slots[slot] = 'custom'
-            renderAgentControls()
-          }
-        })
-      }
-      entries.push({ separator: true })
-      entries.push({
-        label: 'Plain shell',
-        hint: slots[slot] === null ? 'current' : undefined,
-        onSelect: () => {
-          slots[slot] = null
-          renderAgentControls()
-        }
-      })
-      openContextMenu({
-        items: entries,
-        x: anchor.left,
-        y: anchor.bottom + 4,
-        ariaLabel: `Terminal ${slot + 1} — choose what runs here`
-      })
-    }
-
-    /** One chip: logo · name · live ×N · a ▾ fills menu. Click arms it as the brush. */
-    function paletteChip(id: string, name: string, logoSize = 14): HTMLElement {
-      const armed = brush === id
-      const n = id === 'shell' ? paneCount - assignedTotal() : countOf(id)
-      const body = el(
-        'button',
-        {
-          class: `wizard-chip${armed ? ' is-armed' : ''}`,
-          type: 'button',
-          title: armed ? `Painting ${name} — click to stop` : `Paint terminals with ${name}`,
-          ariaLabel: `${name} brush${n ? ` — ${n} assigned` : ''}`,
-          onClick: () => armBrush(id),
-          onDblclick: () => fillAllWith(id)
-        },
-        [
-          providerLogo(id === 'custom' ? 'custom:' : id, logoSize),
-          el('span', { class: 'wizard-chip-name', text: name }),
-          n > 0 ? el('span', { class: 'wizard-chip-count', text: `×${n}` }) : null
-        ]
-      )
-      body.dataset.chip = id
-      body.setAttribute('aria-pressed', String(armed))
-      if (id === 'shell') return el('span', { class: 'wizard-chip-wrap' }, [body])
-      const empty = paneCount - assignedTotal()
-      const menu = el(
-        'button',
-        {
-          class: 'wizard-chip-menu',
-          type: 'button',
-          ariaLabel: `${name} — fill options`,
-          onClick: (e) => {
-            e.stopPropagation()
-            const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-            openContextMenu({
-              items: [
-                { label: `Fill all ${paneCount} ${plural(paneCount)}`, onSelect: () => fillAllWith(id) },
-                {
-                  label: `Fill ${empty} empty ${plural(empty)}`,
-                  disabled: empty === 0,
-                  onSelect: () => fillEmptyWith(id)
-                }
-              ],
-              x: r.left,
-              y: r.bottom + 4,
-              returnFocus: e.currentTarget as HTMLElement,
-              ariaLabel: `${name} fills`
-            })
-          }
-        },
-        [icon('chevron-down', 12)]
-      )
-      return el('span', { class: 'wizard-chip-wrap' }, [body, menu])
-    }
-
-    function renderPalette(): void {
-      if (!brushesHost) return
-      // A rebuild must not eat the keyboard: whoever held focus gets it back by chip id.
-      const focused = (document.activeElement as HTMLElement | null)?.dataset?.chip ?? null
-      clear(brushesHost)
-      for (const a of roster.filter((agent) => agent.installed)) brushesHost.append(paletteChip(a.id, a.name))
-      if (customCmd.trim() || countOf('custom') > 0) brushesHost.append(paletteChip('custom', 'Custom'))
-      brushesHost.append(paletteChip('shell', 'Shell'))
-      clear(clearHost)
-      clearHost.append(
-        Button({
-          label: 'Clear',
-          size: 'sm',
-          variant: 'danger',
-          title: 'Every terminal back to a plain shell',
-          onClick: clearAssignments
-        })
-      )
-      if (focused) brushesHost.querySelector<HTMLElement>(`[data-chip="${focused}"]`)?.focus()
-      if (brushHint) {
-        brushHint.textContent = brushHintText()
-        brushHint.hidden = !brushHint.textContent // silent at rest — no empty line holding space
-      }
-    }
-
-    function renderProfiles(): void {
-      if (!profilesHost) return
-      clear(profilesHost)
-      // Profile picker (4/04), now one compact row per provider that HAS a choice —
-      // it used to ride the (deleted) per-agent cards.
-      for (const a of roster.filter((agent) => agent.installed)) {
-        const mine = profilesCache.filter((p) => p.provider === a.id).sort((x, y) => x.order - y.order)
-        if (mine.length < 2) continue
-        const sel = el('select', { class: 'input input-sm wizard-profile-select', ariaLabel: `${a.name} profile` }) as HTMLSelectElement
-        for (const p of mine) sel.append(new Option(p.name, p.id))
-        sel.value = profileByProvider.get(a.id) ?? mine[0].id
-        sel.addEventListener('change', () => profileByProvider.set(a.id, sel.value))
-        profilesHost.append(
-          el('label', { class: 'wizard-profile-row' }, [
-            providerLogo(a.id, 13),
-            el('span', { class: 'wizard-profile-name', text: `${a.name} profile` }),
-            el('span', { class: 'wizard-select' }, [sel])
-          ])
-        )
-      }
     }
 
     /** Everything the palette model touches, in one call: chips, custom row, meter,
      *  painter chips. The one entry point for every placement mutation. */
     function renderAgentControls(): void {
-      normalizeAssignmentsToCapacity()
-      renderPalette()
-      syncCustom()
+      slots = normalizeSlots(slots, paneCount, customCmd)
+      palette.render()
       refreshAgents()
     }
 
     /** The agents subtree at roster cadence: the missing chips (+ their progress panels)
      *  and the detection-pending note. Pure placement moves take renderAgentControls. */
     function renderRoster(): void {
-      if (!rosterHost) return
-      normalizeAssignmentsToCapacity()
-      clear(rosterHost)
-      clear(missingHost)
-      clear(setupHost)
-      // Each rebuild throws the previous chips away; their setup panels hold a live IPC
-      // subscription apiece, so they must be released with the DOM that owned them.
-      for (const panel of setupPanels.splice(0)) panel.dispose()
-
-      if (!roster.length) {
-        rosterHost.append(
-          el('span', { class: 'wizard-hint', text: 'Looking for agent CLIs (Claude Code, Codex, Gemini, Aider, OpenCode)…' })
-        )
-      }
-
-      // A missing CLI is a CHIP like everyone else (design pass 2): grayed, with the
-      // download glyph in the slot where an installed chip keeps its ▾ — the gray and
-      // the glyph say "not installed" together, so no card, no pill, no label. Clicking
-      // anywhere on it installs; the step-by-step progress unfolds full-width below the
-      // row. The moment it installs, the registry push re-renders it as a brush.
-      for (const a of roster) {
-        if (a.installed || !a.installHint) continue
-        const panel = createAgentSetupPanel({
-          agentId: a.id,
-          name: a.name,
-          compact: true,
-          iconOnly: true,
-          onInstalled: () => void refreshAgentRegistry()
-        })
-        setupPanels.push(panel)
-        setupHost.append(panel.el)
-        const body = el(
-          'button',
-          {
-            class: 'wizard-chip is-missing',
-            type: 'button',
-            title: `${a.name} isn’t installed — one click sets it up, dependencies included`,
-            ariaLabel: `Install ${a.name}`,
-            onClick: () => panel.action.querySelector('button')?.click()
-          },
-          [providerLogo(a.id, 14), el('span', { class: 'wizard-chip-name', text: a.name })]
-        )
-        missingHost.append(el('span', { class: 'wizard-chip-wrap is-missing' }, [body, panel.action]))
-      }
-
-      renderProfiles()
+      slots = normalizeSlots(slots, paneCount, customCmd)
+      palette.renderRoster()
       renderAgentControls()
     }
 
@@ -1620,7 +1327,7 @@ export const wizardFeature: UiFeature = {
         size: 'sm',
         variant: 'ghost',
         icon: 'bookmark',
-        disabled: assignedTotal() === 0,
+        disabled: assignedTotal(slots) === 0,
         onClick: savePreset
       })
       return section('Presets', '', saveBtn, [el('div', { class: 'wizard-presets-row' }, [presetsHost])])
@@ -1632,10 +1339,10 @@ export const wizardFeature: UiFeature = {
       // size, and first-come expansion is how applyMix has always seeded one.
       const mix: ProviderCount[] = []
       for (const a of roster) {
-        const n = countOf(a.id)
+        const n = countOf(slots, a.id)
         if (n > 0) mix.push({ provider: a.id, count: n })
       }
-      const customTotal = countOf('custom')
+      const customTotal = countOf(slots, 'custom')
       if (customTotal > 0 && customCmd.trim()) mix.push({ provider: `custom:${customCmd.trim()}`, count: customTotal })
       const preset = { id: crypto.randomUUID(), name: presetName, mix }
       void wizardClient
@@ -1820,12 +1527,10 @@ export const wizardFeature: UiFeature = {
     /** Everything that moves when the mix or the grid changes. */
     function refreshAgents(): void {
       normalizeAssignmentsToCapacity()
-      const total = assignedTotal()
+      const total = assignedTotal(slots)
       meterFill.style.width = `${paneCount ? Math.min(100, Math.round((total / paneCount) * 100)) : 0}%`
       meterLabel.textContent = `${total} / ${paneCount} · ${paneCount - total} empty`
       layoutReadout.textContent = layoutReadoutText()
-
-      customStepper?.setMax(countOf('custom') + (paneCount - total))
 
       painter.refreshChips()
       summaryCount.textContent = String(paneCount)
@@ -2045,11 +1750,18 @@ export const wizardFeature: UiFeature = {
           renderAgentControls()
         },
         paint: (slot: number, id: string | null) => {
-          if (slot >= 0 && slot < slots.length) slots[slot] = id
+          slots = paintSlot(slots, slot, id ?? 'shell')
           renderAgentControls()
         },
-        fillAll: (id: string) => fillAllWith(id),
-        clear: () => clearAssignments()
+        fillAll: (id: string) => {
+          slots = fillAll(paneCount, id)
+          renderAgentControls()
+        },
+        clear: () => {
+          slots = fillAll(paneCount, 'shell')
+          brush = null
+          renderAgentControls()
+        }
       }
       w.__mogging.wizardLayout = {
         capacity: () => ({ ...capacity }),
