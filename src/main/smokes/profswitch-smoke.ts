@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setAgentDetectOverrideForSmoke } from '../agents'
+import { runtimeDir } from '../daemon-client'
 import { AgentChannels, type AgentInfo, type AgentInstallState } from '@contracts'
 
 // Env-gated pane profile-SWITCH smoke (MOGGING_PROFSWITCH) — the audit F1/F2 gate:
@@ -11,8 +12,11 @@ import { AgentChannels, type AgentInfo, type AgentInstallState } from '@contract
 //      mark (dev shim — the RELOAD/SURVIVE gates own real reattach mechanics) accepts
 //      a capped offer and the resume command IS written into the PTY — the old adopt
 //      branch relabeled the pane and typed NOTHING.
-//   2. The usage-engine trigger (F4): `capped({provider, profile})` at the port the
-//      real alert path announces on is CLAIMED and raises the pane's offer overlay.
+//   2. The per-pane limit trigger: `mogging notify --event usage-limit` at the pane —
+//      the daemon door PROFILES also drives — raises the pane's offer overlay. NOT the
+//      `capped` announce: since the lane-identity rebuild an ids-only capped event is a
+//      NUDGE that derives the offer from live lane state, and a bare event with no spent
+//      lane behind it covers nothing BY DESIGN (that negative is CAPFALSE's whole gate).
 //   3. Manual switch (⋯ menu): a "Switch to <profile> (resume session)" entry exists
 //      for the running provider's OTHER profile and switches the pane back.
 //   4. The interrupt fails CLOSED (F2): with a CONFIRMED-running agent that never
@@ -57,14 +61,21 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
   const cliPath = join(app.getAppPath(), 'bin', 'mogging.mjs')
-  const cli = (args: string[]): Promise<{ code: number }> =>
+  const cli = (args: string[], env: Record<string, string> = {}): Promise<{ code: number }> =>
     new Promise((resolveCli) => {
       execFile(
         process.execPath,
         [cliPath, ...args],
-        { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, timeout: 15000, windowsHide: true },
+        { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...env }, timeout: 15000, windowsHide: true },
         (err) => resolveCli({ code: err ? 1 : 0 })
       )
+    })
+  /** The capped trigger, through the daemon's notify door — out-of-band (the pane is
+   *  busy running its agent, so nothing can be typed into it), aimed by --pane with the
+   *  endpoint handed over explicitly (outside a pane the CLI has neither in its env). */
+  const capNotify = (paneId: number): Promise<{ code: number }> =>
+    cli(['notify', '--pane', String(paneId), '--event', 'usage-limit'], {
+      MOGGING_DAEMON_ENDPOINT: join(runtimeDir(), 'endpoint.json')
     })
 
   const runShots = async (): Promise<void> => {
@@ -187,7 +198,7 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       await sleep(800)
 
       phase = 'switch'
-      const claimed = (await ES(`window.__mogging.agents.capped({ providerId: 'claude', profileId: 'p-a' })`)) as boolean
+      const capSent = (await capNotify(pane)).code === 0
       let offered = false
       for (let i = 0; i < 20 && !offered; i++) {
         await sleep(300)
@@ -261,7 +272,7 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       phase = 'switch-back'
       await cli(['send-key', String(pane), 'escape'])
       await sleep(800)
-      const claimedBack = (await ES(`window.__mogging.agents.capped({ providerId: 'claude', profileId: 'p-b' })`)) as boolean
+      const capSentBack = (await capNotify(pane)).code === 0
       let offeredBack = false
       for (let i = 0; i < 20 && !offeredBack; i++) {
         await sleep(300)
@@ -323,15 +334,15 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       const phases = trace.map((t) => t.phase)
       const orderOk = phases.indexOf('agent-gone') > phases.indexOf('interrupt-start') && phases.indexOf('typed') > phases.indexOf('agent-gone')
 
-      const pass = savedA && savedB && confirmed && countA >= 2 && claimed && offered && switched &&
+      const pass = savedA && savedB && confirmed && countA >= 2 && capSent && offered && switched &&
         resumedRunning && historyOk && continuationOk && orderOk && statusAOk && statusBOk &&
-        claimedBack && offeredBack && switchedBack && resumedBackRunning && backOnAOk && leftBOk &&
+        capSentBack && offeredBack && switchedBack && resumedBackRunning && backOnAOk && leftBOk &&
         coverSeen && coverLifted
       result = {
-        pass, mode: 'claude-shots', savedA, savedB, confirmed, coverSeen, coverLifted, countA, countB, claimed, offered,
+        pass, mode: 'claude-shots', savedA, savedB, confirmed, coverSeen, coverLifted, countA, countB, capSent, offered,
         switched, resumedRunning, historyOk, continuationOk, contDiag, orderOk, phases, switchMs, buildMs,
         statusAOk, statusBOk, emailsA, emailsB,
-        claimedBack, offeredBack, switchedBack, resumedBackRunning, backOnAOk, leftBOk, emailsA2,
+        capSentBack, offeredBack, switchedBack, resumedBackRunning, backOnAOk, leftBOk, emailsA2,
         screenshots: [s0, s0b, s1, s2, s3, s4, s4b, s5, s6, s7].filter(Boolean)
       }
     } catch (e) {
@@ -418,9 +429,7 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       // behavior: the signed-in account is the default until the user reorders).
       const initialProfile = (await ES(`window.__mogging.agents.lastLaunch(${pane}).profileId`)) as string
       await ES(`window.__mogging.agents.markReattached(${pane})`)
-      const claimed = (await ES(
-        `window.__mogging.agents.capped({ providerId: ${JSON.stringify(provider)}, profileId: ${JSON.stringify(initialProfile)} })`
-      )) as boolean
+      const capSent = (await capNotify(pane)).code === 0
       let offered = false
       for (let i = 0; i < 20 && !offered; i++) {
         await sleep(300)
@@ -503,7 +512,6 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       // HERMETIC gemini fixture: a real agent rightly dies under the interrupt, so the
       // live variant stages this on a SECOND pane with its own gemini profile pair.
       let pane2 = pane
-      let failProfile = 'p-a'
       if (live) {
         await save({ id: 'g-a', name: 'GemA', provider: 'gemini', env: { FAKE_MARK: 'GA' }, order: 0 })
         await save({ id: 'g-b', name: 'GemB', provider: 'gemini', env: { FAKE_MARK: 'GB' }, order: 1 })
@@ -513,14 +521,13 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
         pane2 = ((await ES('window.__mogging.workspace.active()')) as { ordinal: number }).ordinal * 100 + 1
         await ES(`window.__mogging.agents.launchIn(${pane2}, 'gemini', ${JSON.stringify(anchor)})`)
         await sleep(2500)
-        failProfile = 'g-a'
       }
       const offerState2 = (): Promise<{ state: string } | null> => ES(`window.__mogging.agents.offer(${pane2})`)
       const writesFor2 = (): Promise<number> =>
         ES<number>(`(window.__mogging.ptyWrites || []).filter((w) => w.id === ${pane2} && String(w.data).includes('gemini')).length`)
       await ES(`window.__mogging.agents.detected({ id: ${pane2}, agentId: 'gemini', cwd: ${JSON.stringify(anchor)}, sinceMs: Date.now() })`)
       const sessionWrittenAt = Date.now()
-      const claimed2 = (await ES(`window.__mogging.agents.capped({ providerId: 'gemini', profileId: ${JSON.stringify(failProfile)} })`)) as boolean
+      const capSent2 = (await capNotify(pane2)).code === 0
       let offered2 = false
       for (let i = 0; i < 20 && !offered2; i++) {
         await sleep(300)
@@ -577,12 +584,12 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
           }
 
       const pass =
-        savedA && savedB && confirmed && claimed && offered && switched && typedOk && orderOk &&
-        menuEntryOk && manualOk && claimed2 && offered2 && guessFired && failedOk && nothingTypedOk
+        savedA && savedB && confirmed && capSent && offered && switched && typedOk && orderOk &&
+        menuEntryOk && manualOk && capSent2 && offered2 && guessFired && failedOk && nothingTypedOk
       result = {
         pass, mode: live ? 'claude-live' : 'gemini-hermetic', savedA, savedB, confirmed,
-        initialProfile, switchedTo, claimed, offered, switched, typedOk, orderOk, phases1: p1,
-        menuEntryOk, menuDiag, manualOk, claimed2, offered2, guessFired, failedOk, failDiag, nothingTypedOk
+        initialProfile, switchedTo, capSent, offered, switched, typedOk, orderOk, phases1: p1,
+        menuEntryOk, menuDiag, manualOk, capSent2, offered2, guessFired, failedOk, failDiag, nothingTypedOk
       }
     } catch (e) {
       result = { pass: false, error: String(e) }

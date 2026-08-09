@@ -12,21 +12,25 @@
 //      graceful shutdown persists command='claude' + the 44x11 grid.
 //   B. COLD-START RESTORE — the contract points, in order:
 //        1. the restored session lists 44x11, not the 80x24 spawn default;
-//        2. its resume ('claude --resume') is DEFERRED: absent from scrollback while
-//           only a bare (dims-less) attach has seen the pane;
-//        3. a spawn WITHOUT dims (an unmeasured hidden pane) neither resizes the
-//           session nor releases the resume — absent dims mean "leave it alone";
+//        2. its LAUNCH INTENT rides the welcome (PaneInfo.launch) and the daemon types
+//           NOTHING into the restored pane — the resume is composed by MAIN off that
+//           intent (a daemon-typed resume matched 0 of 34 real panes and suppressed
+//           the app's richer relaunch; see session.ts's spawn path);
+//        3. a spawn WITHOUT dims (an unmeasured hidden pane) neither resizes nor
+//           confirms the session — absent dims mean "leave it alone";
 //        4. a spawn WITH measured dims equal to the session's applies nothing but
-//           CONFIRMS the size, and the resume types promptly after it;
+//           CONFIRMS the size, and the reply READS BACK the grid the session holds
+//           (spawned cols/rows) — still with nothing daemon-typed;
 //        5. the replay GROUNDS terminal modes after its history (RESTORE_MODE_RESET) —
 //           a dead TUI's alt-screen/mouse/paste modes never leak into the fresh shell;
 //        6. a STALE-generation resize is REFUSED and the true generation's applies
 //           (protocol `gen`, additive — the reused-pane-id smear guard);
 //        7. replay disposition: 'suppress' delivers no ring bytes (the reconnect
 //           double-paint fix), 'reset' delivers the full-reset prefix plus the ring.
-//   C. HEADLESS GRACE — a fresh cold start where NO client ever sends dims: the resume
-//      still types on its own once LAUNCH_DIMS_GRACE_MS expires (daemon self-recovery,
-//      ADR 0006, must not wait forever on an app that never comes).
+//   C. HEADLESS RESTORE — a fresh cold start where NO client ever sends dims: even
+//      past LAUNCH_DIMS_GRACE_MS the daemon still types nothing (the grace releases
+//      DEFERRED SPAWN-RUN launches, never a composed resume); the intent stays on the
+//      welcome for whichever app connects next.
 import { app } from 'electron'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -129,12 +133,19 @@ export async function runRestoreDimsSmoke(): Promise<void> {
     if (!gridRestored)
       return fail('restore lost the persisted grid (spawned at the default?)', { restored })
 
-    // 2. bare attach (no dims): the replay must NOT contain the resume yet.
+    // 2. bare attach (no dims): the daemon must type NOTHING into a restored pane — the
+    // resume rides the LAUNCH INTENT on the wire now (PaneInfo.launch; main composes),
+    // never daemon-composed bytes. The old contract ("deferred until measured, then the
+    // DAEMON types --resume") is retired: a daemon-typed resume suppressed the app's
+    // richer relaunch and matched 0 of 34 real panes (see session.ts's spawn path).
+    const intentCarried = restored?.launch?.agentId === 'claude'
+    if (!intentCarried)
+      return fail('restore lost the launch intent the resume now rides', { launch: restored?.launch ?? null })
     clientB.attach(PANE)
     await until(() => capB.length > 0, 5000)
-    await delay(1000) // past the window where the pre-fix constructor typed it instantly
+    await delay(1000) // past the window where the pre-intent daemon typed it instantly
     const deferred = !capB.includes('--resume')
-    if (!deferred) return fail('resume typed before any client measured the pane')
+    if (!deferred) return fail('the daemon composed a resume into a restored pane')
 
     // 3. a dims-less spawn (unmeasured pane) must neither resize nor confirm.
     const reNoDims = await clientB.spawn(PANE, { cwd: '' })
@@ -147,14 +158,21 @@ export async function runRestoreDimsSmoke(): Promise<void> {
     const dimlessLeftAlone = afterNoDims?.cols === 44 && afterNoDims?.rows === 11
     if (!dimlessLeftAlone)
       return fail('a dims-less spawn RESIZED the session (invented dims)', { afterNoDims })
-    if (capB.includes('--resume')) return fail('a dims-less spawn released the deferred resume')
+    if (capB.includes('--resume')) return fail('a dims-less spawn made the daemon compose a resume')
 
-    // 4. measured dims equal to the session's: applies nothing, confirms, resume types.
+    // 4. measured dims equal to the session's: applies nothing, confirms — and the reply
+    // READS BACK the grid the session actually holds (the spawned cols/rows contract).
+    // The daemon still types nothing: the resume is main's job, launched off the intent.
     const reMeasured = await clientB.spawn(PANE, { cols: 44, rows: 11, cwd: '' })
     if (!reMeasured.existing) return fail('measured respawn lost the session')
-    const typedAfterConfirm = await until(() => capB.includes('--resume'), 8000)
-    if (!typedAfterConfirm)
-      return fail('resume never typed after a measured attach confirmed the grid', { capTail: capB.slice(-200) })
+    if (reMeasured.cols !== 44 || reMeasured.rows !== 11)
+      return fail('measured respawn did not read back the confirmed grid', {
+        cols: reMeasured.cols ?? null,
+        rows: reMeasured.rows ?? null
+      })
+    await delay(800)
+    if (capB.includes('--resume'))
+      return fail('the daemon composed a resume after a measured attach', { capTail: capB.slice(-200) })
 
     // 5. the restored replay GROUNDS terminal modes after its history: the dead process
     // may have held alt-screen/mouse/bracketed-paste; the fresh shell holds none
@@ -216,8 +234,10 @@ export async function runRestoreDimsSmoke(): Promise<void> {
 
     if (!(await retire(clientB, ep2.pid))) return fail('gen B daemon did not die on shutdown')
 
-    // C. headless grace: no client ever measures — the resume must fire on its own.
-    // The replayed scrollback already carries gen B's typed resume, so compare COUNTS.
+    // C. headless restore: no client ever measures, the launch grace expires — and the
+    // daemon STILL types nothing. Self-recovery moved with the composer: the intent
+    // stays on the wire (welcome) for whichever app connects next; a daemon that typed
+    // its own poorer resume here would suppress that richer relaunch (the 0-of-34 bug).
     process.env.MOGGING_LAUNCH_DIMS_GRACE_MS = '2000'
     const ep3 = await ensureDaemon(daemonJs, helper)
     if (ep3.pid === ep2.pid) return fail('gen C is not a fresh daemon')
@@ -227,14 +247,17 @@ export async function runRestoreDimsSmoke(): Promise<void> {
         if (id === PANE) capC += d
       }
     })
-    await clientC.connect()
+    const welcomeC = await clientC.connect()
+    const intentHeldHeadless = welcomeC.find((p) => p.id === PANE)?.launch?.agentId === 'claude'
+    if (!intentHeldHeadless) return fail('headless restore dropped the launch intent')
     clientC.attach(PANE)
     await until(() => capC.length > 0, 5000)
     const countResume = (): number => (capC.match(/--resume/g) || []).length
     const baseline = countResume()
-    const graceTyped = await until(() => countResume() > baseline, 8000)
-    if (!graceTyped)
-      return fail('headless grace never typed the resume (self-recovery lost)', { baseline })
+    await delay(3500) // past the 2000ms grace, with margin
+    const graceTypesNothing = countResume() === baseline
+    if (!graceTypesNothing)
+      return fail('the grace timer composed a resume — composition belongs to main', { baseline })
 
     clientC.kill(PANE)
     await delay(300)
@@ -244,16 +267,18 @@ export async function runRestoreDimsSmoke(): Promise<void> {
     writeOut({
       pass: true,
       gridRestored,
-      deferredUntilMeasured: deferred,
+      intentCarried,
+      daemonTypesNothing: deferred,
       dimlessLeftAlone,
-      typedAfterConfirm,
+      measuredReadBack: { cols: reMeasured.cols ?? null, rows: reMeasured.rows ?? null },
       modeGrounded,
       staleGenRefused: staleRefused,
       trueGenApplied,
       beliefHeld,
       suppressOk,
       resetOk,
-      graceTyped
+      intentHeldHeadless,
+      graceTypesNothing
     })
     app.exit(0)
   } catch (err) {
