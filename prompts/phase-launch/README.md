@@ -28,9 +28,20 @@ competitor names, truth-over-keywords). Same format as
 
 > **Precondition — MET as of 2026-07-19.** This pack runs on `main` with
 > Phase 12 (the Brain) **merged** and its gates green — Part I audits the
-> composed product. Current baseline: **v0.15.0, 182 gates (159 app-boot +
-> 23 static)**. `check-gate-count.mjs` is the only authority on the count,
-> so treat that number as live (it keeps moving), never a hard-coded literal.
+> composed product. The baseline **on the day this line was typed** was
+> **v0.15.0, 182 gates (159 app-boot + 23 static)**. `check-gate-count.mjs`
+> is the only authority on the count, so treat that number as live (it keeps
+> moving), never a hard-coded literal.
+>
+> **Re-derived 2026-07-24** after the v0.16.0 toolbelt merge (`053193d`):
+> the sweep **was** **200 gates (170 app-boot + 30 static)**, INVENTORY at
+> 198 rows (amendment A3). The baseline moved twice while Part I ran — proof
+> the rule above is load-bearing.
+>
+> **On THIS tree (2026-08-09):** every number above is history. The sweep
+> now derives **218 gates (180 app-boot + 38 static)** at **v0.18.0**, and
+> INVENTORY holds **213 rows** (amendment A4). Run `check-gate-count.mjs`
+> rather than reading any of these three lines as current.
 
 ## The laws that bind this phase
 

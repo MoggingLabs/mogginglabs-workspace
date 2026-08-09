@@ -9,7 +9,7 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 217 gates: 37 static (AUDIT · LEDGER · VERDICT · SATELLITE · CLIGRAM · DOCSCITE · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 180 app-boot
+# 218 gates: 38 static (AUDIT · LAUNCHAUDIT · LEDGER · VERDICT · SATELLITE · CLIGRAM · DOCSCITE · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 180 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -203,6 +203,13 @@ run_static() {
   fi
 }
 run_static AUDIT   node scripts/check-audit.mjs
+# LAUNCHAUDIT: AUDIT's younger sibling, for the launch pack (phase-launch/01). AUDIT proves
+# phase-8.5's ledger is discharged; this one proves Part I's audit is COMPLETE — that a
+# denominator exists at all. It holds three lines: every gate in this very file is claimed by
+# an INVENTORY row (the "no subsystem without a row" proof, inverted so more rows cannot
+# satisfy it), every row's entry point still resolves, and every (row, lens) derives A from
+# FINDINGS.md — where `defer` and `wontfix` are not spellable. Pure parse, no boot.
+run_static LAUNCHAUDIT node scripts/check-launch-audit.mjs
 # The 2026-08 sweep's ~490 findings. AUDIT above grades the 8.5 pack only (it is
 # called with no argument, so it reads prompts/phase-8.5/AUDIT.md); nothing routed
 # the newer ones, and a finding nobody can watch age is a finding that ages.

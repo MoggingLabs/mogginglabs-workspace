@@ -17,14 +17,14 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 
 | | count |
 | --- | --- |
-| rows | 526 |
-| open | 351 |
+| rows | 527 |
+| open | 352 |
 | fixed | 167 |
 | invalid | 7 |
 | deferred | 1 |
 
 | severity critical | 7 |
-| severity high | 83 |
+| severity high | 84 |
 | severity medium | 291 |
 | severity low | 132 |
 | severity none | 4 |
@@ -562,3 +562,4 @@ Evidence: [`2026-08-01-full-feature-audit.md`](./2026-08-01-full-feature-audit.m
 | capped-offer/F8 | medium | `fixed` | `src/ui/features/agents/capped-offers.ts:60` | FIXED. Lowering a held offer trusted a single sample, so one glitched `fresh` reading would drop the card and the next poll would put it back — flicker on an input-blocking overlay. Now a card comes down only when the window it NAMED has ended, when the lane's boundary genuinely advanced past it (beyond RESET_BOUNDARY_TOLERANCE_MS, now shared via @contracts so the engine and the planner cannot drift), or on a confirmed second miss. Same rule CodexBar reaches from the other side (it refuses to clear a depleted state on one positive sample while the trusted boundary is ahead). |  |
 | capped-offer/F9 | medium | `fixed` | `src/ui/features/agents/index.ts:108` | FIXED. `clearPaneAgentSession` returns early when there is no session, so a pane whose agent already died by verdict and is THEN disposed fired no end and leaked its launch context; pane ids are recycled, so the next occupant could inherit a stranger's account through the detection correlation. LaunchContext is now stamped with the pane INSTANCE (pane-instance-port, the bornAs/samePane pattern) and every read goes through one accessor that evicts a stamp whose pane has been replaced. |  |
 | capped-offer/F10 | low | `fixed` | `src/ui/features/agents/index.ts:187` | FIXED. Nothing re-ran the capped decision when the PROFILE LIST changed, yet `paneMatchesCappedLane` resolves a profile-less pane's lane through the provider's order-zero id — so login discovery minting `login-<provider>` minutes after a launch (the exact case that fuzzy arm exists for) changed the answer with no input to act on it. onProfilesChanged now reconciles. |  |
+| phase-launch/milestone-gpu | high | `open` | `src/main/smokes/milestone-smoke.ts:36` | MILESTONE fails 3 of 3 on real GPU hardware (270.7 / 180.6 / 215.2 ms against the 150 ms maxFrameGapMs budget), always exactly ONE long frame, avgFps 125-135, idle phase clean at 7.1 ms, heap 50 MB of 300, 16/16 WebGL. The SAME commit passes MILESTONE on all three CI OSes under MOGGING_CI_GPU=soft, a SOFTWARE renderer - and a frame-gap budget is precisely what a software renderer changes. So no passing real-GPU measurement of this gate exists anywhere, on this tree or on main. The next step named by prompts/phase-launch/EDGES-02.md is a baseline probe of the same quiet box against origin/main, to separate a real-GPU regression from a real-GPU budget that was never achievable; that probe was NEVER RUN. Until it is, the 150 ms budget is unproven on real hardware rather than known-violated by any particular change. |  |

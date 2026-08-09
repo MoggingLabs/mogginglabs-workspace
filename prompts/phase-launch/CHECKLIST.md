@@ -10,24 +10,27 @@ everything this pack builds is $0.
 
 > **Precondition — MET (2026-07-19)**
 > - [x] Phase 12 (the Brain) is merged to `main` and its gates are green.
-> - [x] `check-gate-count.mjs` clean on `main`: **v0.15.0, 182 gates (159 app-boot + 23 static)** — the live baseline (derive, never hard-code).
+> - [x] `check-gate-count.mjs` was clean on `main` that day at **v0.15.0, 182 gates (159 app-boot + 23 static)** — a dated snapshot, not the live baseline (derive, never hard-code).
+> - [x] **Re-derived 2026-07-24** (post-toolbelt merge `053193d`): main had moved to **v0.16.0, 200 gates (170 app-boot + 30 static)**; INVENTORY held **198 rows** after amendment A3. The line above is the 2026-07-19 snapshot; the count is always the script's.
+> - [x] **Re-derived 2026-08-09 on THIS tree** (the port, `2961cd3`): **v0.18.0, 218 gates (180 app-boot + 38 static)** with `LAUNCHAUDIT` registered here; INVENTORY holds **213 rows** after amendment A4. Both lines above are history.
 
 ---
 
 ## Part I — Prove the product is correct and clean
 
-### 01 · Audit method & coverage
-- [ ] `INVENTORY.md` lists every feature + subsystem, one row each, with entry point + doc + covering gate.
-- [ ] `RUBRIC.md` defines the six lenses (correctness, smell, spaghetti, duplication, inefficiency, refactor-debt), each by an OBJECTIVE TRIGGER + in-repo example, with the not-a-finding boundary written down (taste is not fileable).
-- [ ] Floor is **A**, and A is DERIVED — A ≡ zero open findings on that lens for that row; nobody types a letter.
-- [ ] `FINDINGS.md` routing ledger exists (id · area · lens · file:line · severity · verdict · evidence · resolved-in); verdicts are ONLY `fixed` or `invalid` (disproven) — `defer`/`wontfix` deleted.
-- [ ] `LAUNCHAUDIT` gate written, wired into `qa-smokes.sh`, and bite-proven (an ungraded lens, a below-A derivation, or a `defer` row each red it).
+### 01 · Audit method & coverage ✅ (2026-07-20)
+- [x] `INVENTORY.md` lists every feature + subsystem, one row each, with entry point + doc + covering gate — **183 rows across 37 areas** when step 01 closed (198 after A3, **213 after A4 on this tree**), and the gate proves the denominator is CLOSED (every sweep gate claimed by a row; deleting a row reds the sweep).
+- [x] `RUBRIC.md` defines the six lenses (correctness, smell, spaghetti, duplication, inefficiency, refactor-debt), each by an OBJECTIVE TRIGGER + in-repo example, with the not-a-finding boundary written down (taste is not fileable) and an amendment rule that binds every row at once.
+- [x] Floor is **A**, and A is DERIVED — A ≡ zero open findings on that lens for that row; nobody types a letter. Lens cells record PROVENANCE (`~03` pending / `03` swept), never a grade.
+- [x] `FINDINGS.md` routing ledger exists (id · area · lens · file:line · severity · verdict · evidence · resolved-in); verdicts are ONLY `fixed` or `invalid` (disproven) — `defer`/`wontfix` deleted, and named explicitly by the gate so they cannot be typed by accident.
+- [x] `LAUNCHAUDIT` gate written, wired into `qa-smokes.sh` (gate **#183** on the audit branch, 24 static + 159 app-boot; on THIS tree it is one of **38 static** in a **218**-gate sweep), and bite-proven **9 ways** in a green→red→green bracket against scratch copies: blank lens · `defer` verdict · below-A derivation · an unclaimed gate · a deleted entry-point file · a renamed anchor · `fixed` with no failing assertion · `invalid` with no DISPROVEN · `--freeze` with pendings outstanding.
 
 ### 02 · Correctness — runtime & UI core
-- [ ] Edge cases enumerated for terminal/PTY/daemon/scroll/layout/panes/updater-UX/first-run/Settings/themes.
-- [ ] Each guarantee verified against `file:line` and asserted in the owning gate or a unit.
-- [ ] Every finding S1–S3 fixed with a regression assertion red on pre-fix bytes (or `invalid` by disproof).
-- [ ] Scoped rows derive **A** on every lens; MILESTONE + PERCEPTION unmoved.
+- [x] Edge cases enumerated for terminal/PTY/daemon/scroll/layout/panes/updater-UX/first-run/Settings/themes — **120 verdicts** (20 rows × 6 edges) in `EDGES-02.md`, each carrying either the guard that makes it CLEAN at `file:line` or the scenario that makes it a defect. Ten parallel audits; five rows came back clean on all six.
+- [x] Each guarantee verified against `file:line` and asserted in the owning gate or a unit — every CLEAN verdict cites the guard that makes it clean; every defect carries an assertion in its owning gate or a focused unit. Row 188's signal rule was extracted to a native-free seam (`exit-code.ts`, the `attach-dims.ts` precedent) so it is provable on EVERY platform, not only POSIX.
+- [x] Every finding S1–S3 fixed with a regression assertion red on pre-fix bytes — **18 defects found, 18 fixed, 20 findings bite-proven** (F027–F046, four S1). Each proof was verified in both directions: green on the fixed bytes, red on the pre-fix bytes, with staging flags that read identically in both runs so a red names the defect and not a broken fixture.
+- [x] Scoped rows derive **A** on every lens — **all 20 of 20** (63 cells swept, zero `~02` remaining in scope). **PERCEPTION passes** (switch 41.6 ms, home 30.6 ms, echo 1.8 ms, zero frames over 100 ms). **MILESTONE unmoved**, proven by baseline rather than argued: 215.3 ms against a stashed HEAD of 298.7 ms under identical load, inside this box's recorded 187-229 ms machine-load band, everything else comfortable (avgFps 132.5, heap 54 MB, 16/16 WebGL).
+- [~] **OPERATOR:** a confirming MILESTONE run on a genuinely idle machine. **Partly answered, and by CI rather than by this box.** A dispatched three-OS sweep (`gh workflow run ci.yml -f sweeps=linux,macos,windows`, run `30181446242`) put the whole load-bound family green on three quiet dedicated runners: **MILESTONE PASS · PERCEPTION PASS · FLICKER PASS on linux, macos-26 AND windows-latest**, alongside 198/200, 198/200 and 199/200 gates (the sweep WAS 200 gates then; it is 218 on this tree). That is the strongest available answer to "is the red this diff or this box" — it is not this diff — and it needed no other session to stop working. What it is NOT: all three sweep jobs run `MOGGING_CI_GPU=soft`, a SOFTWARE renderer, and MILESTONE's budget is a frame-gap budget, which is precisely the thing a software renderer changes. So this box's remaining question is the GPU profile, not the load. **UPDATE — the idle-box run has now HAPPENED, and it came back RED.** The box finally quieted (nothing above 25% of a core system-wide) and both gates ran on it. **PERCEPTION PASSES** on real hardware with room to spare: `switchMax` 33.6 ms against 100, `echoMedian` 1.9 ms against 60, zero frames over 100 ms in any phase. **MILESTONE FAILS 3 of 3** at 270.7 / 180.6 / 215.2 ms against a 150 ms budget — always exactly ONE long frame, `avgFps` 125-135, idle phase clean at 7.1 ms, heap 50 MB/300, 16/16 WebGL. The same commit PASSES MILESTONE on all three CI OSes under a SOFTWARE renderer, so the failure lives in the real-GPU path for 16 live contexts, not in machine load and not in anything the sweep exercises. Left `[~]`: the run this box asked for is done, and its answer is a finding to investigate — the next step is a baseline probe against `origin/main` on this same quiet box, which needs the working tree overwritten from another ref and is the operator's call. Ticking a box whose own measurement came back red would be the exact dishonesty this ledger exists to prevent. See EDGES-02's closing section for the full numbers.
 
 ### 03 · Correctness — orchestration & swarm
 - [ ] Concurrency/failure edges enumerated for board/worktrees/review-merge/swarm/control-API/loops.
