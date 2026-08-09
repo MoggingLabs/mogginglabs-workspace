@@ -39,7 +39,25 @@ mkdirSync(runDir(`dev-v${PV}`), { recursive: true })
 
 // runtime-paths.mjs derives its base from LOCALAPPDATA on win32 and XDG_RUNTIME_DIR elsewhere.
 // Set both: the gate must sandbox the CLI on whichever platform it runs.
-const BASE_ENV = { LOCALAPPDATA: sandbox, XDG_RUNTIME_DIR: sandbox, HOME: sandbox }
+//
+// MOGGING_OPEN_SHIM is the third leg, and the env vars above CANNOT stand in for it. They
+// redirect what this process reads; `mogging <dir>` ends in `start`/`open`/`xdg-open`, which
+// routes by SCHEME to the app the OS registered — the INSTALLED build, which never saw this
+// sandbox. Line 19's "can never see, or touch, a live daemon" was false for exactly one row
+// (the real-directory case below), and it opened a workspace in the user's live app on every
+// sweep: four runs left panes at ordinals 14-17 in the production sessions.db. With the shim
+// the URL is recorded instead of dispatched, so the row asserts MORE than it used to.
+const openLog = join(sandbox, 'open-urls.txt')
+const BASE_ENV = { LOCALAPPDATA: sandbox, XDG_RUNTIME_DIR: sandbox, HOME: sandbox, MOGGING_OPEN_SHIM: openLog }
+
+/** Every URL runOpen would have handed to the OS, in order. */
+const openedUrls = () => {
+  try {
+    return readFileSync(openLog, 'utf8').split('\n').filter(Boolean)
+  } catch {
+    return []
+  }
+}
 
 let failed = 0
 const fail = (what, detail) => {
@@ -102,11 +120,24 @@ for (const args of [
   const r = run([join(sandbox, 'definitely-not-here')])
   if (r.code !== 2) fail('a missing directory must exit 2', `got ${r.code}; it announced a workspace over nothing`)
   if (/opening workspace/.test(r.out)) fail('a missing directory must not claim to open a workspace', r.out.trim())
+  // The rows this gate left in the user's production store carried exactly this cwd. The
+  // exit-2 guard above is what stopped new ones; this pins that nothing was DISPATCHED either.
+  if (openedUrls().length !== 0) fail('a missing directory must dispatch no URL', openedUrls().join(' '))
 }
 {
   const r = run([join(REPO, 'scripts')])
   if (r.code !== 0) fail('a real directory must still open', `got ${r.code} — the check ate the feature`)
   if (!/opening workspace/.test(r.out)) fail('a real directory must announce the workspace', JSON.stringify(r.out.slice(0, 120)))
+  // The announcement is not the contract — the URL is. Asserting it here is what the
+  // stdout check could never do: that the verb targets the right scheme and carries the
+  // resolved directory, without handing anything to the OS to act on.
+  const urls = openedUrls()
+  if (urls.length !== 1) {
+    fail('a real directory must dispatch exactly one URL', `got ${urls.length}: ${urls.join(' ')}`)
+  } else {
+    const want = `mogging://open?cwd=${encodeURIComponent(join(REPO, 'scripts'))}`
+    if (urls[0] !== want) fail('open URL must name the prod scheme and the resolved dir', `got ${urls[0]}\n     want ${want}`)
+  }
 }
 
 // ---- malformed endpoints ------------------------------------------------------------------

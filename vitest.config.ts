@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
@@ -7,6 +10,9 @@ import { defineConfig } from 'vitest/config'
 // pace math, codec editing, secret redaction, shell quoting. Aliases mirror
 // tsconfig.json's paths so tests import production modules exactly as the app does.
 const r = (p: string): string => fileURLToPath(new URL(p, import.meta.url))
+
+/** Per-run throwaway runtime base for the unit tier (see `test.env` below). */
+const UNIT_ISOLATION_BASE = mkdtempSync(join(tmpdir(), 'mogging-unit-'))
 
 export default defineConfig({
   resolve: {
@@ -21,6 +27,16 @@ export default defineConfig({
   },
   test: {
     include: ['tests/unit/**/*.test.ts'],
-    environment: 'node'
+    environment: 'node',
+    // The unit tier is the one gate developers run DIRECTLY (`npm run test`), so the
+    // sandbox has to live here and not only in scripts/qa-smokes.sh — a shell wrapper
+    // protects nothing the moment someone bypasses it. runtimeBaseDir() falls back to the
+    // real per-user tree when these are unset, which is how a test run reaches the live
+    // sessions.db at all. Pinned here, isolation travels with the config.
+    env: {
+      LOCALAPPDATA: join(UNIT_ISOLATION_BASE, 'local'),
+      XDG_RUNTIME_DIR: join(UNIT_ISOLATION_BASE, 'local'),
+      MOGGING_USERDATA: join(UNIT_ISOLATION_BASE, 'userdata')
+    }
   }
 })
