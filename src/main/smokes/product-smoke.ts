@@ -222,18 +222,30 @@ export function runProductSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.workspace.create({ name: 'Torrent' })`)
       await sleep(500)
       // The door's own verdict rides the diagnostics: a refused apply and a stalled
-      // spawn read identically as livePanes below, and they are different bugs.
-      const applyAccepted = (await ES(`window.__mogging.layout.apply(16)`)) as boolean
+      // spawn read identically as livePanes below, and they are different bugs. The
+      // apply RETRIES across the create->active settle (macOS lost that race with a
+      // single 500ms grace and returned a silent false from the no-active-view arm);
+      // refusal evidence is captured AT each refusal, not after a toast's lifetime.
+      let applyAccepted = false
+      let applyAttempts = 0
+      let applyDiag: { activeNow: boolean; toasts: string[] } | null = null
+      for (let i = 0; i < 5 && !applyAccepted; i++) {
+        applyAttempts++
+        applyAccepted = (await ES(`window.__mogging.layout.apply(16)`)) as boolean
+        if (!applyAccepted) {
+          applyDiag = (await ES(`(() => ({
+            activeNow: !!window.__mogging.workspace.active(),
+            toasts: [...document.querySelectorAll('.toast')].map((t) => (t.textContent || '').slice(0, 120))
+          }))()`).catch(() => null)) as { activeNow: boolean; toasts: string[] } | null
+          await sleep(2000)
+        }
+      }
       let paneCountAfterApply = 0
       for (let i = 0; i < 40; i++) {
         paneCountAfterApply = Number(await ES(`window.__mogging.layout.paneCount()`))
         if (paneCountAfterApply === 16) break
         await sleep(400)
       }
-      const applyDiag = (await ES(`(() => ({
-        ceiling: window.__mogging.workspace.layoutCeiling ? window.__mogging.workspace.layoutCeiling() : null,
-        toasts: [...document.querySelectorAll('.toast')].map((t) => (t.textContent || '').slice(0, 120))
-      }))()`).catch(() => null)) as { ceiling: number | null; toasts: string[] } | null
       await sleep(2500)
       const torrentIdx = Number(await ES(`window.__mogging.workspace.count()`)) - 1
       const swarmIdx = torrentIdx - 1
@@ -271,7 +283,7 @@ export function runProductSmoke(win: BrowserWindow): void {
         pass, phaseAOk, phaseBOk, anyCliInstalled,
         checklistShown, rolesOk, profileChosenOk, checklistHonest, dockOk,
         ledgerOk, mailOk, workOk, gateOk, repoOk,
-        applyAccepted, paneCountAfterApply, applyDiag,
+        applyAccepted, applyAttempts, paneCountAfterApply, applyDiag,
         phaseB, budget: BUDGET
       }
     } catch (e) {

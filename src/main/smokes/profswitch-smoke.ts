@@ -431,7 +431,11 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       await ES(`window.__mogging.agents.markReattached(${pane})`)
       const capSent = (await capNotify(pane)).code === 0
       let offered = false
-      for (let i = 0; i < 20 && !offered; i++) {
+      // 40x300ms, not 20: the out-of-band trigger pays a CLI boot + daemon round trip
+      // that the old in-renderer announce never did, and a cold Windows runner spends
+      // seconds of it in node.exe startup alone (observed: the offer rose AFTER a 6s
+      // poll and the rest of the flow then passed against it).
+      for (let i = 0; i < 40 && !offered; i++) {
         await sleep(300)
         offered = (await offerState())?.state === 'offered'
       }
@@ -526,6 +530,16 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       const writesFor2 = (): Promise<number> =>
         ES<number>(`(window.__mogging.ptyWrites || []).filter((w) => w.id === ${pane2} && String(w.data).includes('gemini')).length`)
       await ES(`window.__mogging.agents.detected({ id: ${pane2}, agentId: 'gemini', cwd: ${JSON.stringify(anchor)}, sinceMs: Date.now() })`)
+      // The arm's whole claim is "a CONFIRMED agent that never dies fails the interrupt
+      // CLOSED" — so the confirmation must exist before the trigger fires. Racing it
+      // (macOS lost this race consistently) hands the interrupt an UNCONFIRMED session,
+      // whose rules still allow the heuristic verdicts the shim cannot silence, and the
+      // OSC guess below then legitimately reads as agent-gone.
+      let confirmed2 = false
+      for (let i = 0; i < 40 && !confirmed2; i++) {
+        await sleep(300)
+        confirmed2 = (await ES(`(window.__mogging.agents.session(${pane2}) || {}).running === true`)) as boolean
+      }
       const sessionWrittenAt = Date.now()
       const capSent2 = (await capNotify(pane2)).code === 0
       let offered2 = false
