@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { redactSecrets } from '@backend/features/review'
-import { HOME_POINTER } from '@backend/features/usage/homes'
+import { HOME_POINTER, launchHomePointer } from '@backend/features/usage/homes'
 import type { AgentProfile } from '@contracts'
 
 // The pure profile rules (Phase-4/04), lifted out of profiles.ts's registerProfiles
@@ -31,14 +31,27 @@ function absoluteProfileHome(value: string): string {
 }
 
 /** Normalize legacy tilde pointers and ensure provider homes exist before a CLI
- * launch. Only the provider's canonical home pointer is touched. */
+ * launch. Only the provider's canonical home pointer is touched.
+ *
+ * Every launch STATES its config home — it never merely fails to override one. The
+ * built command's env prefix persists in the pane's shell for the pane's life
+ * (launch.ts's envPrefix), so a profile carrying no pointer — `deriveProfileDefaults`
+ * gives the FIRST profile `env: {}`, meaning "the CLI's default home" — used to emit
+ * nothing and inherit the previously-launched profile's home. Switching back to that
+ * profile then reported success and ran the OTHER account (found live 2026-08-04: the
+ * app named the new profile, /status kept showing the old email). Asymmetric, so it
+ * looked intermittent: A->B set a pointer and worked, B->A set nothing and did not.
+ * `launchHomePointer` supplies the value, resolved by the SAME precedence the reading
+ * side uses, so a launch's home and the home the app reads for it always agree. */
 export function materializeProfileEnv(provider: string, env: Record<string, string> | undefined): Record<string, string> {
-  if (!env) return {}
+  const out: Record<string, string> = { ...(env ?? {}) }
+  const pin = launchHomePointer(provider, env)
+  if (pin) out[pin.name] = pin.value
   const pointer = HOME_POINTER[provider]
-  if (!pointer || !env[pointer]) return { ...env }
-  const home = absoluteProfileHome(env[pointer])
+  if (!pointer || !out[pointer]) return out
+  const home = absoluteProfileHome(out[pointer])
   mkdirSync(home, { recursive: true })
-  return { ...env, [pointer]: home }
+  return { ...out, [pointer]: home }
 }
 
 /** Fill in what the simplified form no longer asks for. An EDIT keeps the stored

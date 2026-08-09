@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildLaunchCommand } from '@backend/features/agents/launch'
+import { materializeProfileEnv } from '../../src/main/profile-rules'
 
 // The three dialects, as the real LaunchTarget shape rather than nicknames.
 const PWSH = { platform: 'windows', shell: 'powershell' } as const
@@ -86,5 +89,55 @@ describe('buildLaunchCommand', () => {
       const cmd = buildLaunchCommand('claude', '/srv/app', false, undefined, undefined, POSIX, '11111111-2222-3333-4444-555555555555')
       expect(cmd!).not.toContain('11111111-2222-3333-4444-555555555555')
     })
+  })
+
+  // ── The SEAM that broke live on 2026-08-04 ──────────────────────────────────────
+  //
+  // Neither half was wrong alone. envPrefix persists its pointers in the pane's shell
+  // ON PURPOSE (a failover relaunch must inherit them), and materializeProfileEnv
+  // returned `{}` for the first profile ON PURPOSE ("the CLI's default home"). Composed,
+  // they meant a switch BACK to the default profile emitted no pointer at all and ran on
+  // the previous profile's config home — a different account, reported as a success.
+  //
+  // So the contract is about the composition, and lives here: whatever profile a launch
+  // names, the typed line SAYS which home it wants. A pointerless launch is the bug.
+  describe('every claude launch states its config home', () => {
+    const POINTERS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'GEMINI_CLI_HOME', 'GEMINI_CONFIG_DIR']
+    const saved = new Map<string, string | undefined>()
+    beforeEach(() => {
+      for (const k of POINTERS) {
+        saved.set(k, process.env[k])
+        delete process.env[k]
+      }
+    })
+    afterEach(() => {
+      for (const [k, v] of saved) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
+    })
+
+    // Exactly the pair in the live report: a pointerless default profile and a
+    // relocated one, in a pane that runs one after the other.
+    const DEFAULT_PROFILE = {}
+    const RELOCATED_PROFILE = { CLAUDE_CONFIG_DIR: join(homedir(), '.claude-other') }
+
+    for (const target of [POSIX, PWSH, CMD] as const) {
+      const dialect = target === POSIX ? 'posix' : target.shell
+      it(`names the home in both directions of a switch (${dialect})`, () => {
+        const toRelocated = buildLaunchCommand(
+          'claude', '/srv/app', false, materializeProfileEnv('claude', RELOCATED_PROFILE), undefined, target
+        )
+        const backToDefault = buildLaunchCommand(
+          'claude', '/srv/app', false, materializeProfileEnv('claude', DEFAULT_PROFILE), undefined, target
+        )
+        expect(toRelocated!).toContain(join(homedir(), '.claude-other'))
+        // THE REGRESSION: this line used to carry no pointer whatsoever, so the shell's
+        // leftover CLAUDE_CONFIG_DIR from the launch above survived into it.
+        expect(backToDefault!, 'a launch that names no home inherits the last one').toContain('CLAUDE_CONFIG_DIR')
+        expect(backToDefault!).toContain(join(homedir(), '.claude'))
+        expect(backToDefault!).not.toContain('.claude-other')
+      })
+    }
   })
 })

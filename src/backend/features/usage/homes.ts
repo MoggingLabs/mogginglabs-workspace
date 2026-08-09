@@ -1,5 +1,5 @@
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { AgentProfile } from '@contracts'
 
 // The per-OS / per-provider config-home table (ADR 0007 rule 3: KNOWN
@@ -52,4 +52,41 @@ export function resolveHome(providerId: string, profile: AgentProfile | null): s
   }
   const dflt = DEFAULT_HOME[providerId]
   return dflt ? dflt() : join(homedir(), `.${providerId}`)
+}
+
+/** Gemini alone has a second, LEGACY pointer that names the home directly (the
+ *  canonical one names its parent) — resolveHome prefers it, so pinning must too. */
+const LEGACY_POINTER: Record<string, string> = { gemini: 'GEMINI_CONFIG_DIR' }
+
+/**
+ * The pointer a LAUNCH must SET so the CLI lands in exactly the home `resolveHome`
+ * reads for the same profile. Null when the provider has no pointer, or when the
+ * profile already names one (its own value stands and is already emitted).
+ *
+ * Why pinning is not optional: the launch command's env prefix PERSISTS in the pane's
+ * shell (`set`/`$env:`/`export` — launch.ts's envPrefix, deliberately, so a failover
+ * relaunch inherits it). A profile with no pointer therefore emitted NOTHING and
+ * silently kept whatever the previously-launched profile left behind. Stating the
+ * home always is the only form that can overwrite a stale one.
+ *
+ * Precedence mirrors resolveHome exactly — profile, then AMBIENT pointer (the user who
+ * relocated their home the documented way, phase-11 RC5), then the documented default —
+ * so the home a launch lands in and the home the app reads for that launch cannot
+ * disagree. That agreement is the invariant; anything cleverer here reopens this bug.
+ */
+export function launchHomePointer(
+  providerId: string,
+  env: Record<string, string> | undefined
+): { name: string; value: string } | null {
+  const pointer = HOME_POINTER[providerId]
+  if (!pointer) return null
+  const legacy = LEGACY_POINTER[providerId]
+  if (env?.[pointer] || (legacy && env?.[legacy])) return null // the profile said it itself
+  const ambient = process.env[pointer]
+  if (ambient) return { name: pointer, value: expandTilde(ambient) }
+  if (legacy && process.env[legacy]) return { name: legacy, value: expandTilde(process.env[legacy]) }
+  const home = resolveHome(providerId, null)
+  // The pointer's VALUE is the home for claude/codex, but its PARENT for gemini
+  // (resolveHome joins '.gemini' onto it) — derived from resolveHome either way.
+  return { name: pointer, value: legacy ? dirname(home) : home }
 }

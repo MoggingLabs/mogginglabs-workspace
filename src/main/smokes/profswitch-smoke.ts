@@ -36,14 +36,22 @@ import { AgentChannels, type AgentInfo, type AgentInstallState } from '@contract
 // `MOGGING_PROFSWITCH=shots` is the SCREENSHOT walkthrough on a machine with TWO
 // signed-in claude accounts: real conversation on profile A -> /status shows account
 // A's email -> capped offer -> switch -> the SAME conversation resumes under profile B
-// -> /status shows account B's email. Evidence lands as out/profshot/NN-*.png; the
+// -> /status shows account B's email -> AND BACK AGAIN, /status showing A's email with
+// B's gone. The return leg is not symmetry for its own sake: profile A carries no
+// config-home pointer (it means "the CLI's default home") while B does, and the launch
+// line's pointers persist in the pane's shell — so B->A is the direction that can
+// report a switch it did not perform. Evidence lands as out/profshot/NN-*.png; the
 // JSON verdict carries soft machine assertions beside them. Profile B's config home
 // rides MOGGING_PROFSHOT_HOME_B (default ~/.claude-cmain); expected emails may ride
-// MOGGING_PROFSHOT_EMAIL_A/_B for exact-match assertions.
+// MOGGING_PROFSHOT_EMAIL_A/_B — set BOTH for the return leg's exact-match assertion,
+// which is what proves the CLI actually left account B.
 export function runProfSwitchSmoke(win: BrowserWindow): void {
   const live = process.env.MOGGING_PROFSWITCH === 'claude'
   const shots = process.env.MOGGING_PROFSWITCH === 'shots'
-  setTimeout(() => app.exit(1), live || shots ? 220000 : 150000) // safety net (real CLIs boot slowly)
+  // Safety net (real CLIs boot slowly). `shots` runs the switch TWICE — two interrupts,
+  // two CLI boots, two resumes, three /status reads — so it gets roughly double the
+  // live variant's budget rather than the same one.
+  setTimeout(() => app.exit(1), shots ? 400000 : live ? 220000 : 150000)
   const provider = live ? 'claude' : 'gemini'
   const wc = win.webContents
   const ES = <T = unknown>(js: string): Promise<T> => wc.executeJavaScript(js, true) as Promise<T>
@@ -242,6 +250,53 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       const s6 = await shot('06-status-b.png')
       const emailsB = [...new Set(((await bufferText()).match(/[\w.+-]+@[\w-]+\.[\w.-]+/g) ?? []))]
 
+      // ── THE RETURN LEG (the 2026-08-04 regression) ───────────────────────────────
+      // Everything above is A->B, and A->B always worked: profile B NAMES a config-home
+      // pointer, so the launch line sets one. The break was coming BACK. Profile A
+      // carries no pointer of its own (it means "the CLI's default home"), and the
+      // launch line's pointers PERSIST in the pane's shell — so the return switch used
+      // to emit nothing at all, relaunch on B's home, and leave /status reporting B
+      // while the app reported A. One direction of a two-direction feature was never
+      // photographed, which is exactly how it shipped. Same flow, opposite direction.
+      phase = 'switch-back'
+      await cli(['send-key', String(pane), 'escape'])
+      await sleep(800)
+      const claimedBack = (await ES(`window.__mogging.agents.capped({ providerId: 'claude', profileId: 'p-b' })`)) as boolean
+      let offeredBack = false
+      for (let i = 0; i < 20 && !offeredBack; i++) {
+        await sleep(300)
+        offeredBack = ((await ES(`window.__mogging.agents.offer(${pane})`)) as { state?: string } | null)?.state === 'offered'
+      }
+      await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Continue on')); if (b) b.click(); return 1 })()`)
+      let switchedBack = false
+      for (let i = 0; i < 90 && !switchedBack; i++) {
+        await sleep(1000)
+        switchedBack = (await ES(
+          `(() => window.__mogging.agents.offer(${pane}) === null && window.__mogging.agents.lastLaunch(${pane}).profileId === 'p-a')()`
+        )) as boolean
+      }
+      let resumedBackRunning = false
+      for (let i = 0; i < 60 && !resumedBackRunning; i++) {
+        await sleep(500)
+        resumedBackRunning = (await ES(`(window.__mogging.agents.session(${pane}) || {}).running === true`)) as boolean
+      }
+      await settleClaudeTui()
+      let quietBack = 0
+      for (let i = 0; i < 40 && quietBack < 2; i++) {
+        await sleep(1000)
+        quietBack = /esc to interrupt/i.test((await bufferText()).split('\n').slice(-14).join('\n')) ? 0 : quietBack + 1
+      }
+
+      phase = 'status-a-again'
+      await cli(['send', String(pane), '/status'])
+      await sleep(1200)
+      await cli(['send-key', String(pane), 'enter'])
+      await sleep(4000)
+      const s7 = await shot('07-status-back-on-a.png')
+      // claude paints /status in the ALT screen, so this reads the panel now on screen —
+      // not scrollback. The earlier readings cannot leak into it.
+      const emailsA2 = [...new Set(((await bufferText()).match(/[\w.+-]+@[\w-]+\.[\w.-]+/g) ?? []))]
+
       // The switch's wall-clock, offer-accept to overlay-clear — the speed the
       // trust/grants carry exists to buy (pre-carry baseline: ~15-17s).
       const fullTrace = (await ES(`window.__mogging.agents.switchTrace(${pane})`)) as { phase: string; at: number }[]
@@ -257,6 +312,12 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
       const expectedB = process.env.MOGGING_PROFSHOT_EMAIL_B
       const statusAOk = expectedA ? emailsA.includes(expectedA) : emailsA.length > 0
       const statusBOk = expectedB ? emailsB.includes(expectedB) : emailsB.length > 0
+      // The return leg's assertion is the NEGATIVE one: B's email must be GONE. "A's
+      // email is present" is far weaker — the bug's whole signature is that the switch
+      // reports profile A while the CLI still answers as B, so only B's absence
+      // distinguishes a real switch from a reported one.
+      const backOnAOk = expectedA ? emailsA2.includes(expectedA) : emailsA2.length > 0
+      const leftBOk = expectedB ? !emailsA2.includes(expectedB) : emailsA2.join() !== emailsB.join()
       const historyOk = countB >= 2 // the resumed pane still shows the exchange
       const trace = (await ES(`window.__mogging.agents.switchTrace(${pane})`)) as { phase: string }[]
       const phases = trace.map((t) => t.phase)
@@ -264,12 +325,14 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
 
       const pass = savedA && savedB && confirmed && countA >= 2 && claimed && offered && switched &&
         resumedRunning && historyOk && continuationOk && orderOk && statusAOk && statusBOk &&
+        claimedBack && offeredBack && switchedBack && resumedBackRunning && backOnAOk && leftBOk &&
         coverSeen && coverLifted
       result = {
         pass, mode: 'claude-shots', savedA, savedB, confirmed, coverSeen, coverLifted, countA, countB, claimed, offered,
         switched, resumedRunning, historyOk, continuationOk, contDiag, orderOk, phases, switchMs, buildMs,
         statusAOk, statusBOk, emailsA, emailsB,
-        screenshots: [s0, s0b, s1, s2, s3, s4, s4b, s5, s6].filter(Boolean)
+        claimedBack, offeredBack, switchedBack, resumedBackRunning, backOnAOk, leftBOk, emailsA2,
+        screenshots: [s0, s0b, s1, s2, s3, s4, s4b, s5, s6, s7].filter(Boolean)
       }
     } catch (e) {
       result = { pass: false, phase, error: String(e) }

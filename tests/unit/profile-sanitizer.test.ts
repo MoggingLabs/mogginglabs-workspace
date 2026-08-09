@@ -1,10 +1,14 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { makeTempDir, removeTempDir } from './temp-dir'
 import { deriveProfileDefaults, materializeProfileEnv, sanitizeProfile } from '../../src/main/profile-rules'
+import { resolveHome } from '../../src/backend/features/usage/homes'
 import type { AgentProfile } from '@contracts'
+
+/** A minimal profile shell for the resolveHome round-trips below — only `env` matters. */
+const PROFILE: AgentProfile = { id: 'p-x', name: 'X', provider: 'claude', env: {}, order: 0 }
 
 // The profile save boundary, exercised headless (audit F7 — this logic was
 // smoke-only). sanitizeProfile IS the ADR-0002 line: a secret-shaped env value
@@ -121,9 +125,27 @@ describe('materializeProfileEnv', () => {
   const scratch = makeTempDir('profile-rules-')
   afterAll(() => removeTempDir(scratch))
 
+  // The AMBIENT pointers decide what "no pointer of its own" resolves to, and this
+  // suite runs under whatever shell invoked vitest — which, in this repo, is routinely
+  // a Claude Code session carrying CLAUDE_CONFIG_DIR. Neutralize them per-test (the
+  // same reason logins.test.ts does) and give the ambient branch its own case.
+  const POINTERS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'GEMINI_CLI_HOME', 'GEMINI_CONFIG_DIR']
+  const saved = new Map<string, string | undefined>()
+  beforeEach(() => {
+    for (const k of POINTERS) {
+      saved.set(k, process.env[k])
+      delete process.env[k]
+    }
+  })
+  afterEach(() => {
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  })
+
   it('passes env through untouched for providers without a pointer', () => {
     expect(materializeProfileEnv('opencode', { SOME_VAR: '~/x' })).toEqual({ SOME_VAR: '~/x' })
-    expect(materializeProfileEnv('claude', undefined)).toEqual({})
   })
 
   it('normalizes a bare tilde to the OS home', () => {
@@ -136,5 +158,41 @@ describe('materializeProfileEnv', () => {
     const out = materializeProfileEnv('claude', { CLAUDE_CONFIG_DIR: home })
     expect(out.CLAUDE_CONFIG_DIR).toBe(home)
     expect(existsSync(home)).toBe(true)
+  })
+
+  // THE REGRESSION (found live 2026-08-04). A profile with no pointer is the FIRST
+  // profile — "the CLI's default home" — and it used to emit an empty env. Because the
+  // launch line's pointers persist in the pane's shell, that empty env inherited the
+  // previous profile's home: switching back to this profile changed the app's label and
+  // nothing else, and /status kept reporting the other account's email. The default
+  // home must be STATED, so it can overwrite what the last launch left set.
+  it('pins the default home for a profile that carries no pointer', () => {
+    expect(materializeProfileEnv('claude', {}).CLAUDE_CONFIG_DIR).toBe(join(homedir(), '.claude'))
+    expect(materializeProfileEnv('codex', {}).CODEX_HOME).toBe(join(homedir(), '.codex'))
+    // A launch with no profile at all lands in the same pane and inherits the same
+    // stale pointer — it is pinned for the same reason.
+    expect(materializeProfileEnv('claude', undefined).CLAUDE_CONFIG_DIR).toBe(join(homedir(), '.claude'))
+  })
+
+  it('pins gemini to the pointer PARENT, matching resolveHome', () => {
+    // GEMINI_CLI_HOME names the home's parent; resolveHome joins '.gemini' onto it.
+    expect(materializeProfileEnv('gemini', {}).GEMINI_CLI_HOME).toBe(homedir())
+    expect(resolveHome('gemini', { ...PROFILE, provider: 'gemini', env: materializeProfileEnv('gemini', {}) })).toBe(
+      join(homedir(), '.gemini')
+    )
+  })
+
+  it('honors an ambient pointer, so the launch home and the read home agree', () => {
+    const relocated = join(scratch, 'ambient-home')
+    process.env.CLAUDE_CONFIG_DIR = relocated
+    const env = materializeProfileEnv('claude', {})
+    expect(env.CLAUDE_CONFIG_DIR).toBe(relocated)
+    expect(resolveHome('claude', { ...PROFILE, env })).toBe(relocated)
+  })
+
+  it('never overrides a pointer the profile names itself', () => {
+    process.env.CLAUDE_CONFIG_DIR = join(scratch, 'ambient-home')
+    const own = join(scratch, 'claude-owned')
+    expect(materializeProfileEnv('claude', { CLAUDE_CONFIG_DIR: own }).CLAUDE_CONFIG_DIR).toBe(own)
   })
 })
