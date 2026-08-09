@@ -63,8 +63,27 @@ The threshold engine was rebuilt after the 2026-07-15 root-cause audit
 study live in `USAGE-ALERTS-REBUILD-PLAN.md`). The rules, stated once:
 
 - **Every window alerts.** Session, Weekly, and each model-scoped weekly carry
-  their own single-fire state, keyed by window label. An expired lane mutes
-  only itself. The failover suggestion judges a sibling by its WORST window.
+  their own single-fire state, keyed by the lane's stable **id** (the provider's
+  own key — `five_hour`, `seven_day_opus`) and never by its display label, which
+  the provider rewrites. A pre-id blob is adopted under the id once, on read, and
+  promoted on write. An expired lane mutes only itself. The failover suggestion
+  judges a sibling by its WORST window.
+- **`capped` requires a lane the engine has SEEN, and a live window.** A lane
+  with no stored state is indistinguishable from a renamed one, a migrated one or
+  a wiped KV — so at 100% it spends the level and speaks with warn's voice
+  (keeping the failover suggestion) rather than raising the pane-covering offer.
+  Every way an identity can be lost therefore degrades to silent, not to a
+  blocked pane. A boundary the engine cannot parse is `unknown`, and unknown is
+  not live.
+- **A lane at 99.5% is not a lane at 100%.** Adapters clamp and never round;
+  `displayPct` rounds only where a number is SHOWN and reserves 100 for
+  actually-100. Bar widths stay unrounded — a half-percent sliver is truthful.
+- **The pane offer is derived, not delivered.** Which panes are covered is a
+  function of the CURRENT lane snapshot (`usage-lane-port`), so a replayed alert
+  covers nothing and an offer withdraws itself when its window resets. The
+  `capped` alert is only a nudge to re-read that snapshot.
+- **Lanes are pruned.** An entry nobody has served in 45 days is evicted; safe
+  only because an evicted lane returns unknown, which cannot fire `capped`.
 - **A fired level re-arms itself** the moment usage falls back below it
   (minus a 5-point hysteresis) — resets, top-ups and account swaps re-arm with
   no window-identity string to get wrong (CodexBar's `thresholdsToClear`).
@@ -96,7 +115,11 @@ Gate coverage: `MOGGING_USAGE` locks the engine semantics (multi-window,
 churn, re-arm, floors, spend, profile-flip adoption); `MOGGING_USAGEUI` locks
 delivery (a pushed alert renders a house toast; an outbox alert seeded behind
 a dead renderer replays on mount and acks away); `MOGGING_WEBUSAGE` drives the
-real cursor parse on a fixture body.
+real cursor parse on a fixture body; `MOGGING_CAPFALSE` locks the NEGATIVE —
+against the real settings store, a lane rename and a profile-id change cannot
+re-fire `capped`, and a stale `capped` alert planted in the outbox and replayed
+across a renderer reload covers no pane, held across an explicit observation
+window with a live-lane positive control in the same run.
 
 ## The privacy story (ADR 0007 / 0007.a / 0007.b, in user words)
 
@@ -274,9 +297,9 @@ involves any credential the app would hold, stop: that is the line ADR
 ## Scriptability & CI
 
 `mogging usage --json` + `usage cost --json` are stable contracts
-(`PlanUsage[]`, `CostScan[]`) for scripts and CI. The six usage gates
-(USAGE, USAGEUI, USAGEGLANCE, WEBUSAGE, USAGECLI, USAGESET) run in the same
-215-gate sweep as everything else, on Windows, macOS, and Linux — entirely on
+(`PlanUsage[]`, `CostScan[]`) for scripts and CI. The seven usage gates
+(USAGE, USAGEUI, USAGEGLANCE, WEBUSAGE, USAGECLI, USAGESET, CAPFALSE) run in the same
+216-gate sweep as everything else, on Windows, macOS, and Linux — entirely on
 the FAKE adapter: under any usage smoke env the registry holds no real adapter,
 the status poller holds no fetcher, and the cost scan reads only a seeded
 fixture dir. Zero network is structural, not disciplined.

@@ -10,8 +10,7 @@ import { autoTrustClaudeLaunch, isTrustSettled, markTrustPrepared } from './auto
 import { trustDialogLive } from './prompt-answer'
 import { typeContinuation } from './continuation'
 import { readPaneBufferTail } from '../../core/terminal/pane-buffer-port'
-import { paneMatchesCappedLane } from './profile-match'
-import { getPaneFailoverOffer, setPaneFailoverOffer } from '../../core/agents/failover-offer-port'
+import { getPaneFailoverOffer, setPaneFailoverOffer, type PaneFailoverOffer } from '../../core/agents/failover-offer-port'
 import { announceUsageCapped, onUsageCapped } from '../../core/usage/usage-capped-port'
 import { recordPaneLaunch } from '../../core/agents/toolplan-panes'
 import { recordPaneCli, setMcpSnapshot } from '../../core/agents/mcp-status-port'
@@ -21,7 +20,22 @@ import { getBridge } from '../../core/ipc/bridge'
 import { getFocusedPane } from '../../core/layout/focus'
 import { getPaneCwd, getPaneCwdProjection, onPaneCwdProjection, setPaneCwd } from '../../core/layout/pane-cwd'
 import { getPaneRemote, setPaneLabel, setPaneProfile } from '../../core/layout/pane-meta'
-import { onAgentLaunchRequest, requestAgentLaunch, announceProfileFailover, type AgentLaunchRequest } from '../../core/agents/launch-port'
+import { onAgentLaunchRequest, requestAgentLaunch, announcePaneProfile, type AgentLaunchRequest } from '../../core/agents/launch-port'
+import {
+  NO_PROFILE,
+  UNKNOWN_PROFILE,
+  namedProfile,
+  orderZeroProfileId,
+  profileIdOf,
+  profilesFor,
+  resolveAdoptedProfile,
+  resolveLaunchProfile,
+  type PaneProfile
+} from '../../core/agents/pane-profile'
+import { endRetiresLaunchContext, pickFailoverTarget } from './launch-ledger'
+import { cappedOfferCopy, laneIdentity, planCappedOffers, type CappedOfferPlan, type CappedPane } from './capped-offers'
+import { getUsageLanes, onUsageLanesChange } from '../../core/usage/usage-lane-port'
+import type { CappedLane } from '../../core/usage/lane-capped'
 import { armSpawnRun, whenSpawnRunOutcome, type SpawnRunBuild } from '../../core/terminal/spawn-run-port'
 import { paneInstance } from '../../core/terminal/pane-instance-port'
 import { clearPaneAgentSession, getPaneAgentSession, onPaneAgentSession, setPaneAgentSession, type PaneAgentSession } from '../../core/agents/agent-session-port'
@@ -81,14 +95,62 @@ export const agentsFeature: UiFeature = {
     /** The last-listed profiles — the capped-claim's SYNCHRONOUS order-0 lookup
      *  (populate() refreshes it on mount, registry change, and every profiles edit). */
     let cachedProfiles: AgentProfile[] = []
-    /** What launched in each pane — the failover context. Values are ids only. */
-    const lastLaunch = new Map<number, { provider: string; cwd: string; profileId?: string }>()
+    /** What launched in each pane — the failover context. Values are ids only,
+     *  and the profile is a THREE-state fact: a pane whose account nobody
+     *  recorded is `unknown`, never defaulted to order-0. Defaulting is what let
+     *  one capped-lane event claim every pane in the grid after a restart.
+     *
+     *  Stamped with the pane INSTANCE. Pane ids are deliberately reusable, and
+     *  the session-end signal that retires an entry does not always arrive:
+     *  `clearPaneAgentSession` returns early when there is no session, so a pane
+     *  whose agent already died by verdict and is THEN disposed fires nothing.
+     *  Without the stamp that entry outlives its pane and the next occupant of
+     *  the id inherits a stranger's account. */
+    const lastLaunch = new Map<number, { provider: string; cwd: string; profile: PaneProfile; instance?: number }>()
+    /** The launch context for THIS pane — never a previous occupant's. */
+    const launchCtx = (paneId: number): { provider: string; cwd: string; profile: PaneProfile } | undefined => {
+      const ctx = lastLaunch.get(paneId)
+      if (!ctx) return undefined
+      const live = paneInstance(paneId as PaneId)
+      // Evicted only on a REPLACEMENT — a different pane now holds this id, so
+      // the entry describes someone else. An id with no pane at all is left
+      // alone: nothing can read it as a live pane's context (agent presence is
+      // false either way), and the moment a new pane claims the id this same
+      // check evicts it. An entry with no stamp is pre-change state and is
+      // likewise left alone rather than guessed about.
+      if (ctx.instance !== undefined && live !== undefined && ctx.instance !== live) {
+        lastLaunch.delete(paneId)
+        cappedRaised.delete(paneId)
+        cappedMisses.delete(paneId)
+        cappedDismissed.delete(paneId)
+        return undefined
+      }
+      return ctx
+    }
+    /** Record a launch context, stamped with the pane it is about. */
+    const setLaunchCtx = (paneId: number, ctx: { provider: string; cwd: string; profile: PaneProfile }): void => {
+      const instance = paneInstance(paneId as PaneId)
+      lastLaunch.set(paneId, { ...ctx, ...(instance !== undefined ? { instance } : {}) })
+    }
     /** Main's build wall-ms for the most recent launch (dev measurement seam). */
     let lastBuildMs: number | null = null
     /** Per-workspace auto-failover opt-in (in-memory; the toast is the default). */
     const autoFailover = new Map<string, boolean>()
     /** One-hop guard: a pane mid-failover ignores further limit events. */
     const failingOver = new Set<number>()
+    /** Offers THIS path raised, by object IDENTITY. Sampled at reconcile time and
+     *  re-checked at the instant of the write: a `switching`/`launching`/`failed`
+     *  overlay that superseded ours belongs to another owner, and clearing blind
+     *  destroyed it (the lesson launch-readiness records in as many words). */
+    const cappedRaised = new Map<number, { offer: PaneFailoverOffer; identity: string; lane: CappedLane }>()
+    /** Consecutive reconciles that failed to justify a held offer. One
+     *  unjustified sample is a rumour; two agree. */
+    const cappedMisses = new Map<number, number>()
+    /** What the human said "Not now" to. Without this latch, going level-triggered
+     *  would re-raise a dismissed card on the very next poll — a regression the
+     *  old edge-triggered code avoided by accident. It expires by itself: a rolled
+     *  window is a new lane identity. */
+    const cappedDismissed = new Map<number, string>()
     /** When this feature last WROTE a pane's session, and when detection last SAW an agent
      *  in it. Ordering the two is what keeps a relaunch honest: the dying old agent's "gone"
      *  verdict is still in flight while the new one is being typed, and clearing on it would
@@ -112,11 +174,15 @@ export const agentsFeature: UiFeature = {
     onPaneCwdProjection((paneId, projection) => {
       if (projection?.source !== 'agent') return
       const id = Number(paneId)
-      const prior = lastLaunch.get(id)
+      const prior = launchCtx(id)
       const session = getPaneAgentSession(paneId)
-      if (prior) lastLaunch.set(id, { ...prior, cwd: projection.cwd })
+      if (prior) setLaunchCtx(id, { ...prior, cwd: projection.cwd })
       else if (session) {
-        lastLaunch.set(id, { provider: session.provider, cwd: projection.cwd, profileId: session.profileId })
+        setLaunchCtx(id, {
+          provider: session.provider,
+          cwd: projection.cwd,
+          profile: resolveAdoptedProfile(session.profileId, profilesFor(cachedProfiles, session.provider))
+        })
       }
     })
 
@@ -132,7 +198,15 @@ export const agentsFeature: UiFeature = {
 
     let populateGeneration = 0
     onAgentRegistryChange((agents) => void populate(agents))
-    onProfilesChanged(() => void populate()) // Settings edits -> palette entries follow live
+    onProfilesChanged(() => {
+      // Settings edits -> palette entries follow live... and so does the capped
+      // decision: `paneMatchesCappedLane` resolves a profile-less pane's lane
+      // through the provider's ORDER-ZERO id, so login discovery minting
+      // `login-<provider>` minutes after a launch changes the answer. That is
+      // the exact case the matcher's fuzzy arm exists for, and without this the
+      // pane waited for some unrelated input to re-run the decision.
+      void populate().then(() => void reconcileCappedOffers())
+    })
     // Template opens (06b) + restore drive launches through this port. A fresh open's
     // local slots arrive as deliver:'spawn' BEFORE their panes exist — spawnDeliver must
     // arm the command synchronously in this callback, or the pane's spawn misses it.
@@ -162,15 +236,22 @@ export const agentsFeature: UiFeature = {
     // by raising the offer on every LIVE pane running that lane; unclaimed events fall
     // back to the usage feature's toast. Synchronous claim over in-memory state only.
     onUsageCapped((ev) => {
-      const orderZero = cachedProfiles
-        .filter((p) => p.provider === ev.providerId)
-        .sort((a, b) => a.order - b.order)[0]?.id
-      const targets = [...lastLaunch.entries()].filter(
-        ([id, ctx]) => isPaneLive(id) && !failingOver.has(id) && paneMatchesCappedLane(ctx, ev, orderZero)
-      )
-      for (const [id] of targets) void offerSwitch(id, 'capped')
-      return targets.length > 0
+      // The event says WHICH lane to look at again. The lane PORT says whether it
+      // is spent. `ev` is never read as evidence — it cannot be, it carries only
+      // ids — so a 24h-old outbox replay nudges a re-derivation that finds
+      // nothing and covers nothing. The boolean stays synchronous, so the claim
+      // contract (a covered pane suppresses the announcer's toast) is unchanged.
+      const plan = reconcileCappedOffers()
+      const covered =
+        plan.raise.some((r) => r.lane.providerId === ev.providerId && r.lane.profileId === ev.profileId) ||
+        [...cappedRaised.values()].some((m) => m.lane.providerId === ev.providerId && m.lane.profileId === ev.profileId)
+      return covered
     })
+    // The offer is a FUNCTION OF CURRENT STATE, so every input to that function
+    // re-runs it: the lanes changing (including the port's own expiry timer,
+    // which fires at a window's reset instead of waiting out the poll cadence),
+    // a pane's agent arriving or leaving, and a launch changing what a pane runs.
+    onUsageLanesChange(() => void reconcileCappedOffers())
 
     // TYPED-LAUNCH DETECTION. The backend watches each pane's PTY subtree and says which
     // agent CLI is really running in it (process table, not output parsing). This is the
@@ -190,7 +271,20 @@ export const agentsFeature: UiFeature = {
     // a verdict — the fail-closed hole the PROFSWITCH flake was.
     onPaneAgentSession((paneId, session, end) => {
       if (session) noteAgentPresent(Number(paneId))
-      else if (end && endProvesAgentGone(end)) noteAgentGone(Number(paneId))
+      else if (end) {
+        if (endProvesAgentGone(end)) noteAgentGone(Number(paneId))
+        cappedDismissed.delete(Number(paneId)) // a new agent is a new conversation
+        // The SHELL is gone, so the profile env `export`ed into it is gone with
+        // it — and pane ids are recycled, so a surviving entry gets inherited by
+        // a stranger. NOT endProvesAgentGone: that also answers 'verdict', and
+        // an agent dying inside a living shell is exactly the case the failover
+        // relaunch depends on. Five writers and zero deleters is how this map
+        // outlived the panes it described.
+        if (endRetiresLaunchContext(end)) lastLaunch.delete(Number(paneId))
+      }
+      // Agent presence is an input to whether a pane may be covered, so a change
+      // in it re-runs the decision.
+      void reconcileCappedOffers()
     })
 
     // A pane that restored having lost its launch settings. It comes back with its history
@@ -228,6 +322,9 @@ export const agentsFeature: UiFeature = {
         // about is gone. A 'switching' overlay stays — this verdict IS its success
         // signal mid-flight, and the flow settles it itself.
         if (getPaneFailoverOffer(paneId as PaneId)?.state === 'offered') setPaneFailoverOffer(paneId as PaneId, null)
+        // ...and drop our ownership mark with it, so the level-triggered
+        // reconcile cannot resurrect an offer about an agent that is gone.
+        cappedRaised.delete(paneId)
         return
       }
       // ONE stamp for this verdict and for any session it writes below — see writeSession.
@@ -274,8 +371,16 @@ export const agentsFeature: UiFeature = {
       // builder), so they outlive the agent that was launched with them: a CLI re-typed in
       // that pane runs under the same profile, and its config home must resolve the same way
       // — otherwise the bar looks for the session log under the default home and finds none.
-      const prior = lastLaunch.get(paneId)
-      const profileId = prior?.provider === ev.agentId ? prior.profileId : undefined
+      const prior = launchCtx(paneId)
+      // No prior context for this provider means nobody recorded an account —
+      // which is UNKNOWN, not "the default". This used to resolve to
+      // `undefined`, and `lastLaunch` is rebuilt empty on every renderer boot,
+      // so after a restart every detected pane read as the order-0 lane.
+      const profile =
+        prior?.provider === ev.agentId
+          ? prior.profile
+          : resolveAdoptedProfile(undefined, profilesFor(cachedProfiles, ev.agentId))
+      const profileId = profileIdOf(profile)
 
       // Everything that establishes the session is SYNCHRONOUS, in one tick: an `await` here
       // would open a window for this pane's next verdict — the agent exiting — to land first
@@ -290,7 +395,10 @@ export const agentsFeature: UiFeature = {
       )
       const projection = getPaneCwdProjection(paneId as PaneId)
       const failoverCwd = projection?.source === 'agent' ? projection.cwd : cwd
-      lastLaunch.set(paneId, { provider: ev.agentId, cwd: failoverCwd, profileId }) // failover works here too
+      setLaunchCtx(paneId, { provider: ev.agentId, cwd: failoverCwd, profile }) // failover works here too
+      // Record what we resolved — including "we don't know". A hand-typed CLI's
+      // slot must say `null` rather than inherit whatever the last agent left.
+      announcePaneProfile({ paneId: paneId as PaneId, provider: ev.agentId, profile })
       setPaneLabel(paneId as PaneId, nameById.get(ev.agentId) ?? ev.agentId)
       const cli = PROVIDER_CLI[ev.agentId]
       if (cli) recordPaneCli(paneId, cli) // the pane's MCP chip, same as a launched agent
@@ -444,7 +552,7 @@ export const agentsFeature: UiFeature = {
     function switchFocusedPane(provider: string, profile: { id: string; name: string }): void {
       const focus = getFocusedPane()
       if (!focus) return
-      const ctx = lastLaunch.get(focus.paneId)
+      const ctx = launchCtx(focus.paneId)
       if (!ctx || ctx.provider !== provider) {
         showToast({
           tone: 'attention',
@@ -453,9 +561,12 @@ export const agentsFeature: UiFeature = {
         })
         return
       }
-      const current = ctx.profileId ?? cachedProfiles
-        .filter((p) => p.provider === provider)
-        .sort((a, b) => a.order - b.order)[0]?.id
+      // No order-0 fallback here: under `unknown` this is undefined, so the
+      // "already runs X" no-op cannot fire and the switch PROCEEDS. That is
+      // right — the user asked for it explicitly, and switchPaneProfile
+      // interrupts and resumes under a named profile whatever came before.
+      // Worst case is one redundant interrupt onto the same account.
+      const current = profileIdOf(ctx.profile)
       if (current === profile.id) {
         showToast({ tone: 'info', title: `Pane ${focus.paneId} already runs ${profile.name}` })
         return
@@ -544,7 +655,7 @@ export const agentsFeature: UiFeature = {
          *  declaration until `commandCommit` says the command was really typed. */
         consume?: boolean
       }
-    ): Promise<{ mine: AgentProfile[]; effectiveProfile?: string; workspaceId?: string; result: AgentCommandResult }> {
+    ): Promise<{ mine: AgentProfile[]; profile: PaneProfile; workspaceId?: string; result: AgentCommandResult }> {
       // The default profile (order 0) is resolved by MAIN, not here. The renderer used to
       // substitute `mine[0]?.id` and send it as an explicitly NAMED profile, which made an
       // unnamed launch indistinguishable from a deliberate one — so a relaunch could never
@@ -556,14 +667,18 @@ export const agentsFeature: UiFeature = {
       // pane's own recorded profile, else order 0. `mine` is still fetched for the labels
       // below (profile name in toasts and the ⋯ menu).
       let mine: AgentProfile[] = []
-      let effectiveProfile = profileId
+      // A launch is ABOUT to choose, so it always knows: `named` or `none`. If
+      // listing the profiles throws we know nothing yet — and a failed list is
+      // `unknown` by definition, never a silent "no profile".
+      let profile: PaneProfile = profileId ? namedProfile(profileId) : UNKNOWN_PROFILE
       const workspaceId = workspaceIdForPane(paneId)
       try {
-        mine = (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
+        mine = profilesFor(await listProfiles(), provider)
         const result = await agentsClient.command({
           agentId: provider,
           cwd,
           resume,
+          // Only what the caller NAMED — main applies named -> remembered -> order 0.
           profileId,
           workspaceId,
           // Names the pane so a cross-profile resume can continue its EXACT session
@@ -577,12 +692,14 @@ export const agentsFeature: UiFeature = {
         })
         // What main ACTUALLY resolved, straight from the build's own intent — the labels
         // below then name the profile the pane really launched under rather than the one
-        // this side guessed. Falls back to the local guess only when main returned no
+        // this side guessed. Falls back to the local resolution only when main returned no
         // intent (a refusal, or a custom/unknown provider).
-        effectiveProfile = result.intent?.profileId ?? profileId ?? mine[0]?.id
-        return { mine, effectiveProfile, workspaceId, result }
+        profile = result.intent?.profileId
+          ? namedProfile(result.intent.profileId)
+          : resolveLaunchProfile(profileId, mine)
+        return { mine, profile, workspaceId, result }
       } catch {
-        return { mine, effectiveProfile, workspaceId, result: { ok: false } }
+        return { mine, profile, workspaceId, result: { ok: false } }
       }
     }
 
@@ -693,25 +810,29 @@ export const agentsFeature: UiFeature = {
         setPaneLabel(paneId as PaneId, label)
         const reCli = PROVIDER_CLI[provider]
         if (reCli) recordPaneCli(paneId, reCli)
-        // The adopted agent originally launched under a profile — the named one, or
-        // the provider's order-0 default, the SAME resolution a fresh launch applies.
-        // The context watch resolves the CONFIG HOME from that id (CLAUDE_CONFIG_DIR
-        // et al.); adopting without it pointed the session-log matcher at the default
-        // home, so any profile with a relocated home lost its context bar on every
-        // app restart even though the agent never stopped.
-        const mine = custom
-          ? []
-          : (await listProfiles()).filter((p) => p.provider === provider).sort((x, y) => x.order - y.order)
-        const adoptedProfile = profileId ?? mine[0]?.id
+        // The adopted agent launched under SOME profile, and the recorded slot is
+        // the only thing that knows which. The context watch resolves the CONFIG
+        // HOME from that id (CLAUDE_CONFIG_DIR et al.), so adopting without it
+        // pointed the session-log matcher at the default home and any profile
+        // with a relocated home lost its context bar on every restart.
+        //
+        // But this branch READS a process it did not start — it is not "the same
+        // resolution a fresh launch applies", which is what it used to claim. A
+        // fresh launch is about to CHOOSE; an adopt can only report. When the
+        // slot is blank the honest answer is `unknown`, and stamping order-0
+        // here is what made every restored pane match the cdev lane at once.
+        const mine = custom ? [] : profilesFor(await listProfiles(), provider)
+        const adopted = resolveAdoptedProfile(profileId, mine)
         projectLaunchCwd(paneId, cwd)
-        setPaneProfile(paneId as PaneId, mine.find((p) => p.id === adoptedProfile)?.name)
+        setPaneProfile(paneId as PaneId, mine.find((p) => p.id === profileIdOf(adopted))?.name)
         // Context bar: the adopted session predates this app run, so the log
         // matcher may look back in time (agent-session port -> context feature).
-        writeSession(paneId, { provider, cwd, profileId: adoptedProfile, adopted: true })
+        writeSession(paneId, { provider, cwd, profileId: profileIdOf(adopted), adopted: true })
         // The failover context, which an adopted pane never had: a usage limit in a pane
         // whose agent survived a restart could not offer the next profile, because nothing
         // remembered what was running in it.
-        lastLaunch.set(paneId, { provider, cwd, profileId: adoptedProfile })
+        setLaunchCtx(paneId, { provider, cwd, profile: adopted })
+        announcePaneProfile({ paneId: paneId as PaneId, provider, profile: adopted })
         return
       }
       // Past the adopt branch a resume WILL type: raise its cover now, so the build and
@@ -746,7 +867,7 @@ export const agentsFeature: UiFeature = {
           prep = await prepareCliLaunch(paneId, provider, cwd, resume, profileId, undefined, false)
         }
       }
-      const { mine, effectiveProfile, workspaceId, result } = prep
+      const { mine, profile: launchProfile, workspaceId, result } = prep
       if (!result.ok || !result.command) {
         cover.cancel() // nothing will be typed — never leave the pane blurred over a failure
         showToast({
@@ -765,7 +886,7 @@ export const agentsFeature: UiFeature = {
       // The build's own intent rides with the bytes: this is the ONLY path by which a pane
       // launched any way other than the wizard ever records what it is running.
       agentsClient.launchInto(paneId, result.command, result.intent)
-      recordCliLaunch(paneId, provider, cwd, resume, { mine, effectiveProfile, workspaceId, result })
+      recordCliLaunch(paneId, provider, cwd, resume, { mine, profile: launchProfile, workspaceId, result })
       // Hold the cover until the agent is genuinely usable, then lift it — on the agent's
       // word OR on the ceiling, because a cover that can outlive its own failure mode is a
       // trap rather than a cover.
@@ -781,15 +902,15 @@ export const agentsFeature: UiFeature = {
       provider: string,
       cwd: string,
       resume: boolean,
-      prep: { mine: AgentProfile[]; effectiveProfile?: string; workspaceId?: string; result: AgentCommandResult }
+      prep: { mine: AgentProfile[]; profile: PaneProfile; workspaceId?: string; result: AgentCommandResult }
     ): void {
-      const { mine, effectiveProfile, workspaceId, result } = prep
+      const { mine, profile, workspaceId, result } = prep
       projectLaunchCwd(paneId, cwd)
       // The profile's email is a label the app cannot enforce — the CLI's OAuth
       // lands on whatever account the browser offers. Main checked the launch
       // home; say what it found while the sign-in (or the mixup) is on screen.
       if (result.signIn) {
-        const profileName = mine.find((p) => p.id === effectiveProfile)?.name
+        const profileName = mine.find((p) => p.id === profileIdOf(profile))?.name
         showToast(
           result.signIn.actual
             ? {
@@ -837,7 +958,12 @@ export const agentsFeature: UiFeature = {
           .then((plan) => recordPaneLaunch(paneId, workspaceId, planSignature(plan)))
           .catch(() => undefined)
       }
-      lastLaunch.set(paneId, { provider, cwd, profileId: effectiveProfile })
+      setLaunchCtx(paneId, { provider, cwd, profile })
+      // The RESOLVED profile, announced so the manifest records a fact. The slot
+      // used to be written from the launch REQUEST, where an omitted profile
+      // means "use the default" — a statement about a request, not about an
+      // account. Persisting it as one is why every restore re-derived order-0.
+      announcePaneProfile({ paneId: paneId as PaneId, provider, profile })
       if (typeof result.buildMs === 'number') lastBuildMs = result.buildMs
       // Propagate MCP status to this pane's header (8/11): record its CLI +
       // the connected count it launched with (for the restart nudge).
@@ -845,10 +971,10 @@ export const agentsFeature: UiFeature = {
       if (cli) recordPaneCli(paneId, cli)
       // Pane-meta carries the profile NAME only (⋯ menu note, 6/04) — never env.
       // A deleted/unknown id resolves to no name: the note simply disappears.
-      setPaneProfile(paneId as PaneId, mine.find((p) => p.id === effectiveProfile)?.name)
+      setPaneProfile(paneId as PaneId, mine.find((p) => p.id === profileIdOf(profile))?.name)
       // Context bar: LAUNCH cwd + profile ID (the id names the config home main-side;
       // env values never ride the port — ADR 0002).
-      writeSession(paneId, { provider, cwd, profileId: effectiveProfile })
+      writeSession(paneId, { provider, cwd, profileId: profileIdOf(profile) })
       // FOLDER TRUST, the way claude itself records it. Opening a workspace at a folder
       // IS the trust declaration (product decision), and claude's own mechanism for
       // saying so is `projects["<cwd>"].hasTrustDialogAccepted` in its state file — which
@@ -879,7 +1005,7 @@ export const agentsFeature: UiFeature = {
       }
       setPaneLabel(paneId as PaneId, nameById.get(provider) ?? provider)
       // Booleans/ids only — never env values or command text (ADR 0005).
-      getTelemetry().captureEvent({ name: 'agent.launched', props: { provider, resume, profiled: !!effectiveProfile } })
+      getTelemetry().captureEvent({ name: 'agent.launched', props: { provider, resume, profiled: profile.kind === 'named' } })
     }
 
     /** The custom-command twin of recordCliLaunch (wizard custom row — ADR 0005/0002:
@@ -890,6 +1016,10 @@ export const agentsFeature: UiFeature = {
       // Published even though unsupported: it CLEARS any previous agent's context
       // bar in this pane (the context feature filters non-context providers).
       writeSession(paneId, { provider, cwd })
+      // A custom command takes the slot over from whatever profiled agent was
+      // there. Blank the recorded profile, or restore relaunches carrying a
+      // profile id that describes nothing running.
+      announcePaneProfile({ paneId: paneId as PaneId, provider, profile: NO_PROFILE })
       getTelemetry().captureEvent({ name: 'agent.launched', props: { provider: 'custom', resume } })
     }
 
@@ -1022,7 +1152,7 @@ export const agentsFeature: UiFeature = {
         // The workspace manifest follows the switch (6/04) — otherwise the next restart
         // resurrects the capped profile. AFTER the interrupt verdict: a failed switch
         // used to rewrite the manifest anyway, promising a profile it never launched.
-        announceProfileFailover({ paneId: paneId as PaneId, profileId: next.id })
+        announcePaneProfile({ paneId: paneId as PaneId, provider, profile: namedProfile(next.id) })
         // HOLD THE BLUR until the resumed session is really usable: the machinery under
         // it (shell prompt, the typed resume command, the CLI's boot, the auto-answered
         // trust dialog) is not the user's business — they clicked Continue and the next
@@ -1077,15 +1207,71 @@ export const agentsFeature: UiFeature = {
       }
     }
 
+    /** Bring every pane's usage-limit offer into line with what the lane port
+     *  says RIGHT NOW. Idempotent, and safe to call from any input.
+     *
+     *  This replaces "an alert arrived, so cover the panes". The offer is now a
+     *  function of current state, which means three things the event-driven
+     *  version could not do: a replayed or stale alert covers nothing, an offer
+     *  withdraws itself when its window resets, and launching into a lane that is
+     *  ALREADY spent raises the offer immediately instead of waiting for an edge
+     *  that fired hours ago. */
+    function reconcileCappedOffers(): CappedOfferPlan {
+      const snap = getUsageLanes()
+      // Keys materialised FIRST: launchCtx evicts a stale entry as it reads it,
+      // and mutating the map mid-iteration is how you skip an element.
+      const panes: CappedPane[] = []
+      for (const id of [...lastLaunch.keys()]) {
+        const ctx = launchCtx(id)
+        if (!ctx) continue // this pane's id belongs to someone else now
+        const mark = cappedRaised.get(id)
+        const holdsOurOffer = !!mark && getPaneFailoverOffer(id as PaneId) === mark.offer
+        panes.push({
+          paneId: id,
+          provider: ctx.provider,
+          profile: ctx.profile,
+          // PRESENCE, never the absence of a verdict: `isPaneLive` only ever meant
+          // "this pane's shell has produced output", which is true of a bare
+          // prompt whose agent left and of a stranger pane that recycled the id.
+          agentPresent: getPaneAgentSession(id as PaneId)?.provider === ctx.provider,
+          busy: failingOver.has(id),
+          holdsOurOffer,
+          ...(holdsOurOffer && mark ? { raisedFor: mark.identity } : {}),
+          ...(holdsOurOffer && mark?.lane.resetsAt ? { raisedResetsAt: mark.lane.resetsAt } : {}),
+          missStreak: cappedMisses.get(id) ?? 0,
+          ...(cappedDismissed.has(id) ? { dismissedFor: cappedDismissed.get(id) } : {})
+        })
+      }
+      const plan = planCappedOffers(panes, snap.capped, snap.known, (providerId) =>
+        orderZeroProfileId(cachedProfiles, providerId)
+      )
+      // Only a pane the planner deliberately HELD keeps a streak; anything it
+      // decided about is settled, so its count starts over.
+      const held = new Set(plan.holdAmbiguous)
+      for (const id of [...cappedMisses.keys()]) if (!held.has(id)) cappedMisses.delete(id)
+      for (const id of plan.holdAmbiguous) cappedMisses.set(id, (cappedMisses.get(id) ?? 0) + 1)
+      for (const paneId of plan.forget) cappedRaised.delete(paneId)
+      for (const paneId of plan.lower) {
+        const mark = cappedRaised.get(paneId)
+        cappedRaised.delete(paneId)
+        // Identity, not a boolean: between the plan and this write the port may be
+        // holding someone else's overlay, and clearing blind would destroy it.
+        if (mark && getPaneFailoverOffer(paneId as PaneId) === mark.offer) setPaneFailoverOffer(paneId as PaneId, null)
+      }
+      for (const { paneId, lane } of plan.raise) void offerSwitch(paneId, 'capped', lane)
+      return plan
+    }
+
     /** Usage-limit failover (4/04): next profile, same pane, same cwd. ONE hop.
      *  The surface is the pane's own blurred OFFER overlay (failover-offer port) —
      *  auto-failover skips straight to the switching state. */
-    async function offerSwitch(paneId: number, trigger: 'capped' | 'notify'): Promise<void> {
+    async function offerSwitch(paneId: number, trigger: 'capped' | 'notify', lane?: CappedLane): Promise<void> {
       if (failingOver.has(paneId)) return
-      const ctx = lastLaunch.get(paneId)
+      const ctx = launchCtx(paneId)
       if (!ctx) return
-      const mine = (await listProfiles()).filter((p) => p.provider === ctx.provider).sort((x, y) => x.order - y.order)
-      if (mine.length < 2) {
+      const mine = profilesFor(await listProfiles(), ctx.provider)
+      const pick = pickFailoverTarget(ctx.profile, mine)
+      if (pick.kind === 'too-few') {
         showToast({
           tone: 'attention',
           title: `Usage limit in pane ${paneId}`,
@@ -1093,9 +1279,26 @@ export const agentsFeature: UiFeature = {
         })
         return
       }
-      const curIdx = Math.max(0, mine.findIndex((p) => p.id === ctx.profileId))
-      const next = mine[(curIdx + 1) % mine.length]
-      const cur = mine[curIdx]
+      // We could not name the account this pane is on, so we may not move it and
+      // we certainly may not put a name on a card. This branch replaces a
+      // `Math.max(0, findIndex(...))` clamp that turned "unresolvable" into
+      // index 0 — which is where the words "cdev" and "cmain" came from.
+      //
+      // Sits ABOVE the auto-failover branch on purpose: auto-failover must never
+      // switch a pane whose account it could not identify, and here it
+      // structurally cannot get the chance.
+      if (pick.kind === 'unidentified') {
+        showToast({
+          tone: 'attention',
+          title: `Usage limit in pane ${paneId}`,
+          // No action button. One was tried and removed: any button here has to
+          // pick a target profile, and picking one is exactly the guess this
+          // branch exists to refuse. The ⋯ menu is where the human chooses.
+          body: `This pane's account isn't on record, so it was left alone. Relaunch the agent, or use “Switch profile” in the ⋯ menu to move it.`
+        })
+        return
+      }
+      const { current: cur, next } = pick
       const doSwitch = (): void => void switchPaneProfile(paneId, ctx.provider, ctx.cwd, next, trigger)
       // The workspace that HOLDS this pane — a moved pane keeps its id, so the old
       // `id / 100` would read the auto-failover setting of the workspace it left.
@@ -1107,13 +1310,27 @@ export const agentsFeature: UiFeature = {
         doSwitch()
         return
       }
-      setPaneFailoverOffer(paneId as PaneId, {
+      // The card names the window it is actually talking about. Without a lane —
+      // the per-pane notify path, which knows a limit was hit but not which
+      // window — it keeps the original unqualified sentence rather than
+      // inventing one.
+      const copy = cappedOfferCopy(cur.name, next.name, lane)
+      const offer: PaneFailoverOffer = {
         state: 'offered',
-        title: `${cur.name} hit its usage limit`,
+        title: copy.title,
         nextName: next.name,
+        ...(copy.message ? { message: copy.message } : {}),
         onAccept: doSwitch,
-        onDismiss: () => setPaneFailoverOffer(paneId as PaneId, null)
-      })
+        onDismiss: () => {
+          // Latch WHAT was declined before clearing, so the level-triggered
+          // reconcile does not put the same card straight back up.
+          if (lane) cappedDismissed.set(paneId, laneIdentity(lane))
+          cappedRaised.delete(paneId)
+          setPaneFailoverOffer(paneId as PaneId, null)
+        }
+      }
+      if (lane) cappedRaised.set(paneId, { offer, identity: laneIdentity(lane), lane })
+      setPaneFailoverOffer(paneId as PaneId, offer)
     }
 
     exposeForDev()
@@ -1149,7 +1366,16 @@ export const agentsFeature: UiFeature = {
           if (!id) return null
           return (await getBridge().invoke(AgentChannels.failoverGet, id)) === true
         },
-        lastLaunch: (paneId: number) => ({ ...(lastLaunch.get(paneId) ?? {}) }),
+        // Flattened for the smokes that read `.provider` / `.profileId` off this
+        // (PROFILES, PROFSWITCH, TEMPLATE, LAUNCHNOW). `profileKind` is the new
+        // fact they could not otherwise see: "no account on record" is different
+        // from "the default", and only one of them may be acted on.
+        lastLaunch: (paneId: number) => {
+          const ctx = launchCtx(paneId)
+          return ctx
+            ? { provider: ctx.provider, cwd: ctx.cwd, profileId: profileIdOf(ctx.profile), profileKind: ctx.profile.kind }
+            : {}
+        },
         paneLive: (paneId: number) => isPaneLive(paneId),
         // LAUNCHNOW gate seam: the launch cover's state for a pane, or null when the pane
         // is the user's. The gate polls it to prove a booting agent is covered and then
@@ -1188,6 +1414,18 @@ export const agentsFeature: UiFeature = {
         // Smoke/dev shim: the usage engine's capped trigger, driven at the port the
         // real alert path announces on — proves claim → pane offer end to end.
         capped: (ev: { providerId: string; profileId: string }) => announceUsageCapped(ev),
+        // Smoke/dev shim (CAPFALSE): WHY a capped nudge did or did not cover a
+        // pane. A negative gate that can only see "no card" cannot tell a
+        // correctly withheld offer from a feature that silently stopped working,
+        // so it reads the evidence the decision was made on.
+        cappedState: () => {
+          const snap = getUsageLanes()
+          return {
+            laneKnown: snap.known,
+            cappedLanes: [...snap.capped.values()].map((l) => `${l.providerId}/${l.profileId}/${l.windowLabel}`),
+            raised: [...cappedRaised.keys()]
+          }
+        },
         // Smoke/dev shim: put a pane in the daemon-reattached state (F1's precondition)
         // without an app restart over a surviving daemon.
         markReattached: (paneId: number) => markPaneReattached(paneId),

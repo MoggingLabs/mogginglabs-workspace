@@ -8,6 +8,17 @@ export type UsageHealth = 'fresh' | 'stale' | 'error' | 'unconfigured'
 
 /** One metered window (e.g. the 5h session window, the weekly window). */
 export interface UsageWindow {
+  /** STABLE lane identity — the provider's own key (`five_hour`,
+   *  `seven_day_opus`), never a display string. Persisted state (the alert
+   *  engine's single-fire latch, the history ring) keys off THIS, because a
+   *  label is provider-controlled prose that renames: the model-specific
+   *  weekly has already changed name twice, and every rename orphaned the
+   *  latch, which re-fires `capped` on a lane that never descended. Optional
+   *  on the wire (PlanUsage is public — `mogging usage --json`, the fixture
+   *  format); the seam backfills a slug from the label so no consumer sees a
+   *  window without one. */
+  id?: string
+  /** DISPLAY ONLY. Provider wording, rendered verbatim; never an identity. */
   label: string
   /** 0–100. Clamped by the seam; adapters normalize provider units to this. */
   usedPct: number
@@ -21,6 +32,46 @@ export interface UsageWindow {
   /** VIEW-attached (7/10): the reset line pre-formatted by the ONE backend
    *  reset formatter in the user's chosen style. Adapters never set this. */
   resetText?: string
+}
+
+/** Two reset boundaries closer together than this are the SAME window.
+ *
+ *  Anthropic recomputes `resets_at` per request, so two samples of one window
+ *  carry slightly different strings; a rollover is a boundary that ADVANCES
+ *  beyond this tolerance. Shared by the alert engine and the renderer's offer
+ *  planner deliberately — the same number written twice is the same number
+ *  until someone edits one of them. */
+export const RESET_BOUNDARY_TOLERANCE_MS = 2 * 60_000
+
+/** Is this window still the one running now?
+ *
+ *  `live`    — no boundary published, or it is still ahead of us.
+ *  `lapsed`  — the boundary has passed; whatever percentage rides along is the
+ *              PREVIOUS window's, however fresh the snapshot that carried it.
+ *  `unknown` — a boundary we cannot parse. Not live, not lapsed: undateable.
+ *
+ *  ONE predicate, deliberately shared by the alert engine and the renderer.
+ *  There used to be two, and they disagreed on exactly the `unknown` case —
+ *  the alert loop evaluated an unparseable boundary (so it could fire `capped`
+ *  on a lane it could not date) while the failover scorer treated the same
+ *  lane as dead. A rule split across two call sites is a rule that drifts. */
+export function windowLiveness(w: Pick<UsageWindow, 'resetsAt'>, now: number): 'live' | 'lapsed' | 'unknown' {
+  if (!w.resetsAt) return 'live'
+  const at = Date.parse(w.resetsAt)
+  if (!Number.isFinite(at)) return 'unknown'
+  return at > now ? 'live' : 'lapsed'
+}
+
+/** A percentage as it may be SHOWN. 100 is reserved for actually-100 and 0 for
+ *  actually-0, because those two read as claims: "100% used" next to a lane the
+ *  app did not treat as spent is a self-contradiction the user cannot resolve.
+ *  A no-op on integers, so existing copy is unchanged to the byte. Bar WIDTHS
+ *  deliberately do not use this — a 0.4% sliver is a truthful sliver. */
+export function displayPct(x: number): number {
+  if (Number.isNaN(x)) return 0 // no reading; paint nothing rather than "NaN%"
+  if (x <= 0) return 0
+  if (x >= 100) return 100 // +Infinity lands here, NOT on 0 — unbounded is not idle
+  return Math.min(99, Math.max(1, Math.round(x)))
 }
 
 /** Usage for one plan on one (provider, profile) pair — the tile unit. */
@@ -140,6 +191,12 @@ export interface UsageAlert {
   profileId: string
   planLabel: string
   windowLabel: string
+  /** ISO boundary of the window this alert NAMES, when the provider publishes
+   *  one. Delivery hygiene reads it: news about a window that has already
+   *  rolled is OVER, however recently it was queued. Without it a `capped`
+   *  alert about a 5-hour window outlived its own subject by the outbox TTL
+   *  and replayed into a pane offer after a restart. */
+  resetsAt?: string
   usedPct: number
   /** Composed main-side — the toast renders title/body VERBATIM. */
   title: string

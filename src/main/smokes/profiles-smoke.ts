@@ -98,6 +98,14 @@ export function runProfilesSmoke(win: BrowserWindow): void {
 
       // ── 3. usage-limit -> the pane's blurred OFFER overlay (not a toast) ─────
       // The offer card names the NEXT profile and dismisses on "Not now".
+      //
+      // This proves the offer MACHINERY, not a production trigger. It enters
+      // through the daemon's `notify` door, and nothing in production emits that
+      // event — Claude Code's hook payloads carry no quota state (notify-hook.ts
+      // maps eleven notification types, none of them a limit). That is
+      // profiles-failover/F4, still open. The real trigger is the usage engine's
+      // lane snapshot, and its NEGATIVE — a stale capped alert covering no pane —
+      // belongs to CAPFALSE.
       await cli(['send', String(pane), `node "${cliPath}" notify --event usage-limit`])
       let offerOk = false
       for (let i = 0; i < 30 && !offerOk; i++) {

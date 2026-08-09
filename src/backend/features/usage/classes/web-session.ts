@@ -70,7 +70,8 @@ export interface WebSessionSpec {
   parse(body: unknown, now: number, profileId: string): PlanUsage
 }
 
-const clampPct = (n: number): number => Math.max(0, Math.min(100, Math.round(n)))
+/** Clamp, never round — 100 is reserved for actually-100 (it covers panes). */
+const clampPct = (n: number): number => Math.max(0, Math.min(100, n))
 
 /** A pasted value may be the bare cookie VALUE or a whole `Cookie:` header —
  *  users copy both. A '=' means header-shaped; else pair it with the row's

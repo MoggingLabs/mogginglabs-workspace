@@ -16,7 +16,10 @@ import { WINDOW_MS } from '@contracts'
 
 export type CliStoreReader = (home: string, profileId: string, signal: AbortSignal) => Promise<PlanUsage>
 
-const clampPct = (n: number): number => Math.max(0, Math.min(100, Math.round(n)))
+/** Clamp, never round — rounding a measurement up to 100 manufactures a cap.
+ *  Gemini reaches here as `(1 - remainingFraction) * 100`, so a remaining
+ *  fraction of 0.004 read as 99.6 and was reported as fully spent. */
+const clampPct = (n: number): number => Math.max(0, Math.min(100, n))
 
 function labeled(providerId: string, profileId: string, health: PlanUsage['health'], reason: string): PlanUsage {
   return { providerId, profileId, planLabel: '—', windows: [], fetchedAt: Date.now(), health, reason }

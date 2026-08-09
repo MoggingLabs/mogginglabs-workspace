@@ -29,7 +29,7 @@ const fileLines = new Map()
 
 const STATUSES = new Set(['open', 'fixed', 'invalid', 'deferred'])
 const MIN_REASON = 20
-const PINNED_ROWS = 506
+const PINNED_ROWS = 526
 
 const args = process.argv.slice(2)
 const file = args.find((a) => !a.startsWith('--')) ?? 'docs/research/findings-ledger.md'

@@ -22,12 +22,15 @@ export interface PaneFailoverOffer {
    *  a booting CLI silently EATS keystrokes until its TUI mounts — measured at ~2s for
    *  claude, which is exactly long enough for a fast user to lose a sentence. */
   state: 'offered' | 'switching' | 'launching' | 'failed'
-  /** Why the offer is up ("Work hit its usage limit") — composed by the owner. */
+  /** Why the offer is up ("Work hit its Weekly limit") — composed by the owner,
+   *  which NAMES the window that is spent. A bare "hit its usage limit" let a
+   *  weekly cap read as a claim about whichever window the user then checked. */
   title: string
   /** The target profile's display name — the button/label text builds on it. For
    *  `launching` it is the agent being started ("Claude"). */
   nextName: string
-  /** failed-state copy (manual recovery guidance) — rendered verbatim. */
+  /** offered/launching/failed: the line under the title, rendered VERBATIM.
+   *  Falls back to the state's own default sentence when absent. */
   message?: string
   /** offered only: the human clicked Continue. */
   onAccept?: () => void

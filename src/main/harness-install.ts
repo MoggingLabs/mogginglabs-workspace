@@ -71,7 +71,8 @@ function usageWorld(): UsageWorld | null {
     Object.keys(process.env).some((k) => k.startsWith('MOGGING_USAGE')) ||
     !!process.env.MOGGING_SETUSAGE ||
     !!process.env.MOGGING_GALLERY ||
-    !!process.env.MOGGING_UXMILESTONE // the 8.5/09 composed smoke shows Usage on the FAKE adapter — offline, like SETUSAGE
+    !!process.env.MOGGING_UXMILESTONE || // the 8.5/09 composed smoke shows Usage on the FAKE adapter — offline, like SETUSAGE
+    !!process.env.MOGGING_CAPFALSE // the false-cap gate needs real lane readings to prove one is NOT capped
 
   const cadenceEnv = Number(process.env.MOGGING_USAGE_CADENCE_MS)
   const cadenceMsOverride =
