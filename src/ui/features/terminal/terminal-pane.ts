@@ -691,6 +691,30 @@ export class TerminalPane {
     // the "unmeasured" guard passed and 80x24 went out anyway. That is the very resize this
     // guard exists to prevent, in a narrower window.
     const grid = proposeGrid(this.term)
+    // ...and APPLY what we are about to publish, in the same operation. A spawn's dims are
+    // not a request: the daemon resizes the live pty to them before it snapshots the replay
+    // (SessionManager.ensure), so this call sets the PTY's grid. Publishing one the renderer
+    // does not itself hold puts the two sides of a ConPTY session at different sizes for as
+    // long as it takes some later refit to catch xterm up — and on Windows that window is not
+    // cosmetic:
+    //
+    //   ConPTY is a DIFFING renderer. It positions absolutely inside its own viewport
+    //   (`ESC[<row>;<col>H`) and paints only the cells it believes changed, erasing nothing
+    //   it did not repaint. That is sound only while conhost's screen and the terminal's
+    //   viewport hold the same lines at the same row indices. Grow the pty's ROWS without
+    //   growing xterm's and they no longer do: conhost appends blank rows at the BOTTOM and
+    //   leaves its cursor where it was (pty-emulation.ts), the replay lands in a shorter
+    //   xterm whose content ends at ITS bottom row, and conhost's answering repaint — the
+    //   one thing that would re-align them — is clipped by the rows xterm does not have.
+    //   Every line printed afterwards then lands (rows-grown) rows above the visible end of
+    //   the pane and OVERWRITES an older row, keeping whatever tail outran it.
+    //   PROFPERSIST_B read one of those rows back: `MARKB1=PROFILE_B_4242echo
+    //   SHELL_READY_0_…` — a correct value with a dead command line still hanging off it.
+    //
+    // applyGrid dedupes, so a pane whose fit already landed pays nothing, and the empty
+    // buffer of a first spawn has nothing to reflow. The rule this encodes is the one the
+    // whole dims invariant rests on: ONE operation moves BOTH sides, never one of them.
+    if (grid) applyGrid(this.term, grid)
     return terminalClient
       .spawn({
         id: this.id,

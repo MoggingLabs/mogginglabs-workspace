@@ -8,6 +8,7 @@ import { bodyWithoutComments, sourceOf } from './source-body'
  *
  *   1. Nothing is PUBLISHED before its inputs are final (the faces are active).
  *   2. Every fit ASSERTS to the pty, rather than only when xterm's own grid changed.
+ *   2b. Nothing is published that xterm does not itself hold — ONE operation, BOTH sides.
  *   3. The session REPORTS the grid it holds, and the renderer heals a divergence.
  *   4. The daemon's belief FOLLOWS its pty, and never leads it.
  *   5. No drop is silent.
@@ -59,6 +60,40 @@ describe('2. every fit asserts to the pty', () => {
     const reassert = bodyWithoutComments(sourceOf(TERMINAL_PANE), 'private reassertGrid()')
     expect(reassert).toContain('this.refit()')
     expect(reassert).not.toContain('terminalClient.resize')
+  })
+})
+
+describe('2b. a spawn publishes only a grid xterm actually holds', () => {
+  // A spawn's dims are not a request. The daemon resizes the LIVE pty to them and only then
+  // snapshots the replay (SessionManager.ensure), so this payload sets the pty's grid — while
+  // `proposeGrid` says what the grid SHOULD be, which is not what xterm currently holds. Send
+  // one without applying the other and a ConPTY session runs at two sizes at once.
+  //
+  // That is not cosmetic on Windows. ConPTY paints by DIFF, positioning absolutely inside its
+  // own viewport and erasing nothing it did not repaint. Grow the pty's rows without growing
+  // xterm's and conhost appends blank rows at the BOTTOM while the replay lands in a shorter
+  // terminal whose content ends at ITS bottom row (pty-emulation.ts); conhost's answering
+  // repaint — the one thing that re-aligns them — is clipped by the rows xterm does not have.
+  // Every line printed afterwards lands N rows above the visible end of the pane and
+  // overwrites an older row, keeping whatever tail outran it. PROFPERSIST_B read one back:
+  // `MARKB1=PROFILE_B_4242echo SHELL_READY_0_…` — the right value with a dead command line
+  // still hanging off it.
+  const body = bodyWithoutComments(sourceOf(TERMINAL_PANE), 'private spawnPty(')
+
+  it('applies the proposal to xterm BEFORE it goes out as the spawn dims', () => {
+    const applied = body.indexOf('applyGrid(this.term, grid)')
+    const published = body.indexOf('cols: grid?.cols')
+    expect(applied).toBeGreaterThan(-1)
+    expect(published).toBeGreaterThan(-1)
+    expect(applied).toBeLessThan(published)
+  })
+
+  it('publishes exactly what it applied — one measurement, no second proposal between them', () => {
+    expect(body.match(/proposeGrid\(this\.term\)/g) ?? []).toHaveLength(1)
+    expect(body).toMatch(/applyGrid\(this\.term,\s*grid\)/)
+    // An unmeasured pane applies nothing and sends nothing: `null` is the designed state,
+    // and inventing a size here is the hazard the whole invariant exists to prevent.
+    expect(body).toMatch(/if\s*\(grid\)\s*applyGrid\(/)
   })
 })
 

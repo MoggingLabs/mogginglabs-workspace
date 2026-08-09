@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { gridFor, MIN_COLS, MIN_ROWS, publishableCell } from '@ui/features/terminal/pane-fit'
+import { applyGrid, gridFor, MIN_COLS, MIN_ROWS, publishableCell } from '@ui/features/terminal/pane-fit'
+import type { Terminal } from '@xterm/xterm'
 
 // The house grid derivation that retired @xterm/addon-fit. The one deliberate
 // difference from the addon is the ABSENCE of its scrollbar reservation
@@ -35,6 +36,53 @@ describe('spawn sends the PROPOSAL, not xterm’s current grid', () => {
   it('measures exactly once — a torn read cannot disagree with itself', () => {
     const spawnPty = src.slice(src.indexOf('private spawnPty'), src.indexOf('.then((res)'))
     expect(spawnPty.match(/proposeGrid\(this\.term\)/g) ?? []).toHaveLength(1)
+  })
+})
+
+describe('applyGrid — the half of "one operation, both sides" that xterm pays', () => {
+  // The spawn publishes its proposal to the PTY (the daemon resizes the live session to it
+  // before it snapshots the replay), so the same call has to move xterm. That is only
+  // affordable if an already-fitted pane pays nothing for it — pinned here, because the
+  // comment on the call site claims exactly that.
+  interface FakeTerm {
+    term: Terminal
+    resizes: Array<[number, number]>
+    clears: { n: number }
+  }
+  const fakeTerm = (cols: number, rows: number): FakeTerm => {
+    const resizes: Array<[number, number]> = []
+    const clears = { n: 0 }
+    const term = {
+      cols,
+      rows,
+      resize(c: number, r: number): void {
+        resizes.push([c, r])
+        term.cols = c
+        term.rows = r
+      },
+      _core: { _renderService: { clear: (): void => void clears.n++ } }
+    }
+    return { term: term as unknown as Terminal, resizes, clears }
+  }
+
+  it('resizes xterm — and says so — when the grid actually moved', () => {
+    const f = fakeTerm(80, 24)
+    expect(applyGrid(f.term, { cols: 120, rows: 27 })).toBe(true)
+    expect(f.resizes).toEqual([[120, 27]])
+  })
+
+  it('costs NOTHING when the pane already holds the grid — no resize, no render clear', () => {
+    const f = fakeTerm(120, 27)
+    expect(applyGrid(f.term, { cols: 120, rows: 27 })).toBe(false)
+    expect(f.resizes).toEqual([])
+    expect(f.clears.n).toBe(0)
+  })
+
+  it('is idempotent — applying the same grid twice moves xterm once', () => {
+    const f = fakeTerm(80, 24)
+    applyGrid(f.term, { cols: 120, rows: 27 })
+    applyGrid(f.term, { cols: 120, rows: 27 })
+    expect(f.resizes).toEqual([[120, 27]])
   })
 })
 
