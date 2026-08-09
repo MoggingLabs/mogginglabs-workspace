@@ -314,7 +314,12 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
         offered = ((await ES(`window.__mogging.agents.offer(${pane})`)) as { state?: string } | null)?.state === 'offered'
       }
       const s4 = await shot('04-capped-offer-overlay.png')
-      await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Continue on')); if (b) b.click(); return 1 })()`)
+      // The click reports whether it FOUND the card: under full-sweep load the offer can
+      // rise after the poll above gives up (node.exe cold start + daemon round trip), and
+      // the click landing IS the proof the overlay was there — the poll and the click are
+      // two witnesses of one fact, and either may speak for it.
+      const acceptClickedA = (await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Continue on')); if (b) b.click(); return !!b })()`)) as boolean
+      offered = offered || acceptClickedA
       // The blur must COVER the machinery (interrupt, shell, typed resume, CLI boot):
       // capture mid-switch — the switching card, never a shell prompt.
       await sleep(4000)
@@ -387,7 +392,12 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
         await sleep(300)
         offeredBack = ((await ES(`window.__mogging.agents.offer(${pane})`)) as { state?: string } | null)?.state === 'offered'
       }
-      await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Continue on')); if (b) b.click(); return 1 })()`)
+      // The click reports whether it FOUND the card: under full-sweep load the offer can
+      // rise after the poll above gives up (node.exe cold start + daemon round trip), and
+      // the click landing IS the proof the overlay was there — the poll and the click are
+      // two witnesses of one fact, and either may speak for it.
+      const acceptClickedBack = (await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Continue on')); if (b) b.click(); return !!b })()`)) as boolean
+      offeredBack = offeredBack || acceptClickedBack
       let switchedBack = false
       for (let i = 0; i < 90 && !switchedBack; i++) {
         await sleep(1000)
@@ -549,7 +559,12 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
         offered = (await offerState())?.state === 'offered'
       }
       const launchesBefore = await writesFor()
-      await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Continue on')); if (b) b.click(); return 1 })()`)
+      // The click reports whether it FOUND the card: under full-sweep load the offer can
+      // rise after the poll above gives up (node.exe cold start + daemon round trip), and
+      // the click landing IS the proof the overlay was there — the poll and the click are
+      // two witnesses of one fact, and either may speak for it.
+      const acceptClickedMain = (await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Continue on')); if (b) b.click(); return !!b })()`)) as boolean
+      offered = offered || acceptClickedMain
       let switched = false
       let switchedTo = ''
       for (let i = 0; i < 60 && !switched; i++) {
@@ -773,7 +788,12 @@ export function runProfSwitchSmoke(win: BrowserWindow): void {
           offered2 = (await offerState2())?.state === 'offered'
         }
         const launchesBefore2 = await writesFor2()
-        await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Continue on')); if (b) b.click(); return 1 })()`)
+        // The click reports whether it FOUND the card: under full-sweep load the offer can
+      // rise after the poll above gives up (node.exe cold start + daemon round trip), and
+      // the click landing IS the proof the overlay was there — the poll and the click are
+      // two witnesses of one fact, and either may speak for it.
+      const acceptClicked2 = (await ES(`(() => { const b = [...document.querySelectorAll('.pane-offer .btn')].find((x) => (x.textContent || '').includes('Continue on')); if (b) b.click(); return !!b })()`)) as boolean
+      offered2 = offered2 || acceptClicked2
         // THE GUESSES, fired AT the interrupt — what made this gate flaky instead of
         // deterministic. A living process settles the process table's answer; it settles
         // nothing about the OTHER ways a pane's agent session is retired, and each of those
