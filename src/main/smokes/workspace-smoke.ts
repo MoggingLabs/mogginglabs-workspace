@@ -3,7 +3,9 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
-import { SettingsStore, resumeCommandFor } from '@backend/features/workspace'
+import { SettingsStore } from '@backend/features/workspace'
+import { parseLegacyLaunchCommand } from '@backend/features/workspace/legacy-launch-parse'
+import { rowToPane } from '@backend/features/workspace/session-rows'
 
 /**
  * Two-phase workspace persistence smoke (MOGGING_WORKSPACE = A | B), driven by an external
@@ -71,10 +73,42 @@ function storeDurabilityAsserts(): {
   }
   reopened.close()
 
+  // Same framing as the workspace row above: corruption must DEGRADE, not cascade.
+  //
+  // This used to check `resumeCommandFor` for prototype pollution — a command whose first
+  // token was 'constructor' returned a FUNCTION that the restore path would happily type.
+  // That function is gone: the daemon no longer composes a resume at all. Its replacement
+  // reads a legacy command by matching against the CLI registry, so a hostile token cannot
+  // name an agent by construction, and a row that NAMED an agent but lost its intent comes
+  // back marked — never silently as a plain shell, which is how a lost session goes
+  // unnoticed until the user has lost the thread.
+  const degraded = rowToPane({
+    id: '1',
+    workspaceId: 'default',
+    cwd: 'C:\\repos',
+    reportedCwd: null,
+    reportedCwdAt: null,
+    remoteName: null,
+    remoteHost: null,
+    remoteUser: null,
+    remotePort: null,
+    remoteCwd: null,
+    remotePlatform: null,
+    remoteShell: null,
+    command: null,
+    agentId: 'claude',
+    launchIntent: '{not json',
+    scrollback: 'prior session output',
+    gridCols: null,
+    gridRows: null,
+    updatedAt: 0
+  })
   const resumeGuarded =
-    resumeCommandFor('constructor') === null &&
-    resumeCommandFor('toString') === null &&
-    resumeCommandFor('claude') === 'claude --resume' // the real mapping still works
+    parseLegacyLaunchCommand('constructor') === null &&
+    parseLegacyLaunchCommand('toString') === null &&
+    parseLegacyLaunchCommand('cd /d "C:\\repos" && claude')?.agentId === 'claude' &&
+    degraded?.launchDegraded === true &&
+    degraded?.scrollback === 'prior session output' // nothing overwrote what was lost
 
   return {
     pass: !loadThrew && rowSurvived && badFieldDropped && goodFieldKept && resumeGuarded,

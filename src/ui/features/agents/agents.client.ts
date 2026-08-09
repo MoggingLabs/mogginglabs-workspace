@@ -1,4 +1,4 @@
-import { AgentChannels, TerminalChannels, type AgentInfo, type AgentCommandCommitRequest, type AgentCommandCommitResult, type AgentCommandRequest, type AgentCommandResult } from '@contracts'
+import { AgentChannels, TerminalChannels, type AgentInfo, type AgentCommandCommitRequest, type AgentCommandCommitResult, type AgentCommandRequest, type AgentCommandResult, type PaneLaunchIntent } from '@contracts'
 import { getBridge } from '../../core/ipc/bridge'
 
 /**
@@ -28,8 +28,11 @@ export const agentsClient = {
    *  means nothing was pending — the caller must rebuild consumingly instead. */
   commandCommit: (req: AgentCommandCommitRequest): Promise<AgentCommandCommitResult> =>
     getBridge().invoke(AgentChannels.commandCommit, req) as Promise<AgentCommandCommitResult>,
-  launchInto: (paneId: number, command: string): void => {
+  /** Type a launch into a live pane. `intent` is the build's own `AgentCommandResult.intent`
+   *  — pass it, or the pane records only keystrokes and cold-restores as a bare shell
+   *  having lost the agent and its profile (14 of 34 real panes did exactly that). */
+  launchInto: (paneId: number, command: string, intent?: PaneLaunchIntent): void => {
     devSpy('ptyWrites')?.push({ id: paneId, data: command + '\r', at: performance.now() })
-    getBridge().send(TerminalChannels.write, { id: paneId, data: command + '\r' })
+    getBridge().send(TerminalChannels.write, { id: paneId, data: command + '\r', launch: intent })
   }
 }

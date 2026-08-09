@@ -5,7 +5,7 @@
 // forces the in-proc backend, and any daemon start failure falls back to it (boot.ts).
 import { ipcMain, type WebContents } from 'electron'
 import * as path from 'node:path'
-import { TerminalChannels, LedgerChannels, GateChannels, PANE_CWD_MAX, normalizeRemoteConnection, stampGen } from '@contracts'
+import { TerminalChannels, LedgerChannels, GateChannels, PANE_CWD_MAX, normalizeLaunchIntent, normalizeRemoteConnection, stampGen } from '@contracts'
 import type { AgentState, Approval, SpawnRequest, SpawnResult, SpawnSpec, StateSyncRequest, WriteCommand, ResizeCommand, KillCommand, SetRoleCommand } from '@contracts'
 import { getEntitlements, getTelemetry } from '@backend'
 import { ptyEmulation } from '@backend/platform/pty-host'
@@ -16,6 +16,7 @@ import { sweepDeadRunDirs } from './daemon-sweep'
 import { getSettingsStore } from './app-settings'
 import { notePaneAgent, notePaneGone } from './agent-presence'
 import { forgetAssignedSession } from './assigned-sessions'
+import { forgetPaneLaunch, rememberPaneLaunch } from './pane-launch'
 import { resolveServiceKeyEnv } from './service-keys'
 import { onPaneGoneForBridge, onPaneStateForBridge } from './event-bridge'
 import { setDaemonHealth, setDaemonHealthRetry } from './runtime-health'
@@ -188,6 +189,10 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
           }
           livePaneIds.add(p.id)
           gens.set(p.id, p.gen)
+          // The pane's own record of what it is running, carried across the daemon's cold
+          // start. Held here so a relaunch can ask the PANE which profile it had instead of
+          // re-resolving "whichever is order 0 right now" — see rememberPaneLaunch.
+          rememberPaneLaunch(Number(p.id), p.launch)
           if (p.state) {
             lastStates.set(p.id, p.state)
             getWebContents()?.send(TerminalChannels.state, { id: Number(p.id), state: p.state })
@@ -427,12 +432,17 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     // `run` (spawn-run launch delivery): typed by the SESSION at spawn — local panes only
     // (a remote launch is typed after the SSH bootstrap proves the far-side shell).
     const run = remote || typeof req.run !== 'string' || !req.run ? undefined : req.run
-    const spec: SpawnSpec = { cwd: remote ? undefined : req.cwd, cols: req.cols, rows: req.rows, remote, env, run }
+    const launch = normalizeLaunchIntent(req.launch) ?? undefined
+    const spec: SpawnSpec = { cwd: remote ? undefined : req.cwd, cols: req.cols, rows: req.rows, remote, env, run, launch }
     // Recorded BEFORE the reply: a spawn that lands in a dying daemon still replays once the
     // connection is back, so the pane comes alive instead of staying blank until app restart.
     // WITHOUT `run`: it is a one-shot launch instruction, not pane identity — a reconnect
     // replay that re-sent it would re-type the launch into a crash-respawned shell (a fresh
     // agent with no conversation), where today's crash contract is an honest plain shell.
+    //
+    // `launch` is the OPPOSITE and is deliberately KEPT: it types nothing, it says what the
+    // pane is. A replay that dropped it would rebuild the session having forgotten its agent
+    // and profile — the very loss this field exists to prevent.
     specs.set(String(req.id), { ...spec, run: undefined })
     // Straight through, unmodified: `existing` tells the restore path not to type a launch
     // command into a live agent, and `pty` tells xterm how this pane's pty grows. Main relays
@@ -465,7 +475,9 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     const id = String(cmd.id)
     const gen = stampGen(gens, id)
     if (gen === 'drop') return
-    client.input(id, cmd.data, gen)
+    // `launch` rides along when these bytes ARE a launch (agents.client.launchInto), which
+    // is how a pane that became an agent pane after birth gets recorded at all.
+    client.input(id, cmd.data, gen, cmd.launch)
   })
   ipcMain.on(TerminalChannels.resize, (_e, cmd: ResizeCommand) => {
     const id = String(cmd.id)
@@ -488,6 +500,9 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     lastStates.delete(String(cmd.id))
     livePaneIds.delete(String(cmd.id))
     cwdRevisions.delete(String(cmd.id))
+    // Same reason as the role below: pane ids are REUSED, so a closed pane's profile must
+    // not become the default for whatever opens at that id next.
+    forgetPaneLaunch(Number(cmd.id))
     // A role dies with the SLOT, not with the process. Pane ids are reused (a split takes
     // the lowest free one), so a reviewer's id outliving its pane would hand reviewer
     // authority to whatever opens there next — which the renderer, having no role to push

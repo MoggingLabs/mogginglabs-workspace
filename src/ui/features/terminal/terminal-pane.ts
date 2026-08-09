@@ -12,6 +12,7 @@ import {
   type WorktreeInfo
 } from '@contracts'
 import { ALT_SCREEN_ENTER_MAX_PREFIX, ALT_SCREEN_ENTER_RE, REMOTE_READY_OSC, SGR_RE } from '@contracts'
+import type { PaneLaunchIntent } from '@contracts'
 import '@xterm/xterm/css/xterm.css'
 import {
   Button,
@@ -44,6 +45,7 @@ import {
   retirePaneLife
 } from '../../core/terminal/liveness-port'
 import { setPaneBufferReader } from '../../core/terminal/pane-buffer-port'
+import { forgetLaunchDegraded, reportLaunchDegraded } from '../../core/terminal/degraded-port'
 import { freshPaneLife } from '../../core/terminal/pane-life'
 import { claimSpawnRun, forgetSpawnRun, reportSpawnRunOutcome } from '../../core/terminal/spawn-run-port'
 import { onPaneLabel, getPaneLabel, setPaneLabel, onPaneUserTitle, getPaneUserTitle, setPaneUserTitle } from '../../core/layout/pane-meta'
@@ -528,14 +530,18 @@ export class TerminalPane {
         if (wp) term.options.windowsPty = wp
       }
       let run: string | undefined
+      let launch: PaneLaunchIntent | undefined
       if (armedRun && !getPaneRemote(this.id)) {
-        const cmd = await Promise.race([
+        const built = await Promise.race([
           armedRun.catch(() => null),
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500))
         ])
-        run = cmd ?? undefined
+        run = built?.command
+        // Pane identity, not the one-shot instruction: it rides the spawn so the session
+        // knows what it is from its first byte.
+        launch = built?.intent
       }
-      return this.spawnPty(run)
+      return this.spawnPty(run, launch)
     })()
 
     // Blink the cursor only while this pane is focused — cuts idle repaints across many panes.
@@ -602,7 +608,7 @@ export class TerminalPane {
   /** THE spawn door — mount rides it with the armed launch run, restart() rides it bare.
    *  Remote/cwd are read at CALL time, so a restart spawns in the pane's current folder
    *  (and a remote pane re-rides ssh), not a snapshot from mount. */
-  private spawnPty(run?: string): Promise<void> {
+  private spawnPty(run?: string, launch?: PaneLaunchIntent): Promise<void> {
     // Remote pane (4/05): the workspace manifest published this BEFORE apply, so the
     // spawn itself rides ssh. Local panes are unchanged.
     const remote = getPaneRemote(this.id)
@@ -635,7 +641,8 @@ export class TerminalPane {
         agentId: assignmentForPane(this.id),
         remoteHostId: remote?.hostId,
         remoteCwd: remote?.cwd,
-        run
+        run,
+        launch
       })
       .then((res) => {
         // The delivery report the agents feature settles on: TRUE only when a FRESH
@@ -662,6 +669,11 @@ export class TerminalPane {
         // adopt branch on restore (agents/index.ts), labelling a session that isn't there
         // instead of typing its resume, and the agent would never come back.
         if (res.existing && !res.restored && !this.disposed) markPaneReattached(this.id)
+        // This pane ran an agent whose stored launch settings could not be read back. It has
+        // its history and nothing else — say so in the pane rather than letting it pass for a
+        // shell that was only ever a shell. Deferred a tick: the slot's DOM is what the
+        // banner attaches to, and this can resolve inside the same frame the pane mounts in.
+        if (res.degraded && !this.disposed) reportLaunchDegraded(this.id, res.degraded.agentId)
         // The reattach verdict above is now DECIDED — release resume lineups waiting on
         // it (whenPaneSpawnSettled). Liveness cannot carry this: a reattach replays
         // scrollback before this reply lands, so "live" precedes "verdict known".
@@ -2510,6 +2522,7 @@ export class TerminalPane {
     retirePaneLife(this.id) // marks describe a SHELL, not an id
     setPaneBufferReader(this.id, null) // a recycled id must not read a dead xterm
     forgetSpawnRun(this.id) // armed builds/outcomes too — a recycled id must start clean
+    forgetLaunchDegraded(this.id) // ...and an undelivered degraded marker, for the same reason
     if (this.selectionCopyTimer) clearTimeout(this.selectionCopyTimer) // a pane closed mid-drag must not copy after death
     this.dropAbort.abort() // drop the window-scoped drag listeners
     this.menuCleanup?.() // document/window listeners + the body-portaled menu

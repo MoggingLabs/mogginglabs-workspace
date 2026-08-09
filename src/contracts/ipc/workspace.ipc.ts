@@ -3,6 +3,7 @@
 // (ADR 0002). Workspace/layout IPC *channels* arrive with steps 04/05 that build those
 // features; for now this is the persisted-shape contract shared by the store and its callers.
 
+import type { PaneLaunchIntent } from '../domain/launch-intent'
 import type { RemotePaneTarget } from '../domain/remote'
 
 export interface PersistedPane {
@@ -16,6 +17,17 @@ export interface PersistedPane {
    *  shared shape (domain/remote.ts) — the daemon's SpawnSpec.remote is the same one. */
   remote?: RemotePaneTarget
   command?: string // launch label (e.g. "claude") — NEVER a credential
+  /** What this pane was RUNNING, as the composer's input rather than its output — so a
+   *  restore re-composes instead of re-parsing. Supersedes `command` for that purpose:
+   *  `command` is one opaque shell line, and recovering an agent from it by matching its
+   *  first token failed for every pane the app ever launched (that token is always `cd`),
+   *  losing the profile with it. See domain/launch-intent.ts. */
+  launch?: PaneLaunchIntent
+  /** The row NAMED an agent whose intent could not be reconstructed. Such a pane restores
+   *  as a shell that SAYS SO — never silently, which is how a lost session goes unnoticed
+   *  until the user has lost the thread. The remote guard in session-rows.ts sets the
+   *  precedent; this is its twin for agent panes. */
+  launchDegraded?: boolean
   scrollback: string // raw PTY output for repaint (local terminal content)
   /** The pane's grid at last persist. A cold-start restore spawns at THIS size — not the
    *  80×24 default — so a typed resume (`claude --resume`) boots its TUI at the pane's

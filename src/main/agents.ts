@@ -14,11 +14,13 @@ import {
 } from '@backend/features/agents'
 import { claudeProjectDirName, findClaudeProjectDir } from '@backend/features/context'
 import { resolveHome } from '@backend/features/usage'
-import { AgentChannels, type AgentCliId, type AgentCommandCommitRequest, type AgentCommandCommitResult, type AgentCommandRequest, type AgentCommandResult, type AgentInfo, type AgentProfile } from '@contracts'
+import { HOME_POINTER } from '@backend/features/usage/homes'
+import { AgentChannels, LAUNCH_INTENT_VERSION, normalizeLaunchIntent, type AgentCliId, type AgentCommandCommitRequest, type AgentCommandCommitResult, type AgentCommandRequest, type AgentCommandResult, type AgentInfo, type AgentProfile, type PaneLaunchIntent } from '@contracts'
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import { getSettingsStore } from './app-settings'
 import { notePaneAgent } from './agent-presence'
+import { rememberedProfileFor, rememberPaneLaunch } from './pane-launch'
 import { maybeFault } from './fault-port'
 import { materializeToolPlanAtLaunch, verifyToolPlanForLaunch } from './tool-plan'
 import { claudeStatuslineArgs, expectPaneSession, paneSessionLog } from './context'
@@ -38,6 +40,36 @@ import { assignedSessionFor, newClaudeSessionId, rememberAssignedSession } from 
 let installs: InstallService | null = null
 let setups: SetupService | null = null
 let detectOverride: AgentInfo[] | null = null
+
+/**
+ * The composer's input, in the shape that gets persisted with the pane.
+ *
+ * Built HERE, from the same values that built the command, so the two cannot disagree. It
+ * goes through `normalizeLaunchIntent` rather than being asserted: this crosses IPC and
+ * then lands in sqlite, and the restore guard that reads it back is built on that same
+ * validator. Anything it would refuse must not be minted in the first place.
+ */
+function launchIntentFor(
+  agentId: AgentCliId,
+  cwd: string,
+  profileId: string | undefined,
+  configDir: string | undefined,
+  at: number,
+  sessionId?: string
+): PaneLaunchIntent | undefined {
+  return (
+    normalizeLaunchIntent({
+      v: LAUNCH_INTENT_VERSION,
+      agentId,
+      cwd,
+      profileId,
+      configDir,
+      sessionId,
+      source: 'declared',
+      at
+    }) ?? undefined
+  )
+}
 
 /**
  * Effects a PREFETCH build deferred (AgentCommandRequest.consume === false), waiting for
@@ -125,7 +157,12 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
       // needs-you presence (ALERTAGREE): a remote pane runs an agent too, even though its
       // verdict channel is chime-only — mark it so the webhook gate agrees with the pane.
       if (typeof req.paneId === 'number') notePaneAgent(req.paneId, true)
-      return { ok: true, command, buildMs: Date.now() - buildStartedAt }
+      // No configDir: profile homes are LOCAL filesystem facts and a remote launch has none
+      // (see above). The agent and cwd are still worth recording — they are what makes a
+      // restored remote pane say what it was running.
+      const intent = launchIntentFor(req.agentId, req.cwd, undefined, undefined, buildStartedAt)
+      if (typeof req.paneId === 'number') rememberPaneLaunch(req.paneId, intent)
+      return { ok: true, command, intent, buildMs: Date.now() - buildStartedAt }
     }
     // Profile env (4/04): resolved HERE from the store — the renderer only ever
     // names a profile id; values (pointers, never secrets) stay main-side until
@@ -137,12 +174,39 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
     // profile replace the user scope. A launch is one instant — three reads of one
     // table can only ever agree, so the extra two were pure cost.
     const profiles = getSettingsStore()?.listProfiles() ?? []
-    const profile = req.profileId
-      ? profiles.find((p) => p.id === req.profileId && p.provider === req.agentId)
+    // When the caller named no profile, ask the PANE which one it was running under before
+    // falling through to "whichever is order 0 right now". A launch that took the default —
+    // and every hand-typed agent — never recorded a name anywhere the relaunch could read,
+    // so a restore re-resolved order 0 and brought the pane back on a different config home.
+    // The pane's own intent was resolved by THIS composer at launch, so it names the home the
+    // pane actually ran under. A remembered profile that has since been deleted falls through
+    // to the default rather than refusing: a restore must not be blocked by a profile the
+    // user removed, and only an EXPLICIT name is worth refusing over (below).
+    const rememberedProfileId = req.profileId ? undefined : rememberedProfileFor(req.paneId, req.agentId)
+    const wantedProfileId = req.profileId ?? rememberedProfileId
+    let profile = wantedProfileId
+      ? profiles.find((p) => p.id === wantedProfileId && p.provider === req.agentId)
       : undefined
     if (req.profileId && !profile) {
       return { ok: false, reason: `The selected profile (${req.profileId}) no longer exists. Choose another profile before launching.` }
     }
+    // The order-0 default (4/04), applied HERE now that the renderer no longer pre-resolves
+    // it — for a pane with nothing named and no history of its own, and as the landing spot
+    // when a remembered profile has since been deleted (a restore must not be blocked by a
+    // profile the user removed; only an explicitly NAMED one is worth refusing over, above).
+    if (!profile) {
+      profile = profiles
+        .filter((p) => p.provider === req.agentId)
+        .sort((a, b) => a.order - b.order)[0]
+    }
+    // The pane HAD a profile and it is gone. Not a refusal — a restore must survive the user
+    // deleting a profile — but the pane is coming back on a different config home, with
+    // different sessions and a different login, and moving it silently is the only outcome
+    // worse than moving it.
+    const profileFallback =
+      rememberedProfileId && profile?.id !== rememberedProfileId
+        ? { wanted: rememberedProfileId, using: profile?.id }
+        : undefined
     let profileEnv: Record<string, string>
     try {
       profileEnv = materializeProfileEnv(req.agentId, profile?.env)
@@ -387,7 +451,24 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
     // never be reported as signed-out: an offer to fix a problem nobody has is its own bug.
     let needsSignIn: AgentCommandResult['needsSignIn']
     if (loginState?.signedIn === false) needsSignIn = signInTarget(req.agentId) ?? undefined
-    return { ok: true, command, signIn, needsSignIn, trustPrepared, buildMs: Date.now() - buildStartedAt }
+    // The composer's INPUT, resolved, travelling back with its output so the pane can
+    // persist what it IS rather than only what was typed at it. `profileEnv` is the
+    // materialized profile pointer — absent means this launch used the provider's own
+    // default home, which is a fact worth recording as much as a named one.
+    const intent = launchIntentFor(
+      req.agentId,
+      req.cwd,
+      profile?.id,
+      profileEnv[HOME_POINTER[req.agentId]],
+      buildStartedAt,
+      req.agentId === 'claude' ? namedSessionId : undefined
+    )
+    // Remember it HERE too, not only when the next `welcome` reports it back: the daemon
+    // replays panes on reconnect, which may be hours away, and a relaunch in between must
+    // still find the profile this launch resolved. Only for a build that is really being
+    // typed — a discarded prefetch must not relabel the pane.
+    if (consumeNow) rememberPaneLaunch(req.paneId as number, intent)
+    return { ok: true, command, intent, signIn, needsSignIn, profileFallback, trustPrepared, buildMs: Date.now() - buildStartedAt }
   })
   // The prefetched build's command is being typed NOW — apply what it deferred, in the
   // order the immediate path applies it. Anything unknown (never prefetched, already

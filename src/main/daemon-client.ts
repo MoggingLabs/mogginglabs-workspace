@@ -8,7 +8,7 @@ import * as net from 'node:net'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { spawn } from 'node:child_process'
-import { createLineFramer, encodeMessage, DAEMON_PROTOCOL_VERSION } from '@contracts'
+import { createLineFramer, encodeMessage, DAEMON_PROTOCOL_VERSION, type PaneLaunchIntent } from '@contracts'
 import { buildStampOf } from '@backend/platform/build-stamp'
 import { isAlive, pipeAlive } from '@backend/platform/pid'
 import { runtimeDir as sharedRuntimeDir } from '@backend/platform/runtime-paths'
@@ -540,7 +540,13 @@ export class DaemonClient {
         if (waiters) {
           this.spawnWaiters.delete(m.id)
           for (const waiter of waiters) {
-            waiter.resolve({ existing: m.existing === true, restored: m.restored === true, pty: m.pty, gen: m.gen })
+            waiter.resolve({
+              existing: m.existing === true,
+              restored: m.restored === true,
+              pty: m.pty,
+              gen: m.gen,
+              degraded: m.degraded
+            })
           }
         }
         break
@@ -644,8 +650,8 @@ export class DaemonClient {
   attach(id: string): void {
     this.send({ t: 'attach', id })
   }
-  input(id: string, data: string, gen?: number): void {
-    this.send({ t: 'input', id, data, gen })
+  input(id: string, data: string, gen?: number, launch?: PaneLaunchIntent): void {
+    this.send({ t: 'input', id, data, gen, launch })
   }
   /** Swarm manifest (Phase-4/01): acknowledged role naming. */
   setRole(id: string, role: string, timeoutMs = 2000): Promise<boolean> {

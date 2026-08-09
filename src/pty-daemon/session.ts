@@ -12,8 +12,8 @@ import { killPtyTree } from '@backend/platform/process-tree'
 import { paneShellLaunch } from '@backend/platform/shell'
 import { PTY_INPUT_CHUNK_CHARS, RESTORE_MODE_RESET, SCROLLBACK_CHARS, chunkPtyInput, pickCwd, trimTornStart , paneProcessEnv} from '@backend/features/terminal/pane-shared'
 import { aiderLogPath } from '@backend/features/context'
-import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
-import { PANE_CWD_MAX, normalizeRemoteConnection, notifyEventToState } from '@contracts'
+import type { Approval, SpawnSpec, PaneInfo, AgentState, PaneLaunchIntent } from '@contracts'
+import { PANE_CWD_MAX, launchIntentPrecedence, normalizeRemoteConnection, notifyEventToState } from '@contracts'
 import { log } from './lifecycle'
 import { attachDims, specDimsUsable } from './attach-dims'
 import {
@@ -34,7 +34,7 @@ import {
   type DetectedProcessContext,
   type PaneCwdSnapshot
 } from '@backend/features/agent-state'
-import { SessionStore, resumeCommandFor } from '@backend/features/workspace'
+import { SessionStore } from '@backend/features/workspace'
 import { Mailbox } from './mailbox'
 import { Ledger } from './ledger'
 import type { PersistedPane, PersistedWorkspace, WorkspaceLayout } from '@contracts'
@@ -400,6 +400,13 @@ class PaneSession {
   /** True when `requestedCwd` existed but was not a usable directory at spawn time. */
   private readonly cwdFellBack: boolean
   readonly command?: string
+  /** What this pane IS running, structured (see declareLaunch). NOT readonly, unlike
+   *  `command`: a pane becomes an agent pane at any point in its life, usually by having a
+   *  launch typed into it long after it was born, and a field that can only be set in the
+   *  constructor can never record that. */
+  private launch?: PaneLaunchIntent
+  /** This pane's stored launch intent was unreadable — see the restore param's doc. */
+  readonly launchDegraded: boolean
   remoteName?: string
   private remote?: SpawnSpec['remote']
   /** A live remote shell has reported its cwd after SSH authentication/login. */
@@ -455,7 +462,15 @@ class PaneSession {
     hooks: PaneHooks,
     restore?: {
       scrollback: string
-      resumeCommand?: string | null
+      /** This pane DECLARED an agent context (a worktree) that no longer exists. restore()
+       *  falls `spec.cwd` back to the seed project in that case, and resuming an agent
+       *  there picks up a different project's sessions — so such a pane is not pristine
+       *  and the app must not type a resume into it. */
+      contextVanished?: boolean
+      /** The row NAMED an agent whose intent could not be reconstructed (session-rows.ts
+       *  rowLaunch). The pane restores — its scrollback is real user data — but it must say
+       *  so rather than passing for a shell that was only ever a shell. */
+      launchDegraded?: boolean
       requestedCwd?: string
       reported?: { cwd: string; observedAt: number }
     },
@@ -481,6 +496,8 @@ class PaneSession {
     this.requestedCwd = restore?.requestedCwd || launchRequestedCwd
     this.cwdFellBack = !!launchRequestedCwd && this.cwd !== launchRequestedCwd
     this.command = spec.run
+    this.launch = spec.launch
+    this.launchDegraded = !!restore?.launchDegraded
     this.remoteName = spec.remote?.name
     this.remote = spec.remote ? { ...spec.remote } : undefined
     this.cwdState = new PaneCwdState(spec.remote?.cwd ?? this.cwd, this.remoteName ? 'remote' : 'local', restore?.reported)
@@ -492,11 +509,12 @@ class PaneSession {
     // none of them — without the reset, its output paints into a buffer stuck in a mode
     // no live process owns (see RESTORE_MODE_RESET).
     if (restore?.scrollback) this.buffer = trimTornStart(restore.scrollback) + RESTORE_MODE_RESET
-    // Pristine only when the daemon is NOT typing the resume itself (see field doc) —
-    // and never when the cwd fell back to home: `restored: true` cues the app to TYPE
-    // the resume command, which must not happen in the wrong directory (an agent
-    // resumed in `~` picks up the wrong project's sessions).
-    this.pristineRestore = !!restore && !restore.resumeCommand && !this.cwdFellBack
+    // Never when the cwd fell back to home: `restored: true` cues the app to TYPE the
+    // resume command, which must not happen in the wrong directory (an agent resumed in
+    // `~` picks up the wrong project's sessions). The daemon no longer types a resume of
+    // its own, so that clause is gone with it — and with it the case where this said
+    // "reattached" about a pane nobody had continued.
+    this.pristineRestore = !!restore && !this.cwdFellBack && !restore.contextVanished
 
     const isWin = process.platform === 'win32'
     let shell = spec.shell ?? (isWin ? process.env.COMSPEC || 'cmd.exe' : process.env.SHELL || '/bin/bash')
@@ -750,17 +768,19 @@ class PaneSession {
         this.deferLaunch(spec.run, false)
       }
     }
-    // A restore whose cwd fell back to home must NOT resume: `claude --resume` typed in
-    // the home directory resumes the wrong project's sessions. The shell restores with
-    // its scrollback; the real cwd stays persisted (requestedCwd) for the next start.
+    // A RESTORED pane types nothing. The daemon no longer composes a resume at all — it
+    // restores the shell, repaints the history, and publishes what the pane WAS
+    // (PersistedPane.launch); the app re-composes from that intent with the one composer
+    // that knows profiles, generated settings, capabilities and session ids.
     //
-    // ALWAYS deferred: the persisted grid this pane spawned at is a guess about a layout
-    // the app has not shown yet — only an attach makes it a fact (LAUNCH_DIMS_GRACE_MS).
-    // Cancelled by real input: a human typing into the restored shell owns it now, and a
-    // resume spliced after their keystrokes would compose a different command.
-    else if (restore?.resumeCommand && !this.cwdFellBack) {
-      this.deferLaunch(restore.resumeCommand, true)
-    }
+    // The daemon cannot know any of those (it is Electron-free and out-of-process by
+    // design — ADR 0006), so its resume was always the poorer of the two. Worse, it
+    // SUPPRESSED the better one: a daemon-typed resume cleared `pristineRestore`, which
+    // told the app via `spawned.restored` that this pane was a live reattach, so the app's
+    // lineup took its adopt branch and typed nothing. The only reason the rich relaunch
+    // ever ran is that the daemon's resume matcher recognised a `cd`-prefixed command
+    // exactly never — it fired for 0 of 34 real panes. Making it match MORE would have
+    // made the worse command win more often, so the fix is to stop composing here.
   }
 
   /** Arm a typed launch to fire when the pane's grid is CONFIRMED by a client (or on the
@@ -891,6 +911,13 @@ class PaneSession {
     this.lastAgent = det
       ? { agentId: det.agentId, cwd: detectedCwd ?? this.cwdState.passiveCwd(), sinceMs: det.sinceMs }
       : null
+    // Detection is the FALLBACK writer of launch intent — for an agent nobody declared,
+    // typed straight into a shell by hand. The precedence rules are pure and live in the
+    // contract so they can be tested without a pty; the one that matters most is that a
+    // NULL detection never clears the intent. Detection goes null when the agent exits,
+    // but the pane is still an agent pane whose session should come back.
+    const nextLaunch = launchIntentPrecedence(this.launch, this.lastAgent, Date.now())
+    if (nextLaunch !== this.launch) this.declareLaunch(nextLaunch)
     for (const s of this.subs) s.agent?.(this.lastAgent?.agentId ?? null, this.lastAgent?.cwd, this.lastAgent?.sinceMs)
   }
   /** Foreground process context is independent of provider recognition. This is what lets an
@@ -912,7 +939,12 @@ class PaneSession {
       gen: this.gen,
       cols: this.cols,
       rows: this.rows,
-      title: this.command, // launch label only (e.g. "claude") — never a command line
+      // A LABEL, as the contract has always said. `this.command` alone made that false for
+      // every spawn-run pane: it holds the whole composed line, profile home path included,
+      // and it went out to every connected client (including `mogging list`). The intent's
+      // agent id is the label the field was always documented to carry.
+      title: this.launch?.agentId ?? this.command,
+      launch: this.launch,
       ...(hasRemoteLocation
         ? {
             cwd: location.cwd,
@@ -933,6 +965,17 @@ class PaneSession {
     const lines = this.buffer.split('\n')
     return lines.slice(-cap).join('\n')
   }
+  /** What this pane records it is running, for readers outside the session. */
+  get launchIntent(): PaneLaunchIntent | undefined {
+    return this.launch
+  }
+  /** Record what this pane is running. THE one setter — both writers (a declared launch
+   *  riding its own input, and the detector's fallback) land here, so "the pane changed"
+   *  is decided in one place and always schedules the persist that makes it durable. */
+  declareLaunch(intent: PaneLaunchIntent | undefined): void {
+    this.launch = intent
+    this.hooks.onChange()
+  }
   snapshot(): PersistedPane {
     const reported = this.cwdState.declaredForPersistence()
     return {
@@ -946,6 +989,9 @@ class PaneSession {
       reportedCwdAt: reported?.observedAt,
       remote: this.remote ? { ...this.remote } : undefined,
       command: this.command,
+      // The easy step to miss: without this the field round-trips as undefined and every
+      // declared or detected intent is silently discarded on the first persist.
+      launch: this.launch,
       scrollback: this.buffer,
       // The grid, so a cold-start restore spawns at the pane's real size — a resume
       // typed into the 80×24 default drew its TUI at the wrong width, and the attach
@@ -1313,13 +1359,13 @@ export class SessionManager {
         // constructor's default stands, and the first persist writes the truth.
         cols: p.cols,
         rows: p.rows,
+        // Pane identity carries across the cold start: the app relaunches from THIS, and a
+        // degraded row still names its agent so the pane can say what it was.
+        launch: p.launch,
         remote: p.remote
           ? { ...p.remote, platform: 'posix', cwd: reportedCwd ?? restoredRemoteCwd ?? undefined }
           : undefined
       }
-      // Relaunch a known agent via its own resume (step 4) — never a frozen process.
-      // If a declared worktree vanished, do not resume the agent in the seed project.
-      const resumeCommand = p.remote || (hasReportedContext && !reportedCwd) ? null : resumeCommandFor(p.command)
       try {
         const pane: PaneSession = new PaneSession(
           p.id,
@@ -1328,7 +1374,9 @@ export class SessionManager {
           this.hooks(p.id, () => pane),
           {
             scrollback: p.scrollback,
-            resumeCommand,
+            // Remote panes were never resumed here either (their cwd is the far side's).
+            contextVanished: !!p.remote || (hasReportedContext && !reportedCwd),
+            launchDegraded: p.launchDegraded,
             requestedCwd: p.cwd,
             reported:
               !p.remote && reportedCwd && p.reportedCwdAt !== undefined
@@ -1338,8 +1386,10 @@ export class SessionManager {
           this.extraEnv
         )
         this.panes.set(p.id, pane)
-        // A resumed agent is the one that appears with nobody to announce it (see trackAgentProcs).
-        this.trackAgentProcs(pane, !!resumeCommand)
+        // A row that NAMES an agent will have one appear with nobody to announce it: the app
+        // relaunches from the pane's own intent, not from anything typed here. A plain shell
+        // expects none, which keeps process listings off the common path.
+        this.trackAgentProcs(pane, !!p.launch)
         restored++
       } catch (e) {
         // The row stays persisted (savePanes rewrites from LIVE panes, so a skipped one is
