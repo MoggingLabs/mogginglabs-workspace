@@ -1,4 +1,5 @@
 import type { PaneId } from '@contracts'
+import type { PaneProfile } from './pane-profile'
 
 /**
  * A request to launch an agent CLI into a pane. The `agents` feature (06) fulfils it — builds
@@ -42,23 +43,34 @@ export function onAgentLaunchRequest(cb: (req: AgentLaunchRequest) => void): () 
 }
 
 /**
- * Usage-limit failover switched a pane to another profile (Phase-6/04). The
- * `workspace` feature services this by rewriting that slot in the workspace
- * manifest — otherwise the next restart would resurrect the capped profile.
- * Same decoupling rule as above: ids only, no cross-feature imports.
+ * The profile a pane's agent is ACTUALLY running under, announced by whoever
+ * RESOLVED it — a launch (which knows what it told main to build), a failover
+ * relaunch, an adopt (which mostly knows that it does not know), a detection.
+ * The `workspace` feature services it by writing that slot in the manifest, so
+ * no restore ever has to guess.
+ *
+ * This replaces a failover-only event. A failover is not a special kind of
+ * profile fact, and two events for one fact is precisely how the REQUESTED
+ * profile and the RESOLVED profile came to be written by different code paths:
+ * the manifest recorded the request (`profileId` above, "omitted = the
+ * provider's default"), restore read it back as if it described an account, and
+ * every blank slot got re-derived as order-0 on the way in.
+ *
+ * Ids only, no cross-feature imports — same decoupling rule as above.
  */
-export interface ProfileFailoverEvent {
+export interface PaneProfileEvent {
   paneId: PaneId
-  profileId: string
+  provider: string
+  profile: PaneProfile
 }
 
-const failoverSubscribers = new Set<(ev: ProfileFailoverEvent) => void>()
+const profileSubscribers = new Set<(ev: PaneProfileEvent) => void>()
 
-export function announceProfileFailover(ev: ProfileFailoverEvent): void {
-  for (const cb of failoverSubscribers) cb(ev)
+export function announcePaneProfile(ev: PaneProfileEvent): void {
+  for (const cb of profileSubscribers) cb(ev)
 }
 
-export function onProfileFailover(cb: (ev: ProfileFailoverEvent) => void): () => void {
-  failoverSubscribers.add(cb)
-  return () => failoverSubscribers.delete(cb)
+export function onPaneProfile(cb: (ev: PaneProfileEvent) => void): () => void {
+  profileSubscribers.add(cb)
+  return () => profileSubscribers.delete(cb)
 }

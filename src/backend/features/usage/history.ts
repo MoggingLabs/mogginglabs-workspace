@@ -5,6 +5,8 @@
 // endpoint, no extra network. Bounded forever: the ring truncates at
 // HISTORY_MAX and a corrupt KV value degrades to an empty series.
 
+import { slugLabel } from './lane-key'
+
 export interface HistoryKv {
   get(key: string): string | null
   set(key: string, value: string): void
@@ -13,26 +15,24 @@ export interface HistoryKv {
 /** Ring capacity per (provider, window) — 8h of 5-minute samples. */
 export const HISTORY_MAX = 96
 
-/** Window labels become stable key slugs ('Session (5h)' -> 'session-5h'). */
-const slug = (label: string): string =>
-  label
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-
 /** One ring per LANE. The 7/09 fan-out reads every profile of a provider, and
  *  folding those into one (provider, window) ring interleaved them — work at 90%
  *  and personal at 10% sampled a 90/10/90/10 sawtooth that is no one's usage,
  *  at half the depth. `default` (the seam's id when NO profile targets the
- *  provider) keeps the historical 2-part key, so single-profile rings carry on. */
-const ringKey = (providerId: string, windowLabel: string, profileId?: string): string =>
+ *  provider) keeps the historical 2-part key, so single-profile rings carry on.
+ *
+ *  `lane` is the lane's stable IDENTITY (`laneKey`), not its label — a renamed
+ *  window keeps its sparkline. Both spellings slug without colliding
+ *  ('five_hour' -> 'five-hour', 'Session (5h)' -> 'session-5h'), which is what
+ *  lets the legacy ring be adopted below rather than guessed at. */
+const ringKey = (providerId: string, lane: string, profileId?: string): string =>
   profileId && profileId !== 'default'
-    ? `usage.hist.${providerId}.${profileId}.${slug(windowLabel)}`
-    : `usage.hist.${providerId}.${slug(windowLabel)}`
+    ? `usage.hist.${providerId}.${profileId}.${slugLabel(lane)}`
+    : `usage.hist.${providerId}.${slugLabel(lane)}`
 
 /** The stored series, oldest first. Never throws; junk reads as empty. */
-export function readHistory(kv: HistoryKv, providerId: string, windowLabel: string, profileId?: string): number[] {
-  const raw = kv.get(ringKey(providerId, windowLabel, profileId))
+export function readHistory(kv: HistoryKv, providerId: string, lane: string, profileId?: string): number[] {
+  const raw = kv.get(ringKey(providerId, lane, profileId))
   if (!raw) return []
   try {
     const arr = JSON.parse(raw) as unknown
@@ -42,10 +42,23 @@ export function readHistory(kv: HistoryKv, providerId: string, windowLabel: stri
   }
 }
 
-/** Append one sample (clamped, rounded) and truncate to the last HISTORY_MAX. */
-export function appendHistory(kv: HistoryKv, providerId: string, windowLabel: string, usedPct: number, profileId?: string): void {
-  const ring = readHistory(kv, providerId, windowLabel, profileId)
+/** Append one sample (clamped, rounded) and truncate to the last HISTORY_MAX.
+ *  `legacyLabel` adopts the pre-id ring ONCE, so a lane's sparkline does not
+ *  restart on the update that gave it an id. Cosmetic — unlike the threshold
+ *  latch, a lost ring loses a picture, not a single-fire guarantee. */
+export function appendHistory(
+  kv: HistoryKv,
+  providerId: string,
+  lane: string,
+  usedPct: number,
+  profileId?: string,
+  legacyLabel?: string
+): void {
+  let ring = readHistory(kv, providerId, lane, profileId)
+  if (!ring.length && legacyLabel && slugLabel(legacyLabel) !== slugLabel(lane)) {
+    ring = readHistory(kv, providerId, legacyLabel, profileId)
+  }
   ring.push(Math.max(0, Math.min(100, Math.round(usedPct))))
   if (ring.length > HISTORY_MAX) ring.splice(0, ring.length - HISTORY_MAX)
-  kv.set(ringKey(providerId, windowLabel, profileId), JSON.stringify(ring))
+  kv.set(ringKey(providerId, lane, profileId), JSON.stringify(ring))
 }

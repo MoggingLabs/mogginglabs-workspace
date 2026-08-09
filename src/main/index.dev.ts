@@ -93,6 +93,7 @@ import { runProductSmoke } from './smokes/product-smoke'
 import { runProdMilestoneSmoke } from './smokes/prodmilestone-smoke'
 import { runUsageSmoke } from './smokes/usage-smoke'
 import { runUsageUiSmoke } from './smokes/usageui-smoke'
+import { runCapFalseSmoke } from './smokes/capfalse-smoke'
 import { runUsageGlanceSmoke } from './smokes/usageglance-smoke'
 import { runWebUsageSmoke } from './smokes/webusage-smoke'
 import { runUsageCliSmoke } from './smokes/usagecli-smoke'
@@ -220,7 +221,7 @@ const SMOKE_ENV: readonly string[] = [
   'MOGGING_EVBRIDGE', 'MOGGING_MCPSTATUS', 'MOGGING_MCPLOOP', 'MOGGING_ACCOUNT', 'MOGGING_ENTITLE', 'MOGGING_DEVICEKEY', 'MOGGING_WATERMARK', 'MOGGING_AGENT', 'MOGGING_STATE', 'MOGGING_RELOAD',
   'MOGGING_SMOKE', 'MOGGING_SHOT', 'MOGGING_MULTIPANE', 'MOGGING_WORKSPACE', 'MOGGING_AGENTLAUNCH', 'MOGGING_LAUNCHNOW',
   'MOGGING_TEMPLATE', 'MOGGING_PROFPERSIST', 'MOGGING_BROWSER', 'MOGGING_BROWSERCTL', 'MOGGING_BROWSERUX', 'MOGGING_BROWSERTABS', 'MOGGING_BROWSERRACE', 'MOGGING_BROWSERZERO', 'MOGGING_LOCKDOWN', 'MOGGING_FIRSTRUN',
-  'MOGGING_PRODUCT', 'MOGGING_PRODMILESTONE', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI',
+  'MOGGING_PRODUCT', 'MOGGING_PRODMILESTONE', 'MOGGING_USAGEGLANCE', 'MOGGING_USAGEUI', 'MOGGING_WEBUSAGE', 'MOGGING_USAGECLI', 'MOGGING_CAPFALSE',
   'MOGGING_USAGESET', 'MOGGING_MCP', 'MOGGING_MCPWRITE', 'MOGGING_AGENTWEB', 'MOGGING_PERWS',
   'MOGGING_PERWSAGENT', 'MOGGING_VAULTKEYS', 'MOGGING_SECRETFORMS', 'MOGGING_WSCLOSE', 'MOGGING_PANECLOSE', 'MOGGING_KILLFLASH', 'MOGGING_RAILFOLD', 'MOGGING_CHROMEPRESS', 'MOGGING_KBSHORTCUTS', 'MOGGING_KBGLOBAL', 'MOGGING_VERDICTLIVE', 'MOGGING_WEBTRAIL',
   'MOGGING_MCPMGR', 'MOGGING_MCPCAT', 'MOGGING_INTEGUX', 'MOGGING_INTEGMILESTONE', 'MOGGING_WIZARDUX', 'MOGGING_WIZARDFAIL', 'MOGGING_WIZARDISO', 'MOGGING_WIZCD', 'MOGGING_WIZLAYOUT', 'MOGGING_MUTATIONRACE', 'MOGGING_AUTHRUNNER',
@@ -558,6 +559,8 @@ function afterWindow(win: BrowserWindow): void {
     runProdMilestoneSmoke(win) // env-gated PAID-TIER milestone: anon-free offline wedge -> PKCE login -> MoR webhook -> device-bound Pro -> grace -> foreign-device inert -> tamper -> logout anon-free, budgets on the composed surface (phase-accounts/10)
   } else if (process.env.MOGGING_USAGEGLANCE) {
     runUsageGlanceSmoke(win) // env-gated Usage-GLANCE smoke: the CodexBar-recut popover on fixtures (Phase-8.5/08c)
+  } else if (process.env.MOGGING_CAPFALSE) {
+    runCapFalseSmoke(win) // env-gated false-cap gate: a `capped` verdict nobody can substantiate must never cover a pane
   } else if (process.env.MOGGING_USAGEUI) {
     runUsageUiSmoke(win) // env-gated usage-UI smoke: gauge (re-baselined gauge-only, popover recut → USAGEGLANCE) (Phase-7/03; 8.5/08c)
   } else if (process.env.MOGGING_WEBUSAGE) {

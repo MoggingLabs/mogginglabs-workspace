@@ -9,9 +9,22 @@ import { fetchVertex, fetchBedrock } from './classes/cloud-cli'
 import { fetchWebSessionUsage, WEB_SESSION_SPECS, type WebSessionDeps } from './classes/web-session'
 import { claudeAdapter } from './claude-adapter'
 import { appendHistory } from './history'
+import { laneKey } from './lane-key'
 
 export { fakeAdapter, setFakeMode } from './fake-adapter'
 export { claudeAdapter } from './claude-adapter'
+export { laneKey, slugLabel } from './lane-key'
+export {
+  ackOutbox,
+  drainOutbox,
+  enqueueAlerts,
+  outboxLive,
+  CAPPED_BOUNDLESS_TTL_MS,
+  MAX_DRAINS,
+  OUTBOX_CAP,
+  OUTBOX_TTL_MS,
+  type QueuedAlert
+} from './alert-outbox'
 export { resolveHome } from './homes'
 export { computePace, formatVerdict, formatPaceDelta, formatPaceTime, formatReset, formatRisk, runOutRisk, PACE_SEVERITY, type PaceOptions } from './pace'
 export { PACE_GOLDENS } from './pace-fixtures'
@@ -249,8 +262,15 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
           })
         } else {
           const plans = await a.fetch(home, profileId, ctl.signal)
+          // Clamp, and BACKFILL the lane identity. `id` is optional on the wire
+          // (PlanUsage is public), but everything downstream that persists state
+          // keys off it — so the seam guarantees it rather than leaving each
+          // consumer a fallback branch to get subtly different.
           collected.push(
-            ...plans.map((p) => ({ ...p, windows: p.windows.map((w) => ({ ...w, usedPct: Math.max(0, Math.min(100, w.usedPct)) })) }))
+            ...plans.map((p) => ({
+              ...p,
+              windows: p.windows.map((w) => ({ ...w, id: laneKey(w), usedPct: Math.max(0, Math.min(100, w.usedPct)) }))
+            }))
           )
         }
       } catch (e) {
@@ -281,7 +301,7 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
     // them into a sawtooth of whichever lane sampled last.
     for (const p of collected) {
       if (p.health !== 'fresh') continue
-      for (const w of p.windows) appendHistory(deps.kv, p.providerId, w.label, w.usedPct, p.profileId)
+      for (const w of p.windows) appendHistory(deps.kv, p.providerId, laneKey(w), w.usedPct, p.profileId, w.label)
     }
     s.inFlight = false
     emit()

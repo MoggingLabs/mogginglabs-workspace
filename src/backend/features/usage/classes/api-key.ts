@@ -18,7 +18,8 @@ export interface ApiKeySpec {
   parse(body: unknown, now: number, profileId: string): PlanUsage
 }
 
-const clamp = (n: number): number => Math.max(0, Math.min(100, Math.round(n)))
+/** Clamp, never round — 100 is reserved for actually-100 (it covers panes). */
+const clamp = (n: number): number => Math.max(0, Math.min(100, n))
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
 function plan(id: string, profileId: string, label: string, now: number, windows: UsageWindow[], credits?: PlanUsage['credits']): PlanUsage {

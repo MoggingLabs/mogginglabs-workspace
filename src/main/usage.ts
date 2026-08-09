@@ -15,6 +15,11 @@ import {
   scanCost,
   costLogDirs,
   readHistory,
+  ackOutbox,
+  drainOutbox,
+  enqueueAlerts,
+  OUTBOX_CAP,
+  type QueuedAlert,
   createStatusService,
   evaluateThresholds,
   isReaderWired,
@@ -299,9 +304,6 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   // the outbox on mount — the boot race (first poll beats the subscriber),
   // getWin() null, and a recreated window all become replays, never losses.
   const OUTBOX_KEY = 'usage.alert.outbox'
-  const OUTBOX_CAP = 20
-  const OUTBOX_TTL_MS = 24 * 3_600_000
-  type QueuedAlert = UsageAlert & { alertId: string; queuedAt: number }
   let alertSeq = 0
   const readOutbox = (): QueuedAlert[] => {
     try {
@@ -327,7 +329,7 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
       alertId: `${Date.now().toString(36)}-${++alertSeq}`,
       queuedAt: Date.now()
     }))
-    writeOutbox([...readOutbox(), ...queued])
+    writeOutbox(enqueueAlerts(readOutbox(), queued, Date.now()))
     const win = getWin()
     if (win && !win.isDestroyed()) for (const a of queued) win.webContents.send(UsageChannels.alert, a)
   }
@@ -379,13 +381,13 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
   // "the invoke resolved" and "a toast reached the DOM" are different facts.
   // TTL'd so week-old news cannot replay after a vacation.
   ipcMain.handle(UsageChannels.alertDrain, (): (UsageAlert & { alertId: string })[] => {
-    const fresh = readOutbox().filter((a) => Date.now() - a.queuedAt < OUTBOX_TTL_MS)
-    writeOutbox(fresh)
-    return fresh
+    const { deliver, keep } = drainOutbox(readOutbox(), Date.now())
+    writeOutbox(keep)
+    return deliver
   })
   ipcMain.handle(UsageChannels.alertAck, (_e, alertId: unknown) => {
     if (typeof alertId !== 'string' || !alertId) return
-    writeOutbox(readOutbox().filter((a) => a.alertId !== alertId))
+    writeOutbox(ackOutbox(readOutbox(), alertId))
   })
 
   // 7/09 alert config: two shoulder-tap pcts + the confetti opt-in.
@@ -556,9 +558,12 @@ export function registerUsage(getWin: () => BrowserWindow | null): void {
     if (!p || typeof p.providerId !== 'string' || typeof p.window !== 'string') return []
     const kv = getSettingsStore()
     if (!kv) return []
-    // Rings are per LANE (7/07). A caller that names no profile wants the lane
-    // the user is actually on — the ACTIVE one, the same rule the cost scan
-    // resolves a home by. No profile on the provider = the 'default' ring.
+    // Rings are per LANE (7/07), keyed by the lane's stable id — `window` here
+    // is that key, not prose (a caller passing a label still resolves, for the
+    // adapters that mint no id: both spellings slug apart without colliding).
+    // A caller that names no profile wants the lane the user is actually on —
+    // the ACTIVE one, the same rule the cost scan resolves a home by. No
+    // profile on the provider = the 'default' ring.
     const profileId = typeof p.profileId === 'string' && p.profileId ? p.profileId : activeProfile(p.providerId)?.id
     return readHistory({ get: (k) => kv.getSetting(k) ?? null, set: (k, v) => kv.setSetting(k, v) }, p.providerId, p.window, profileId)
   })

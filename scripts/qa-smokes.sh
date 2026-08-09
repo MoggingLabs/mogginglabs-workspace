@@ -9,7 +9,7 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 215 gates: 37 static (AUDIT · LEDGER · VERDICT · SATELLITE · CLIGRAM · DOCSCITE · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 178 app-boot
+# 216 gates: 37 static (AUDIT · LEDGER · VERDICT · SATELLITE · CLIGRAM · DOCSCITE · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 179 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -476,6 +476,10 @@ run_smoke FIRSTRUN     MOGGING_FIRSTRUN  1 150 firstrun
 run_smoke PRODUCT      MOGGING_PRODUCT   1 300 product
 run_smoke USAGE        MOGGING_USAGE     1 150 usage
 run_smoke USAGEUI      MOGGING_USAGEUI   1 180 usageui
+# A `capped` verdict nobody can substantiate must never cover a pane. Its own
+# gate, not a leg of USAGEUI: that gate's replay claim is a POSITIVE, and this
+# is the negative an update restart turned into eight blocked panes.
+run_smoke CAPFALSE     MOGGING_CAPFALSE  1 180 capfalse
 run_smoke USAGEGLANCE  MOGGING_USAGEGLANCE 1 180 usageglance
 run_smoke WEBUSAGE     MOGGING_WEBUSAGE  1 150 webusage
 run_smoke USAGECLI     MOGGING_USAGECLI  1 180 usagecli

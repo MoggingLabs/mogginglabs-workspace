@@ -611,7 +611,9 @@ export function createUsageSection(): HTMLElement {
       seen.add(p.providerId)
       const w = p.windows[0]
       if (!w) continue
-      const series = ((await invoke(UsageChannels.history, { providerId: p.providerId, window: w.label })) as number[]) ?? []
+      // The ring is keyed by the lane's stable ID, not its label — a renamed
+      // window keeps its sparkline instead of restarting from empty.
+      const series = ((await invoke(UsageChannels.history, { providerId: p.providerId, window: w.id ?? w.label })) as number[]) ?? []
       // (The per-row "Scan cost" button moved up into the Cost overview card —
       // one home for cost, history keeps the sampled sparklines.)
       const rowEl = el('div', { class: 'usage-history-row', dataset: { provider: p.providerId } }, [

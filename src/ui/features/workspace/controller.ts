@@ -2001,18 +2001,31 @@ export class WorkspaceController {
     return this.worktreeRemovalEvents.map((event) => ({ ...event }))
   }
 
-  /** Failover switched a pane's profile (6/04): rewrite that SLOT in the manifest
-   *  so the next restore relaunches on the surviving profile instead of
-   *  resurrecting the capped one. Returns whether a workspace owned the pane —
-   *  the caller persists (once per failover event; ids only, ADR 0002). */
-  noteProfileFailover(paneId: number, profileId: string): boolean {
+  /** The RESOLVED profile a pane's agent is running under — announced by whoever
+   *  resolved it (a launch, a failover relaunch, an adopt, a detection). Rewrites
+   *  that SLOT so the next restore relaunches on a recorded fact instead of
+   *  re-deriving one.
+   *
+   *  Written UNCONDITIONALLY, `null` included: "we no longer know" is a fact the
+   *  manifest has to be able to hold. The old failover-only writer could only
+   *  ever set an id, so a stale one survived forever and a blank slot was
+   *  indistinguishable from "use the default" — which restore then resolved to
+   *  order-0, giving every pane the same account and letting one capped lane
+   *  claim them all.
+   *
+   *  Returns whether anything changed; the caller persists only then. Ids only
+   *  (ADR 0002). */
+  notePaneProfile(paneId: number, profileId: string | null): boolean {
     // By LIVE pane id, not a paneCount range check: slot ids can exceed paneCount after
     // a middle pane closed (live ids 1,3,5 with count 3), and the range check silently
-    // dropped the failover note for exactly those slots.
+    // dropped the note for exactly those slots.
     const view = this.viewForPane(paneId)
     if (!view) return false
     const slot = view.layout.slotOf(paneId)
     if (slot == null) return false
+    // An absent array already MEANS unrecorded, so writing null over nothing is a
+    // no-op — no array of nulls is invented and no needless persist is triggered.
+    if ((view.meta.profileIds?.[slot - 1] ?? null) === profileId) return false
     const ids = view.meta.profileIds ?? []
     while (ids.length < slot) ids.push(null)
     ids[slot - 1] = profileId
@@ -2030,7 +2043,14 @@ export class WorkspaceController {
    *  Creation lineups re-announce the values they were created with, so recording is
    *  idempotent — the return value says whether anything actually changed (the caller
    *  persists only then). */
-  noteAgentLaunch(paneId: number, provider: string, profileId?: string, cwd?: string): boolean {
+  noteAgentLaunch(paneId: number, provider: string, cwd?: string): boolean {
+    // NOTE the missing `profileId` parameter. It used to be recorded here from the
+    // launch REQUEST, where an omitted profile means "use the provider's default"
+    // — a statement about a request, not about an account. Persisting it as one is
+    // the root of the false-failover bug: the resolved profile was never written,
+    // so restore re-derived order-0 for every slot the caller hadn't named.
+    // Removing the parameter is what makes that structural rather than a guard.
+    // The resolved value now arrives on `notePaneProfile` above.
     if (!provider || provider === 'shell') return false
     const view = this.viewForPane(paneId)
     if (!view) return false
@@ -2044,15 +2064,6 @@ export class WorkspaceController {
       changed = true
     }
     view.meta.assignments = assignments
-    if (profileId) {
-      const ids = view.meta.profileIds ?? []
-      while (ids.length < slot) ids.push(null)
-      if (ids[slot - 1] !== profileId) {
-        ids[slot - 1] = profileId
-        changed = true
-      }
-      view.meta.profileIds = ids
-    }
     if (cwd && view.meta.remotes?.[slot - 1]) {
       const remote = view.meta.remotes[slot - 1]!
       if (remote.cwd !== cwd) {

@@ -91,7 +91,9 @@ export function mountPaneOffer({ paneId, body, signal, onCoveredChange }: PaneOf
     hint.className = 'pane-offer-hint'
     hint.textContent =
       offer.state === 'offered'
-        ? `This session continues under ${offer.nextName} — same pane, same conversation.`
+        ? // The owner may name the window that is spent and when it comes back
+          // ("Weekly resets in 2h 14m. …"); the bare sentence is the fallback.
+          (offer.message ?? `This session continues under ${offer.nextName} — same pane, same conversation.`)
         : offer.state === 'switching'
           ? 'Interrupting the agent, then resuming this session.'
           : offer.state === 'launching'

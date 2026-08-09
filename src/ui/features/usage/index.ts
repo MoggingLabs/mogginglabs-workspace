@@ -1,5 +1,5 @@
 import type { UiFeature } from '../../core/registry/feature-registry'
-import { BrowserChannels, ProfileChannels, UsageChannels, USAGE_DISPLAY_DEFAULTS, findProvider, type AgentProfile, type CostScan, type PlanUsageView, type ProviderStatus, type UsageAlert, type UsageDisplayConfig } from '@contracts'
+import { BrowserChannels, ProfileChannels, UsageChannels, USAGE_DISPLAY_DEFAULTS, displayPct, findProvider, type AgentProfile, type CostScan, type PlanUsageView, type ProviderStatus, type UsageAlert, type UsageDisplayConfig } from '@contracts'
 import { createAsyncGuard, type AsyncGuard } from '../../core/async/async-state'
 import { getBridge } from '../../core/ipc/bridge'
 import { announce } from '../../core/a11y/live-region'
@@ -8,6 +8,7 @@ import { setActiveView } from '../../core/shell/view-port'
 import { requestSettingsTab } from '../../core/shell/settings-tab-port'
 import { switchActiveProfile } from '../../core/agents/profile-switch'
 import { announceUsageCapped } from '../../core/usage/usage-capped-port'
+import { getUsageLanes, publishUsageLanes } from '../../core/usage/usage-lane-port'
 import { getTelemetry } from '../../core/telemetry'
 
 /**
@@ -225,7 +226,10 @@ export const usageFeature: UiFeature = {
       paintBar(trackS, barS, 100 - s, p.windows[0]?.label ?? p.planLabel, 'left')
       paintBar(trackW, barW, 100 - w, p.windows[1]?.label ?? p.windows[0]?.label ?? p.planLabel, 'left')
       glyph.replaceChildren(providerLogo(p.providerId, 13))
-      pctNum.textContent = `${Math.round(100 - s)}%`
+      // displayPct, not Math.round: at 99.5% used, "0% left" is a claim the app
+      // does not act on (99.5 is not capped). The bar WIDTH above stays
+      // unrounded — a half-percent sliver is a truthful sliver.
+      pctNum.textContent = `${displayPct(100 - s)}%`
       glabel.textContent = p.providerId
       gauge.classList.toggle('is-warn', p.pace?.verdict === 'runs-out')
       gauge.classList.toggle('is-stale', p.health === 'stale')
@@ -705,7 +709,7 @@ export const usageFeature: UiFeature = {
             el('span', { class: 'usage-row-label', text: w.label }),
             track,
             el('span', { class: 'usage-row-stats' }, [
-              el('span', { class: 'usage-pct', text: `${Math.round(leftPct)}% left` }),
+              el('span', { class: 'usage-pct', text: `${displayPct(leftPct)}% left` }),
               w.pace
                 ? el('span', {
                     class: `usage-pace-delta sev-${w.pace.severity}`,
@@ -950,6 +954,11 @@ export const usageFeature: UiFeature = {
 
     const apply = (next: PlanUsageView[]): void => {
       plans = next
+      // THE ONE PUBLISHER of which lanes are spent. Single-sourced deliberately:
+      // Settings § Usage keeps its own copy of this same channel, and a second
+      // publisher would race it — two differently-timed derivations of one fact
+      // is a fresh instance of the bug being fixed here.
+      publishUsageLanes(next)
       paintGauge()
       if (!pop.hidden) renderPop() // refresh in place while open
     }
@@ -981,8 +990,11 @@ export const usageFeature: UiFeature = {
     // Delivery contract (phase-11): every alert carries an outbox id — ack it
     // AFTER the toast reaches the DOM, and dedupe against the mount drain (a
     // pushed alert can also arrive in the drain when both race the boot).
+    // Mount-scoped ON PURPOSE: this dedupes the push-vs-drain race WITHIN one
+    // mount. It is not, and must not become, cross-restart delivery state — that
+    // belongs to the outbox, which is the only thing that survives a quit.
     const seenAlerts = new Set<string>()
-    const onAlert = (a: UsageAlert & { alertId?: string }): void => {
+    const onAlert = (a: UsageAlert & { alertId?: string }, replayed = false): void => {
       if (!a || typeof a.title !== 'string') return
       if (a.alertId) {
         if (seenAlerts.has(a.alertId)) return
@@ -992,6 +1004,11 @@ export const usageFeature: UiFeature = {
       // raises the blurred switch offer on every live pane running that lane, and a
       // claimed event shows NO toast — the pane overlay is the surface. Unclaimed
       // (capped from another machine, nothing launched) falls through to the toast.
+      // A NUDGE, not a fact. The subscriber re-derives from the lane port's live
+      // snapshot and ignores this payload as evidence — so a 24h-old replay can
+      // prompt a re-read but can never assert one. It still answers
+      // synchronously, so the claim contract (a covered pane suppresses the
+      // toast) is unchanged.
       const paneOffered = a.level === 'capped' && announceUsageCapped({ providerId: a.providerId, profileId: a.profileId })
       if (!paneOffered) {
         showToast({
@@ -1004,12 +1021,26 @@ export const usageFeature: UiFeature = {
             : undefined
         })
       }
-      if (a.alertId) void bridge.invoke(UsageChannels.alertAck, a.alertId)
+      // Fire-and-forget, but never an unhandled rejection: a torn-down window
+      // mid-quit rejects this, and the outbox's drain counter is what bounds the
+      // retries that failure would otherwise cause forever.
+      if (a.alertId) void bridge.invoke(UsageChannels.alertAck, a.alertId).catch(() => undefined)
       if (a.confetti) spawnConfetti()
       // Class + booleans ONLY (ADR 0005) — never plan names or numbers.
       getTelemetry().captureEvent({
         name: 'usage.alert',
-        props: { kind: a.kind, level: a.level ?? 'none', failoverOffered: !!a.failover, confetti: !!a.confetti, paneOffered }
+        // Class + booleans only. `replayed` and `laneKnown` are why a capped
+        // alert fell back to a toast — without them the fleet cannot tell a
+        // withheld overlay from a broken port.
+        props: {
+          kind: a.kind,
+          level: a.level ?? 'none',
+          failoverOffered: !!a.failover,
+          confetti: !!a.confetti,
+          paneOffered,
+          replayed,
+          laneKnown: getUsageLanes().known
+        }
       })
     }
 
@@ -1019,19 +1050,39 @@ export const usageFeature: UiFeature = {
       if (!pop.hidden) renderPop()
     }
 
-    bridge.on(UsageChannels.changed, (payload) => apply((payload as PlanUsageView[]) ?? []))
+    let sawPush = false
+    bridge.on(UsageChannels.changed, (payload) => {
+      sawPush = true
+      apply((payload as PlanUsageView[]) ?? [])
+    })
     bridge.on(UsageChannels.statusChanged, (payload) => applyStatuses((payload as ProviderStatus[]) ?? []))
     bridge.on(UsageChannels.alert, (payload) => onAlert(payload as UsageAlert & { alertId?: string }))
     bridge.on(UsageChannels.displayChanged, (payload) => applyDisplay(payload as UsageDisplayConfig))
     void refreshProfiles().then(() => paintGauge())
     void bridge.invoke(UsageChannels.displayGet).then((payload) => applyDisplay(payload as UsageDisplayConfig))
-    void bridge.invoke(UsageChannels.list).then((payload) => apply((payload as PlanUsageView[]) ?? []))
+    void bridge
+      .invoke(UsageChannels.list)
+      // A late `list` reply must not clobber a live push that already landed.
+      .then((payload) => {
+        if (!sawPush) apply((payload as PlanUsageView[]) ?? [])
+      })
+      .catch(() => undefined)
+      // Drain the alert outbox: anything the first polls fired before this
+      // listener existed (the boot race) replays now instead of being lost.
+      // SEQUENCED behind the snapshot above, so the lane port has been published
+      // at least once before a replayed alert gets to nudge anything. It is only
+      // a nudge either way — the pane path declines to act while `known` is
+      // false — but the honest ordering makes "we haven't looked yet" rare
+      // rather than merely safe.
+      .finally(() => {
+        void bridge
+          .invoke(UsageChannels.alertDrain)
+          .then((payload) => {
+            for (const a of (payload as (UsageAlert & { alertId: string })[]) ?? []) onAlert(a, true)
+          })
+          .catch(() => undefined)
+      })
     void bridge.invoke(UsageChannels.status).then((payload) => applyStatuses((payload as ProviderStatus[]) ?? []))
-    // Drain the alert outbox: anything the first polls fired before this
-    // listener existed (the boot race) replays now instead of being lost.
-    void bridge.invoke(UsageChannels.alertDrain).then((payload) => {
-      for (const a of (payload as (UsageAlert & { alertId: string })[]) ?? []) onAlert(a)
-    })
 
     // Dev/smoke handle (the firstrun pattern).
     const g = window as unknown as { __mogging?: Record<string, unknown> }

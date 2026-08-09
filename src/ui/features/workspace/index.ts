@@ -28,7 +28,8 @@ import {
   setWorkspaceSwitcher
 } from '../../core/workspace/workspace-info-port'
 import { openWizard } from '../../core/workspace/wizard-port'
-import { onAgentLaunchRequest, onProfileFailover } from '../../core/agents/launch-port'
+import { onAgentLaunchRequest, onPaneProfile } from '../../core/agents/launch-port'
+import { toPersistedSlot } from '../../core/agents/pane-profile'
 import { onPaneAgentSession } from '../../core/agents/agent-session-port'
 import { activeView, setActiveView } from '../../core/shell/view-port'
 import { setCommands } from '../../core/commands/command-port'
@@ -452,10 +453,12 @@ export const workspaceFeature: UiFeature = {
     )
 
     setWorkspaceSwitcher((id) => controller.switch(id))
-    // Usage-limit failover switched a pane's profile (6/04): the manifest follows,
-    // one persist per event — otherwise a restart resurrects the capped profile.
-    onProfileFailover((ev) => {
-      if (controller.noteProfileFailover(ev.paneId, ev.profileId)) persist()
+    // The RESOLVED profile of a pane's agent — from a launch, a failover relaunch,
+    // an adopt, or a detection. Every path that resolves an account says so here,
+    // so the manifest is a RECORDING rather than something restore re-derives.
+    // (It replaces a failover-only event: one fact, one writer.)
+    onPaneProfile((ev) => {
+      if (controller.notePaneProfile(ev.paneId, toPersistedSlot(ev.profile))) persist()
     })
     // Every authoritative cwd projection keeps focused-pane commands current. Only an
     // explicit agent declaration is durable worktree intent; shell/process movement is
@@ -470,7 +473,16 @@ export const workspaceFeature: UiFeature = {
     // not just the panes the creation wizard assigned. Lineup replays announce the
     // values already recorded, so this persists only on real change.
     onAgentLaunchRequest((req) => {
-      if (controller.noteAgentLaunch(req.paneId, req.provider, req.profileId, req.cwd)) persist()
+      let changed = controller.noteAgentLaunch(req.paneId, req.provider, req.cwd)
+      // An EXPLICIT request seeds the slot at once: a wizard/template lineup names
+      // the profile per slot, and that choice must survive a kill before the launch
+      // completes. An OMITTED one records NOTHING — "use the default" is not a fact
+      // about an account, and writing it as one is what made restore re-guess. The
+      // resolved value arrives on `onPaneProfile` above and supersedes this seed.
+      if (req.profileId && req.provider && req.provider !== 'shell') {
+        changed = controller.notePaneProfile(req.paneId, req.profileId) || changed
+      }
+      if (changed) persist()
     })
     // ...and every agent the app did NOT launch: one the user typed at the pane's own prompt,
     // found by the backend in the pane's PTY subtree (typed-launch detection). Without this
@@ -481,7 +493,9 @@ export const workspaceFeature: UiFeature = {
       if (!session?.detected) return
       const projection = getPaneCwdProjection(paneId)
       const relaunchCwd = projection?.source === 'agent' ? projection.cwd : session.cwd
-      if (controller.noteAgentLaunch(paneId, session.provider, session.profileId, relaunchCwd)) persist()
+      // The profile is NOT recorded from here: detection announces its own
+      // resolution (including "unknown") on the pane-profile port.
+      if (controller.noteAgentLaunch(paneId, session.provider, relaunchCwd)) persist()
     })
     // 06b: the wizard/templates open workspaces from a provider-mix spec.
     setWorkspaceOpener((spec) => {
