@@ -41,6 +41,36 @@ describe('1. a grid is published only when its inputs are final', () => {
   })
 })
 
+describe('1b. the pty-emulation contract has exactly two backends', () => {
+  // Not a general tidiness check — this literal set is load-bearing for the grid story.
+  // windowsPtyFor returns undefined for anything that is not exactly 'conpty', and without
+  // that option xterm grows a buffer the UNIX way (pull scrollback down) while ConPTY grows
+  // its own the Windows way (append blank rows at the bottom). The two viewports then drift
+  // by the rows they disagreed about, and conhost's next absolutely-addressed repaint lands
+  // offset — the drift class the CONPTY gate exists to catch. Add or rename a backend and
+  // that protection disappears silently, on one platform, at runtime. So the union and the
+  // function that mints it are pinned together, here, where a rename fails in seconds.
+  it('the union is exactly posix | conpty, and pty-host mints only those', () => {
+    expect(sourceOf('src/contracts/ipc/terminal.ipc.ts')).toContain(
+      "export type PtyEmulation = { backend: 'posix' } | { backend: 'conpty'; buildNumber: number }"
+    )
+    const host = sourceOf('src/backend/platform/pty-host.ts')
+    const emulation = bodyWithoutComments(host, 'export function ptyEmulation()')
+    expect(emulation).toContain("backend: 'conpty'")
+    expect(emulation).toContain("backend: 'posix'")
+    expect([...new Set([...host.matchAll(/backend: '([a-z-]+)'/g)].map((m) => m[1]))].sort()).toEqual([
+      'conpty',
+      'posix'
+    ])
+  })
+
+  it('the renderer maps that set, and only that set, onto xterm’s windowsPty', () => {
+    const body = bodyWithoutComments(sourceOf('src/ui/core/terminal/pty-emulation.ts'), 'export function windowsPtyFor')
+    expect(body).toMatch(/pty\.backend === 'conpty'/)
+    expect(body).toContain('undefined')
+  })
+})
+
 describe('2. every fit asserts to the pty', () => {
   const body = bodyWithoutComments(sourceOf(TERMINAL_PANE), 'private refit(')
 
@@ -214,100 +244,6 @@ describe('4. belief follows the pty, never leads it', () => {
     // WINS over a fresh request, so a size recorded for a resize that threw outlives the
     // pane that failed it.
     expect(twin.indexOf('proc.resize(cols, rows)')).toBeLessThan(twin.lastIndexOf('this.sizes.set('))
-  })
-})
-
-describe('4b. an attach realigns the client with conhost’s screen — once, and only there', () => {
-  // The ring is a byte log, not a screen model, so a client rebuilt from it derives its own
-  // row alignment and can disagree with conhost about which row is which (measured on the
-  // Windows runner: replay cursor at row 0 col 45, content to row 21, live output landing
-  // mid-buffer over rows nothing ever erased). Only conhost can restate its screen, and only
-  // a resize makes it. This is the narrow, named hole in the same-size dedupe.
-  const SESSION = 'src/pty-daemon/session.ts'
-  const body = bodyWithoutComments(sourceOf(SESSION), 'repaintForAttach(): void')
-
-  it('JIGGLES — a same-size resize is a no-op in conhost and repaints nothing', () => {
-    // Measured on the runner: the first cut asked for the size conhost already held and got
-    // `burstBytes: 0`. ResizePseudoConsole repaints on a real CHANGE, not on being asked.
-    const grow = body.indexOf('this.proc.resize(this.cols, this.rows + 1)')
-    const restore = body.lastIndexOf('this.proc.resize(this.cols, this.rows)')
-    expect(grow).toBeGreaterThan(-1)
-    expect(restore).toBeGreaterThan(grow)
-    expect(body.match(/this\.proc\.resize\(/g) ?? []).toHaveLength(2)
-  })
-
-  it('moves ROWS, never columns — width is the axis ConPTY loses data on', () => {
-    // The OS's v1 discards its re-wrap overflow on a width shrink (CONPTY gate: 18-27 lost
-    // markers of 120). A realignment must not corrupt the thing it realigns.
-    expect(body).not.toMatch(/this\.proc\.resize\(this\.cols\s*[+-]\s*1/)
-  })
-
-  it('GROWS first and restores — a shrink would scroll a real line off a full screen', () => {
-    // Conhost grows by appending empty rows at the BOTTOM, so +1 pushes nothing off the top
-    // and the restore removes exactly the blank row it added.
-    expect(body).not.toMatch(/this\.rows\s*-\s*1/)
-    expect(body.indexOf('this.rows + 1')).toBeLessThan(body.lastIndexOf('this.proc.resize(this.cols, this.rows)'))
-  })
-
-  it('always puts the size back — a failed restore is reported, never silent', () => {
-    // Conhost left one row taller than every belief in this process is the exact divergence
-    // this method exists to end.
-    const afterGrow = body.slice(body.indexOf('this.proc.resize(this.cols, this.rows + 1)'))
-    expect(afterGrow).toContain('this.proc.resize(this.cols, this.rows)')
-    expect((afterGrow.match(/log\(/g) ?? []).length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('claims nothing: no belief written, no dirty mark, no launch released', () => {
-    // Nothing about the session CHANGED — this emits bytes and reports no news. A stray
-    // `this.cols =` here would let a repaint rewrite the grid it was only supposed to restate.
-    expect(body).not.toMatch(/this\.(cols|rows)\s*=/)
-    expect(body).not.toContain('flushPendingLaunch')
-    expect(body).not.toContain('onChange')
-  })
-
-  it('is ConPTY-only, as its FIRST act — a POSIX pty has no alignment to lose', () => {
-    const guard = body.indexOf("ptyEmulation().backend !== 'conpty'")
-    expect(guard).toBeGreaterThan(-1)
-    expect(guard).toBeLessThan(body.indexOf('this.proc.resize('))
-  })
-
-  it('the guard string is the one the emulation module actually reports', () => {
-    // A guard that tests a string nothing produces is an early return that always fires —
-    // the heal would die silently and every gate would still be green. So the literal is
-    // asserted against its SOURCE, in both directions: the contract's backend union and the
-    // function that mints the value. Rename the backend and this fails here, loudly, instead
-    // of on a Windows runner three rounds later.
-    const emulation = bodyWithoutComments(sourceOf('src/backend/platform/pty-host.ts'), 'export function ptyEmulation()')
-    expect(emulation).toContain("backend: 'conpty'")
-    expect(emulation).toContain("backend: 'posix'")
-    const union = sourceOf('src/contracts/ipc/terminal.ipc.ts')
-    expect(union).toContain("export type PtyEmulation = { backend: 'posix' } | { backend: 'conpty'; buildNumber: number }")
-    // ...and no third spelling has appeared that the guard would silently miss.
-    const backends = new Set(
-      [...sourceOf('src/backend/platform/pty-host.ts').matchAll(/backend: '([a-z-]+)'/g)].map((m) => m[1])
-    )
-    expect([...backends].sort()).toEqual(['conpty', 'posix'])
-  })
-
-  it('fires ONLY on the measured-and-equal attach — never dims-less, never a fresh pane', () => {
-    const ensure = bodyWithoutComments(sourceOf(SESSION), 'ensure(id: string, spec: SpawnSpec)')
-    // Exactly one call site, and it sits inside the `else if (specDimsUsable(...))` arm: the
-    // attach that applies nothing today, which is precisely why it cannot self-heal.
-    expect(ensure.match(/repaintForAttach\(\)/g) ?? []).toHaveLength(1)
-    const arm = ensure.slice(ensure.indexOf('else if (specDimsUsable(normalizedSpec))'))
-    expect(arm.slice(0, arm.indexOf('}'))).toContain('existing.repaintForAttach()')
-    // A dims-less attach states no measurement, so there is nothing to align to; a resize
-    // that CHANGES the grid already repaints on its own.
-    const changed = ensure.slice(ensure.indexOf('const dims = attachDims'), ensure.indexOf('else if (specDimsUsable'))
-    expect(changed).not.toContain('repaintForAttach')
-  })
-
-  it('the mid-session dedupe it makes an exception to is still there', () => {
-    // The exception is narrow BECAUSE the rule is right: a same-size resize mid-session is a
-    // spurious repaint spliced over a live agent's frame.
-    const resize = bodyWithoutComments(sourceOf(SESSION), 'resize(cols: number, rows: number): void')
-    expect(resize).toMatch(/if\s*\(cols === this\.cols && rows === this\.rows\)/)
-    expect(resize).not.toContain('repaintForAttach')
   })
 })
 

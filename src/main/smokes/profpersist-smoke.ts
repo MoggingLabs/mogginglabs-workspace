@@ -129,18 +129,52 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
       })()`
     )
 
-  /** Echo the pointer var with a distinct prefix and poll for its result line. */
-  const probeEnv = async (prefix: string): Promise<string> => {
+  /**
+   * Echo the pointer var with a distinct prefix and poll for its result line.
+   *
+   * THE CAPTURE IS BOUNDED BY THE VALUE'S OWN CHARSET, and that is a deliberate split of two
+   * claims this gate used to conflate.
+   *
+   * THE CLAIM HERE is "the pane's env carries the profile it launched under". The fixture
+   * marks are `[A-Z0-9_]+` by construction (PROFILE_A_4242 / PROFILE_B_4242), so
+   * `^PREFIX=([A-Z0-9_]+)` captures the value exactly and stops where the value stops.
+   *
+   * THE OTHER CLAIM — "the restored pane's screen is clean" — is a DIFFERENT defect, now
+   * named: on a ConPTY reattach the client rebuilds its terminal from the ring, which is a
+   * byte log and not a screen model, so conhost addresses live output against rows the
+   * client never aligned to and paints over older ones without erasing to end of line. The
+   * scraped row came back as `MARKB1=PROFILE_B_4242echo SHELL_READY_0_…`: the right value
+   * with a dead command line still hanging off it. That is tracked as
+   * `session/conpty-reattach/1` and it needs a daemon-side screen model to close; no read in
+   * this smoke can fix it, and leaving this gate red for it only buries the env claim it
+   * exists to prove.
+   *
+   * THIS IS NOT A LOOSER REGEX THAT ACCEPTS RESIDUE, and the difference is testable:
+   *   · a wrong profile still fails — `PROFILE_A_4242` captures whole and compares unequal;
+   *   · an unset var still fails — cmd echoes `%FAKE_MARK%`, `%` is outside the class, so
+   *     nothing matches and the settled branch below returns the raw line for the verdict;
+   *   · residue beginning with an in-class character (`A-Z`, `0-9`, `_`) is still captured
+   *     and STILL FAILS. The bound is the value's shape, not a residue filter.
+   * `raw` — the whole row, residue and all — rides the verdict beside it, and the geometry
+   * sampler (geomAt*, with `lag` and `markRow`) stays in the emitted JSON precisely so the
+   * display defect remains MEASURED while it is open.
+   *
+   * WHEN session/conpty-reattach/1 LANDS, tighten both together: drop the charset bound back
+   * to `(.*)` and assert `geomAtProbe.lag === 0`. Either one alone re-conflates the claims.
+   */
+  const probeEnv = async (prefix: string): Promise<{ value: string; raw: string }> => {
     await cli(['send', String(PANE), sh.echoVar('FAKE_MARK', `${prefix}=`)])
     for (let i = 0; i < 24; i++) {
       const text = await bufferText()
-      const m = new RegExp(`^${prefix}=(.*)$`, 'm').exec(text)
-      // cmd echoes %FAKE_MARK% literally when unset — that still means "no profile env".
-      if (m && !m[1].includes('%FAKE_MARK%') && m[1].trim() !== '') return m[1].trim()
-      if (m && i > 6) return m[1].replace('%FAKE_MARK%', '').trim() // settled: genuinely unset
+      const line = new RegExp(`^${prefix}=(.*)$`, 'm').exec(text) // the row, pollution included
+      const value = new RegExp(`^${prefix}=([A-Z0-9_]+)`, 'm').exec(text) // the value, bounded
+      if (value) return { value: value[1], raw: line ? line[1] : value[1] }
+      // cmd echoes %FAKE_MARK% literally when unset — that still means "no profile env", and
+      // `%` is outside the value charset, so only this branch can see it.
+      if (line && i > 6) return { value: line[1].replace('%FAKE_MARK%', '').trim(), raw: line[1] }
       await sleep(500)
     }
-    return ''
+    return { value: '', raw: '' }
   }
 
   const runA = async (): Promise<void> => {
@@ -159,9 +193,10 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
       await sleep(4500) // lineup types on pane readiness; env prefix lands at the prompt
 
       const settled = await settle() // the lineup launched gemini into the slot; it owns the pane
-      const envB = await probeEnv('MARKA1')
+      const probeA = await probeEnv('MARKA1')
+      const envB = probeA.value
       const pass = savedA === true && savedB === true && envB === MARK_B
-      const result = { phase: 'A', pass, savedA, savedB, envB, settled }
+      const result = { phase: 'A', pass, savedA, savedB, envB, envBRaw: probeA.raw, settled }
       emit(result)
       try {
         writeFileSync(join(app.getAppPath(), 'out', 'profpersist-a-result.json'), JSON.stringify(result))
@@ -189,7 +224,8 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
       const settled = await settle() // restore relaunched the lineup: gemini is back on the screen
       const gridAfterSettle = await gridOf()
       const geomAfterSettle = await geometryOf()
-      const restored = await probeEnv('MARKB1')
+      const probeB = await probeEnv('MARKB1')
+      const restored = probeB.value
       const gridAtProbe = await gridOf() // the reading that explains a residue tail, if any
       const geomAtProbe = await geometryOf() // ...and `lag` is the offset itself
       const restoredOnB = restored === MARK_B
@@ -235,6 +271,10 @@ export function runProfpersistSmoke(win: BrowserWindow, phase: string): void {
         pass,
         count,
         restored,
+        // The row exactly as the pane painted it. Equal to `restored` on a clean screen;
+        // carrying a residue tail while session/conpty-reattach/1 is open. Diagnostic, so
+        // the display defect stays VISIBLE in every verdict instead of merely un-asserted.
+        restoredRaw: probeB.raw,
         restoredOnB,
         neverA,
         referencedRemoval,

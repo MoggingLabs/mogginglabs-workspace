@@ -11,11 +11,10 @@
 //   B. DETACH, REATTACH at 132x40 — spawned.existing must be true, and the probe must
 //      print RESIZED_132: the pty delivered the attach resize INTO the process. This is
 //      the end-to-end bite: revert the ensure() reconciliation and no resize ever fires.
-//   C. SAME-DIMS RESPAWN repaints ONCE and then stops. PaneSession.resize stays idempotent
-//      by dimension for mid-session resizes, but an ATTACH at the session's own grid asks
-//      conhost for one full-viewport repaint (repaintForAttach) — the only primitive that
-//      realigns a client rebuilt from the ring with conhost's screen. ConPTY: a bounded
-//      burst, then a silent window. POSIX: strictly zero (no renderer, nothing to realign).
+//   C. SAME-DIMS RESPAWN is silent — PaneSession.resize is idempotent by dimension
+//      (ConPTY answers every forwarded resize with a full repaint); no new RESIZED mark.
+//      Silent on every platform, and it STAYS silent in a second window (the diagnostic
+//      that says "settled", not merely "never started").
 //   D. DAEMON TRUTH — a fresh client's welcome lists the session at 132x40.
 import { app } from 'electron'
 import * as fs from 'node:fs'
@@ -126,62 +125,35 @@ export async function runReattachFitSmoke(): Promise<void> {
     const resized = posix ? await until(() => capB.includes('RESIZED_132'), 10000) : true
     if (!resized) return fail('pty did not deliver the attach resize to the process', { capTail: capB.slice(-200) })
 
-    // C. SAME-DIMS RESPAWN — rescoped, because what this pin was protecting turned out to
-    // be two different claims and only one of them was ever true.
+    // Same-dims respawn stays byte-silent ON THE LIVE CHANNEL: the respawn goes through
+    // clientC, whose spawned reply legitimately carries the scrollback replay (every
+    // spawn's does, to the SPAWNING client only) — while clientB's standing subscription
+    // hears only live pty output. The probe prints nothing on its own, so any bytes on
+    // B here would be ConPTY answering a spurious forwarded resize (the idempotence
+    // guard in PaneSession.resize).
     //
-    // The original assertion was byte-silence on clientB (a BYSTANDER's standing
-    // subscription — clientC does the respawn, and every spawn's own reply legitimately
-    // carries the scrollback replay). Its stated reason was that any bytes here "would be
-    // ConPTY answering a SPURIOUS forwarded resize", and for a mid-session resize that is
-    // exactly right: it splices conhost's screen over whatever the agent is drawing, which
-    // is why PaneSession.resize dedupes by dimension and why REFIT_SETTLE_MS exists.
-    //
-    // But a repaint at ATTACH is not spurious — it is load-bearing. A reattaching client
-    // rebuilds its terminal from the ring, which is a byte log and not a screen model, and
-    // conhost's full-viewport repaint is the ONLY thing that restates its cursor, viewport
-    // and stale rows in absolute coordinates so the two agree (PaneSession.repaintForAttach
-    // carries the measured evidence). Under the old pin the one attach that cannot self-heal
-    // — measured, equal to the session's grid, so no resize fires — was the one guaranteed
-    // to stay misaligned. PROFPERSIST_B read the result: live output landing mid-buffer over
-    // phase-A rows that nothing ever erased.
-    //
-    // So the pin keeps its real intent and drops the part that was collateral: what must
-    // stay impossible is an UNBOUNDED or REPEATING repaint — a resize loop, or a burst that
-    // never settles. One bounded burst per attach, then silence.
+    // This was briefly rescoped to admit a deliberate realignment repaint at attach, on the
+    // theory that a resize is the one primitive that makes conhost restate its screen for a
+    // client rebuilt from the ring. Two Windows runs measured the theory dead — a same-size
+    // resize is a no-op, and a net-zero jiggle ends at a screen identical to conhost's own
+    // model, so the diff is empty either way. ZERO is the platform's truth here, and the
+    // strict assertion is restored. The reattach alignment defect it was chasing is real and
+    // separately tracked (session/conpty-reattach/1); it needs a daemon-side screen model,
+    // and no assertion in this file should imply otherwise.
     await delay(500)
     const quietLen = capB.length
     await clientC.spawn('rf1', { cols: 132, rows: 40 })
     await delay(1500)
-    const burstBytes = capB.length - quietLen
-    // ...and then it must STOP. The probe prints nothing on its own, so every byte in this
-    // second window would be a repaint nobody asked for — the loop this pin exists to forbid.
+    const sameDimsBytes = capB.length - quietLen
+    if (sameDimsBytes !== 0)
+      return fail('same-dims reattach forwarded a spurious resize', { sameDimsBytes })
+    // Kept from the rescope because it costs one delay and answers the first question anyone
+    // asks of this gate: silent because nothing fired, or silent because it settled?
     const afterBurst = capB.length
     await delay(1500)
     const trailingBytes = capB.length - afterBurst
     if (trailingBytes !== 0)
-      return fail('same-dims reattach kept repainting after its burst', { burstBytes, trailingBytes })
-    if (posix) {
-      // No renderer on the far side of a unix pty: nothing addresses rows on the terminal's
-      // behalf, so there is no alignment to lose and repaintForAttach returns early. The
-      // strict zero is still the truth HERE, and it is what keeps the ConPTY-only gating
-      // honest — lose the platform guard and this goes red.
-      if (burstBytes !== 0)
-        return fail('a POSIX same-dims reattach forwarded a resize (platform guard lost?)', { burstBytes })
-    } else {
-      // The end-to-end bite for the realignment: revert repaintForAttach and conhost is
-      // never asked to restate its screen, so this is 0 and the reattach smear comes back.
-      // It read exactly 0 once already, when the method asked for the size conhost already
-      // held — ResizePseudoConsole repaints on a real change, so the realignment JIGGLES
-      // (grow one row, restore) and this is what proves the jiggle still lands.
-      if (burstBytes <= 0)
-        return fail('a ConPTY same-dims reattach did NOT realign (no repaint burst)', { burstBytes })
-      // Bounded: TWO viewports' worth, generously — the jiggle is two real resizes, so
-      // conhost may answer with two repaints (it may also fold them into one flush; the cap
-      // admits either). Anything past this is not a repaint, it is a loop that settled.
-      const burstCeiling = 2 * 132 * 40 * 4
-      if (burstBytes > burstCeiling)
-        return fail('the attach repaint burst was not bounded', { burstBytes, burstCeiling })
-    }
+      return fail('same-dims reattach emitted bytes after settling', { sameDimsBytes, trailingBytes })
 
     clientB.kill('rf1')
     await delay(300)
@@ -197,9 +169,8 @@ export async function runReattachFitSmoke(): Promise<void> {
       probeSawSpawnSize: sawCols,
       posixProbeSawResize: posix ? true : 'n/a (win32 — see repaintBytes)',
       repaintBytesAfterAttach: capB.length - replayLen,
-      // The rescoped phase C, in numbers: one bounded realignment burst on ConPTY (0 on
-      // POSIX), and nothing at all in the window after it.
-      sameDimsBurstBytes: burstBytes,
+      // Phase C in numbers: zero on the attach, and zero again in the window after it.
+      sameDimsBytes,
       sameDimsTrailingBytes: trailingBytes
     })
     app.exit(0)
