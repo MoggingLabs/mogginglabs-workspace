@@ -36,6 +36,11 @@ describe('attachDims', () => {
 
 // The confirmation predicate a deferred launch waits on: equal-to-current dims apply
 // nothing (attachDims null) yet still turn a restore's persisted-size GUESS into a fact.
+//
+// It has a SECOND caller now — PaneSession.resize admits on it before touching the pty.
+// transport forwards a client's cols/rows unvalidated, so a single `cols: 0` used to make
+// node-pty throw AFTER the session had already recorded the size, and the same-dims dedupe
+// then made that wrong belief permanent. The cases below are that guard's contract too.
 describe('specDimsUsable', () => {
   it('true for a whole measured grid, including equal-to-current and the minimum', () => {
     expect(specDimsUsable({ cols: 80, rows: 24 })).toBe(true)

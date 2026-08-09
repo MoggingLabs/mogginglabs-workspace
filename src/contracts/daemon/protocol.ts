@@ -309,7 +309,24 @@ export type ServerMessage =
   // `restored` narrows `existing`: a cold-start restore (fresh shell + repainted
   // scrollback, untouched since) rather than a continuously-live session — the app
   // types resume into the former and must keep its hands off the latter (v5).
-  | { t: 'spawned'; id: string; gen: number; existing: boolean; restored: boolean; scrollback: string; pty: PtyEmulation }
+  // `cols`/`rows` (additive): the grid the session ACTUALLY holds, sampled after ensure()
+  // has applied whatever reconciliation this spawn asked for — so it is post-reconciliation
+  // truth, not an echo of the request. It is the read-back that lets a client tell
+  // agreement from divergence; without it a resize lost anywhere between the renderer and
+  // ConPTY was permanent AND invisible. No protocol version bump: an optional field on an
+  // existing message, per SpawnSpec.env's precedent — an old daemon omits it and the client
+  // degrades to exactly the behaviour it had before.
+  | {
+      t: 'spawned'
+      id: string
+      gen: number
+      existing: boolean
+      restored: boolean
+      scrollback: string
+      pty: PtyEmulation
+      cols?: number
+      rows?: number
+    }
   | { t: 'attached'; id: string; gen: number; scrollback: string }
   | { t: 'data'; id: string; gen: number; data: string }
   | { t: 'exit'; id: string; gen: number; code: number }

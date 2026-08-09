@@ -1,0 +1,158 @@
+import { describe, expect, it } from 'vitest'
+import { bodyWithoutComments, sourceOf } from './source-body'
+
+/**
+ * THE DIMS INVARIANT, pinned across the four layers that have to agree on it.
+ *
+ * A pane's grid is a reconciled invariant, not a one-way assertion:
+ *
+ *   1. Nothing is PUBLISHED before its inputs are final (the faces are active).
+ *   2. Every fit ASSERTS to the pty, rather than only when xterm's own grid changed.
+ *   3. The session REPORTS the grid it holds, and the renderer heals a divergence.
+ *   4. The daemon's belief FOLLOWS its pty, and never leads it.
+ *   5. No drop is silent.
+ *
+ * Each of these lives in renderer code that touches the DOM at call time, or in daemon code
+ * that pulls a native module at module scope, so none can be imported here. Asserted by
+ * shape instead — with anchors that throw when they stop matching (source-body.ts), because
+ * the failure mode of a stale source assertion is a test that passes for no reason.
+ */
+
+const TERMINAL_PANE = 'src/ui/features/terminal/terminal-pane.ts'
+
+describe('1. a grid is published only when its inputs are final', () => {
+  it('proposeGrid refuses before the terminal faces are active, as its FIRST act', () => {
+    const src = sourceOf('src/ui/features/terminal/pane-fit.ts')
+    const body = bodyWithoutComments(src, 'export function proposeGrid')
+    const guard = body.indexOf('terminalFontsReady()')
+    expect(guard).toBeGreaterThan(-1)
+    // Before every measurement, not merely somewhere among them: a cell read against a
+    // fallback face is not a measurement, and the ordering is what makes that structural.
+    expect(guard).toBeLessThan(body.indexOf('getComputedStyle'))
+    expect(guard).toBeLessThan(body.indexOf('deviceCell('))
+  })
+
+  it('the published cell is renderer-independent, from the DEVICE cell', () => {
+    const src = sourceOf('src/ui/features/terminal/pane-fit.ts')
+    expect(bodyWithoutComments(src, 'export function proposeGrid')).toContain('publishableCell(')
+    // css.cell carries the DOM renderer's round(·cols)/cols residue; device.cell does not.
+    expect(bodyWithoutComments(src, 'function deviceCell')).toContain('device?.cell')
+  })
+})
+
+describe('2. every fit asserts to the pty', () => {
+  const body = bodyWithoutComments(sourceOf(TERMINAL_PANE), 'private refit(')
+
+  it('sends the resize unconditionally, not only when xterm changed', () => {
+    expect(body).toContain('terminalClient.resize')
+    // The gate this replaces made the PTY's correctness a function of XTERM's state, and
+    // the two disagree exactly when it matters — a resize lost to a dead socket, or to a
+    // session that did not exist yet.
+    expect(body).not.toMatch(/if\s*\(\s*applyGrid\(/)
+  })
+
+  it('still skips a dead pane — it has no session to assert to', () => {
+    expect(body).toMatch(/if\s*\(!this\.dead\)/)
+  })
+
+  it('reassertGrid no longer carries its own copy of the send', () => {
+    const reassert = bodyWithoutComments(sourceOf(TERMINAL_PANE), 'private reassertGrid()')
+    expect(reassert).toContain('this.refit()')
+    expect(reassert).not.toContain('terminalClient.resize')
+  })
+})
+
+describe('3. the session reports its grid, and the renderer reconciles', () => {
+  it('the spawn reply is consumed for the session dims', () => {
+    const src = sourceOf(TERMINAL_PANE)
+    const then = src.slice(src.indexOf('.then((res)'), src.indexOf('.catch((err)'))
+    expect(then).toContain('this.reconcileSession(res.cols, res.rows)')
+  })
+
+  it('reconcile adopts nothing from an unmeasured pane, and stays silent on agreement', () => {
+    const body = bodyWithoutComments(sourceOf(TERMINAL_PANE), 'private reconcileSession(')
+    // The session's size is not evidence about this pane's box: without a proposal of our
+    // own there is nothing to compare, and adopting would resize a live agent to a layout
+    // from another app run.
+    expect(body).toMatch(/proposeGrid\(this\.term\)[\s\S]*?if\s*\(!d\)\s*return/)
+    expect(body).toMatch(/if\s*\(this\.sessionDims\.cols === d\.cols && this\.sessionDims\.rows === d\.rows\)\s*return/)
+  })
+
+  it('the daemon samples the dims AFTER ensure(), so the reply is post-reconciliation truth', () => {
+    const src = sourceOf('src/pty-daemon/transport.ts')
+    const spawned = src.slice(src.indexOf("t: 'spawned'"), src.indexOf('subscribe(m.id)'))
+    expect(spawned).toContain('cols: pane.cols')
+    expect(spawned).toContain('rows: pane.rows')
+  })
+})
+
+describe('4. belief follows the pty, never leads it', () => {
+  const body = bodyWithoutComments(sourceOf('src/pty-daemon/session.ts'), 'resize(cols: number, rows: number): void')
+
+  it('applies before it believes', () => {
+    const apply = body.indexOf('this.proc.resize(')
+    const believe = body.indexOf('this.cols = cols')
+    expect(apply).toBeGreaterThan(-1)
+    expect(believe).toBeGreaterThan(-1)
+    // These fields are what info() reports, what snapshot() persists, and what attachDims
+    // compares against. Written first and paired with a swallowed throw, one failed resize
+    // left all three describing a size ConPTY never took — and the dedupe made it forever.
+    expect(apply).toBeLessThan(believe)
+  })
+
+  it('refuses dims node-pty would throw on, before anything believes them', () => {
+    expect(body.indexOf('specDimsUsable(')).toBeLessThan(body.indexOf('this.proc.resize('))
+  })
+
+  it('does not confirm a size the pty failed to take', () => {
+    const failure = body.slice(body.indexOf('catch'), body.indexOf('this.cols = cols'))
+    expect(failure).not.toContain('flushPendingLaunch')
+    expect(failure).toContain('return')
+  })
+
+  it('the in-proc twin keeps the same order', () => {
+    const twin = bodyWithoutComments(
+      sourceOf('src/backend/features/terminal/pty.service.ts'),
+      'resize({ id, cols, rows }: ResizeCommand): void'
+    )
+    // `sizes` is not local bookkeeping here either — spawn() reads it back as the size that
+    // WINS over a fresh request, so a size recorded for a resize that threw outlives the
+    // pane that failed it.
+    expect(twin.indexOf('proc.resize(cols, rows)')).toBeLessThan(twin.lastIndexOf('this.sizes.set('))
+  })
+})
+
+describe('5. no drop is silent', () => {
+  it('the daemon reports input and resize aimed at a pane it has no session for', () => {
+    const src = sourceOf('src/pty-daemon/transport.ts')
+    // Both cases had the same hole: `if (pane && gen ok) … else if (pane) log(…)` took NO
+    // branch at all when there was no session, which is the window a pane refitting ahead
+    // of its own spawn lands in.
+    expect(bodyWithoutComments(src, "case 'input': {")).toContain("logDropNoSession('input'")
+    expect(bodyWithoutComments(src, "case 'resize': {")).toContain("logDropNoSession('resize'")
+  })
+
+  it('the client reports a command it could not put on the socket', () => {
+    const body = bodyWithoutComments(sourceOf('src/main/daemon-client.ts'), 'private send(m: ClientMessage): void')
+    // `this.sock?.write(...)` evaluated to undefined with no socket: no throw, no log, no
+    // return value — a whole class of loss swallowed whole.
+    expect(body).toContain('clientLog')
+    expect(body).not.toMatch(/this\.sock\?\.write/)
+  })
+
+  it('the relay reports a resize dropped for a tombstoned pane', () => {
+    const src = sourceOf('src/main/daemon-relay.ts')
+    const resize = src.slice(src.indexOf('TerminalChannels.resize, (_e, cmd: ResizeCommand)'))
+    expect(resize.slice(0, resize.indexOf('client.resize('))).toContain("clientLog('command-tombstoned'")
+  })
+
+  it('the relay LOGS a welcome-vs-banked divergence but never adopts it', () => {
+    const body = bodyWithoutComments(sourceOf('src/main/daemon-relay.ts'), 'onWelcome: (panes)')
+    expect(body).toContain("clientLog('dims-divergent'")
+    // Adopting would make the reconnect replay send `spawn {cols, rows}`, which the daemon
+    // reads as a CLIENT MEASUREMENT and which releases a deferred launch — typing an agent
+    // into a size no client ever measured, through the back door of the invariant built to
+    // prevent exactly that.
+    expect(body).not.toMatch(/spec\w*\.cols\s*=|Object\.assign\(\s*banked/)
+  })
+})

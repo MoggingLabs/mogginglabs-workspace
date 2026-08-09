@@ -184,6 +184,21 @@ export async function runRestoreDimsSmoke(): Promise<void> {
     const trueGenApplied = trueInfo?.cols === 90 && trueInfo?.rows === 22
     if (!trueGenApplied) return fail('a TRUE-gen resize was refused', { trueInfo })
 
+    // 6b. BELIEF FOLLOWS THE PTY. transport forwards a client's cols/rows unvalidated, so
+    // `cols: 0` reaches PaneSession.resize — where node-pty throws. The session used to
+    // record the size BEFORE applying it and swallow that throw, leaving info(), the
+    // persisted snapshot and every attachDims comparison describing a grid ConPTY never
+    // took; the same-dims dedupe then made it permanent, so a later honest resize to 0x22
+    // would have been dropped as a no-op. A refused resize must leave the session's
+    // reported size exactly where it was.
+    clientB.resize(PANE, 0, 22, genB)
+    await delay(700)
+    const poisonProbe = new DaemonClient(ep2, {})
+    const poisonInfo = (await poisonProbe.connect()).find((p) => p.id === PANE)
+    poisonProbe.dispose()
+    const beliefHeld = poisonInfo?.cols === 90 && poisonInfo?.rows === 22
+    if (!beliefHeld) return fail('a resize the pty could not take poisoned the session’s belief', { poisonInfo })
+
     // 7. replay disposition (the reconnect double-paint fix): 'suppress' must deliver
     // NO replay bytes; 'reset' must deliver a full-reset prefix plus the ring.
     const ringLen = capB.length
@@ -235,6 +250,7 @@ export async function runRestoreDimsSmoke(): Promise<void> {
       modeGrounded,
       staleGenRefused: staleRefused,
       trueGenApplied,
+      beliefHeld,
       suppressOk,
       resetOk,
       graceTyped

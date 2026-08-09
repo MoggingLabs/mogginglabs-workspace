@@ -130,7 +130,40 @@ const SETUP_SCRIPT = `(async () => {
     fits = panes.map(fitTruth)
     if (fits.every((f) => f.ok)) break
   }
-  return { pass: fits.every((f) => f.ok), fits, paneIds: panes.map((p) => p.id) }
+  // BOOT AGREEMENT — asserted before any drift is injected, because the state this gate
+  // used to reach only AFTER a heal is the state a boot should already be in.
+  //
+  // A pane measured its cell at term.open(), against whatever face was resolved in that
+  // instant — a system fallback, before the vendored one activates — and shipped THAT grid
+  // as its spawn dims. On an app restart the daemon applied it to a session already
+  // running. Two corrections then followed (the faces, then the WebGL attach), each a full
+  // ConPTY repaint spliced into a live agent's frame, and each individually droppable.
+  // proposeGrid now refuses to publish until its inputs are final, so the FIRST grid a
+  // pane ever ships is the right one.
+  // NOT asserted here: p.grid().session. It is a snapshot from the last SPAWN REPLY, not a
+  // live reading — pane 1 is spawned full-width and then split by layout.apply(4), so its
+  // recorded session size is honestly the pre-split one, and a pane whose reply is still in
+  // flight has none at all. Renderer-vs-daemon agreement is real and IS asserted, at the end
+  // of this gate, against daemon truth (a fresh probe client's welcome). Carried in the
+  // payload as a diagnostic so a divergence is still visible here.
+  const grids = panes.map((p) => ({ id: p.id, ...p.grid() }))
+  const agreed = grids.every(
+    (g) => g.fontsReady && g.proposed && g.proposed.cols === g.xterm.cols && g.proposed.rows === g.xterm.rows
+  )
+  // ...and it should have taken ONE grid change to get here, not a font refit and then a
+  // renderer-swap refit. The published cell is renderer-independent now, so a swap is no
+  // longer a metrics event at all.
+  const changesPerPane = panes.map((p) => window.__gridhealTrace.filter((t) => t.id === p.id).length)
+  const settledOnce = changesPerPane.every((n) => n <= 1)
+  return {
+    pass: fits.every((f) => f.ok) && agreed && settledOnce,
+    fits,
+    grids,
+    changesPerPane,
+    agreed,
+    settledOnce,
+    paneIds: panes.map((p) => p.id)
+  }
 })()`
 
 // A. expand pane[0] full (siblings covered, boxes untouched), drift a covered sibling,

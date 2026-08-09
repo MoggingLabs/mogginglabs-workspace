@@ -9,7 +9,7 @@
 # Usage: bash scripts/qa-smokes.sh   (CI wraps with xvfb-run -a; MOGGING_CI_GPU=soft
 # relaxes ONLY frame-gap budgets for software-GL runners and prints loudly.)
 #
-# 215 gates: 37 static (AUDIT · LEDGER · VERDICT · SATELLITE · CLIGRAM · DOCSCITE · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 178 app-boot
+# 216 gates: 37 static (AUDIT · LEDGER · VERDICT · SATELLITE · CLIGRAM · DOCSCITE · SPACING · PTYSEAM · PROTOVER · CONPTYPIN · CHANNELS · AGENTCAT · LAYOUT · DOCSREFS · CUSTODY · MOTION · FONTCOVER · NPMCONFIG · CATSCHEMA · TOOLWORDS · PRODARTIFACT · GATECOUNT · LINT · UNIT · GITPURE · REMOTEBOOT · CONNPURE · TOOLCRED · RESTEXEC · RESTIMPORT · PREREGCLIENT · DEVICEFLOW · ORIGINPIN · FUSES · WEIGHT · BYTECODE · GRAMMARCAT) + 179 app-boot
 # The registry below is the source of truth for the gate count, and check-gate-count.mjs
 # DERIVES it from these rows rather than trusting any prose (finding 40: every doc that
 # stated the sweep's size stated a different one). Agent settings adds a catalog gate, a
@@ -396,6 +396,11 @@ run_smoke PANEFIT     MOGGING_PANEFIT   1 240 panefit
 # reconnect must each re-assert xterm/PTY grid agreement (neither has a box change coming).
 run_smoke GRIDHEAL    MOGGING_GRIDHEAL  1 240 gridheal
 run_smoke REATTACHFIT MOGGING_REATTACHFIT 1 120 reattachfit
+# The other half of a reattach: TERMINAL STATE. A head-trimmed ring loses the one `?1049h`
+# a full-screen agent ever sends, so its frames landed in a fresh xterm's NORMAL buffer —
+# the missing-composer bug. The replay reconstructs the modes, drops the frames (an
+# alternate screen has no history), and puts ZERO bytes on the live channel.
+run_smoke ALTREPLAY   MOGGING_ALTREPLAY 1 180 altreplay
 # The dims invariant (smeared-restore root cause): restore respawns at the persisted
 # grid; a typed resume waits for a MEASURED attach (dims-less spawns neither resize nor
 # release it); the headless grace still types it when no client ever measures.

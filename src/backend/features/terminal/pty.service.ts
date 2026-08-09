@@ -16,6 +16,7 @@ import { spawnPty, ptyEmulation, type IPty } from '../../platform/pty-host'
 import { defaultShell, paneShellLaunch } from '../../platform/shell'
 import { killPtyTree } from '../../platform/process-tree'
 import { SCROLLBACK_CHARS, pickCwd, trimTornStart , paneProcessEnv} from './pane-shared'
+import { composeReplay, GROUND, TerminalModeTracker } from './pane-modes'
 import { getTelemetry } from '../../core/telemetry'
 import {
   ActivityTracker,
@@ -58,6 +59,8 @@ export class PtyService {
    *  re-requests every pane): parity with the daemon path, whose reattach repaints from
    *  ITS ring — without this an in-proc reload left every pane blank over a live shell. */
   private readonly buffers = new Map<number, string>()
+  /** Mode state at each ring's head — the daemon's `headModes` twin (pane-modes.ts). */
+  private readonly headModes = new Map<number, TerminalModeTracker>()
   /** Source-aware cwd state for each pane. Shell reports are the conservative fallback when a
    * foreground process cannot be inspected (permissions or platform policy). */
   private readonly cwdStates = new Map<number, PaneCwdState>()
@@ -118,10 +121,16 @@ export class PtyService {
       // (scrollback data precedes `spawned`), which the renderer already handles.
       // Never `restored`: an in-proc pty lives in THIS process, so an existing session is
       // by definition continuously alive (a renderer reload), never a cold-start restore.
+      // The ring plus the mode state it cannot carry — see PaneSession.replayStream for
+      // the argument. Byte-identical to the raw buffer for an ordinary shell pane.
       const buf = this.buffers.get(req.id)
-      if (buf) this.sink.data({ id: req.id, data: buf })
+      const head = this.headModes.get(req.id)?.snapshot() ?? GROUND
+      if (buf) this.sink.data({ id: req.id, data: composeReplay(buf, head) })
       this.publishCwd(req.id, this.cwdStates.get(req.id)?.current())
-      return { existing: true, restored: false, pty: ptyEmulation() }
+      // Parity with the daemon's `spawned`: report the grid this session actually holds,
+      // or the reconcile on the renderer side silently no-ops on one of the two backends.
+      const held = this.sizes.get(req.id)
+      return { existing: true, restored: false, pty: ptyEmulation(), cols: held?.cols, rows: held?.rows }
     }
 
     // A resize that lands before the spawn used to hit `ptys.get(id)?.resize` and vanish,
@@ -246,13 +255,20 @@ export class PtyService {
       // pane's tracker, and printed "[process exited]" into a healthy terminal; stale data
       // painted the old shell's bytes into it. Same generation discipline as the daemon
       // path (transport.ts subscribes per session generation) — here the proc IS the gen.
+      this.headModes.set(req.id, new TerminalModeTracker())
       proc.onData((data) => {
         if (this.ptys.get(req.id) !== proc) return // a dead generation talking
         const grown = (this.buffers.get(req.id) ?? '') + data
-        this.buffers.set(
-          req.id,
-          grown.length > SCROLLBACK_CHARS ? trimTornStart(grown.slice(-SCROLLBACK_CHARS)) : grown
-        )
+        const kept = grown.length > SCROLLBACK_CHARS ? trimTornStart(grown.slice(-SCROLLBACK_CHARS)) : grown
+        // Parity with the daemon (PaneSession.onData): the tracker is fed the bytes that
+        // LEAVE the ring, so it holds the mode state at the ring's head. Same defect here
+        // — a renderer reload replays this buffer into a fresh xterm while the agent in the
+        // pane is still on the alternate screen — so it must be the same fix, from the same
+        // module. pane-shared.ts's header is the standing argument against a second copy.
+        if (kept.length !== grown.length) {
+          this.headModes.get(req.id)?.push(grown.slice(0, grown.length - kept.length))
+        }
+        this.buffers.set(req.id, kept)
         osc.push(data)
         this.gitContexts.get(req.id)?.drain()
         this.sink.data({ id: req.id, data })
@@ -269,6 +285,7 @@ export class PtyService {
         this.ptys.delete(req.id)
         this.sizes.delete(req.id)
         this.buffers.delete(req.id)
+        this.headModes.delete(req.id)
         this.cwdStates.delete(req.id)
         this.generations.delete(req.id)
       })
@@ -285,7 +302,7 @@ export class PtyService {
       // command is the shell's first input — no idle-prompt window, and the write goes
       // through THIS process's pty handle, so it cannot race a still-registering pane.
       if (req.run) proc.write(req.run + '\r')
-      return { existing: false, restored: false, pty: emulation }
+      return { existing: false, restored: false, pty: emulation, cols, rows }
     } catch (err) {
       // Example telemetry use: spawn failures are exactly what we want reported.
       // No terminal content is passed — only structured, primitive context.
@@ -338,8 +355,23 @@ export class PtyService {
     if (!cols || !rows) return
     const at = this.sizes.get(id)
     if (at && at.cols === cols && at.rows === rows) return
+    const proc = this.ptys.get(id)
+    if (!proc) {
+      // No pty yet — this IS the pre-spawn capture spawn() reads back as `pending`.
+      // Recording the size is the whole point here; there is nothing to apply it to.
+      this.sizes.set(id, { cols, rows })
+      return
+    }
+    // Belief follows the pty, never leads it (PaneSession.resize is the twin, and carries
+    // the full argument). `sizes` is not local bookkeeping: spawn() reads it back as the
+    // size that WINS over a fresh request, so a size recorded for a resize that threw
+    // outlives the pane that failed it and poisons the next one on the same id.
+    try {
+      proc.resize(cols, rows)
+    } catch {
+      return /* pane may be exiting — leave `sizes` telling the truth about the last apply */
+    }
     this.sizes.set(id, { cols, rows })
-    this.ptys.get(id)?.resize(cols, rows)
   }
 
   kill({ id }: KillCommand): void {
@@ -355,6 +387,7 @@ export class PtyService {
     }
     this.sizes.delete(id)
     this.buffers.delete(id)
+    this.headModes.delete(id)
     this.cwdStates.delete(id)
     this.generations.delete(id)
   }
@@ -369,6 +402,7 @@ export class PtyService {
     this.ptys.clear()
     this.sizes.clear()
     this.buffers.clear()
+    this.headModes.clear()
     this.cwdStates.clear()
     this.generations.clear()
   }

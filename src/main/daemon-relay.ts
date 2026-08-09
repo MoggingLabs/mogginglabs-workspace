@@ -188,6 +188,19 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
           }
           livePaneIds.add(p.id)
           gens.set(p.id, p.gen)
+          // Daemon truth vs what we last banked for the reconnect replay. LOG ONLY — never
+          // adopt: a banked spec that acquired the daemon's dims would make the replay send
+          // `spawn {cols, rows}`, which the daemon reads as a CLIENT MEASUREMENT and which
+          // releases a deferred launch. That would type an agent into a size no client ever
+          // measured, through the back door of an invariant built to prevent exactly that.
+          const banked = specs.get(p.id)
+          if (banked && typeof banked.cols === 'number' && (banked.cols !== p.cols || banked.rows !== p.rows)) {
+            clientLog('dims-divergent', {
+              id: p.id,
+              daemon: { cols: p.cols, rows: p.rows },
+              banked: { cols: banked.cols, rows: banked.rows }
+            })
+          }
           if (p.state) {
             lastStates.set(p.id, p.state)
             getWebContents()?.send(TerminalChannels.state, { id: Number(p.id), state: p.state })
@@ -470,7 +483,14 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   ipcMain.on(TerminalChannels.resize, (_e, cmd: ResizeCommand) => {
     const id = String(cmd.id)
     const gen = stampGen(gens, id)
-    if (gen === 'drop') return
+    // Dropping a tombstoned pane's resize is CORRECT — the session is closed and the id may
+    // already belong to a successor. Only the silence was the defect: this was the one of
+    // three drop paths that left no trace anywhere, so a resize that died here looked
+    // identical to one that was applied.
+    if (gen === 'drop') {
+      clientLog('command-tombstoned', { id, t: 'resize' })
+      return
+    }
     // Bank the dims for the reconnect replay ONLY for a pane whose generation we know.
     // `undefined` means we have not learned one — a pane main has never seen `spawned` for,
     // which is also the shape a late resize from a disposed pane arrives in. Writing its

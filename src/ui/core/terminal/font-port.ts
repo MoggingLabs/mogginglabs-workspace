@@ -55,9 +55,23 @@ export function onTerminalFontSize(cb: (size: number) => void): () => void {
 }
 
 /**
- * Resolves when the terminal's faces are ACTIVE — the trigger for the one metrics
- * re-measure a pane must run (xterm caches its cell size; measured against a fallback
- * face it renders wrong until told).
+ * How long a pane may wait for the terminal faces before it gives up and lets the grid
+ * be measured against whatever is resolved. The faces are VENDORED, so this settles in
+ * single-digit ms on a healthy boot and the bound only bites when the font pipeline is
+ * broken — where it is the difference between "one pane measured a fallback" and "no
+ * pane in the app is EVER measured, so no pty is ever sized and no deferred launch ever
+ * types". It also caps app start: renderer/main.ts gates `start()` on the prime, and the
+ * bare `fonts.load()` it replaces had no bound at all.
+ */
+const FONT_READY_MAX_WAIT_MS = 1500
+
+let facesActive = false
+let inFlight: Promise<void> | null = null
+
+/**
+ * Fire the one load of the terminal face set. Idempotent — first caller wins — and the
+ * trigger for the metrics re-measure a pane must run (xterm caches its cell size, and
+ * measured against a fallback face it renders wrong until told otherwise).
  *
  * `fonts.load()` and not `fonts.ready`: ready is a one-shot promise that can resolve
  * BEFORE a lazily-triggered face load has even started (CSS faces load on first use),
@@ -66,17 +80,50 @@ export function onTerminalFontSize(cb: (size: number) => void): () => void {
  * resolves on activation, which closes the race by construction. The symbols face is
  * unicode-range-scoped, so it must be asked for with a glyph inside its range — a bare
  * load would never fetch it.
+ *
+ * `inFlight` is set ONCE and never nulled, unlike machine-port's prime, which nulls on
+ * catch so a transport hiccup can retry. There is nothing to retry here: allSettled
+ * cannot reject and the bound guarantees settlement, so a second attempt could only
+ * repeat work that already finished.
  */
-export async function terminalFontsActive(): Promise<void> {
-  const fonts = document.fonts
-  if (!fonts?.load) return // ancient environment: nothing to wait for, measure as-is
-  const spec = `${DEFAULT_TERMINAL_FONT_SIZE}px "JetBrains Mono Variable"`
-  await Promise.allSettled([
-    fonts.load(`400 ${spec}`),
-    fonts.load(`700 ${spec}`), // xterm renders bold cells with fontWeightBold
-    fonts.load(`italic 400 ${spec}`),
-    fonts.load(`${DEFAULT_TERMINAL_FONT_SIZE}px "MoggingLabs Symbols"`, '⠋')
-  ])
+export function primeTerminalFonts(): Promise<void> {
+  if (facesActive) return Promise.resolve()
+  if (!inFlight) {
+    inFlight = new Promise<void>((resolve) => {
+      const settle = (): void => {
+        facesActive = true
+        resolve()
+      }
+      const fonts = document.fonts
+      if (!fonts?.load) return settle() // ancient environment: nothing to wait for
+      const bound = setTimeout(settle, FONT_READY_MAX_WAIT_MS)
+      const spec = `${DEFAULT_TERMINAL_FONT_SIZE}px "JetBrains Mono Variable"`
+      void Promise.allSettled([
+        fonts.load(`400 ${spec}`),
+        fonts.load(`700 ${spec}`), // xterm renders bold cells with fontWeightBold
+        fonts.load(`italic 400 ${spec}`),
+        fonts.load(`${DEFAULT_TERMINAL_FONT_SIZE}px "MoggingLabs Symbols"`, '⠋')
+      ]).then(() => {
+        clearTimeout(bound)
+        settle()
+      })
+    })
+  }
+  return inFlight
+}
+
+/**
+ * Are the terminal faces active (or the bound spent)? THE readiness predicate for a
+ * grid measurement: a cell measured while this is false was measured against a system
+ * fallback, and a grid derived from it is wrong in BOTH axes — so it must never be
+ * published to a pty. See pane-fit.ts's proposeGrid, which is the one gate.
+ *
+ * MONOTONIC by construction, and that is what makes it legal to gate on: a readiness
+ * condition that can un-become-true (a pane's current renderer, say) forces you to
+ * re-publish on every flip instead of deciding once.
+ */
+export function terminalFontsReady(): boolean {
+  return facesActive
 }
 
 const doneSubscribers = new Set<() => void>()

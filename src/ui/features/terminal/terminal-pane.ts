@@ -28,8 +28,9 @@ import { onTerminalTheme } from '../../core/theme/theme-port'
 import {
   onFontsLoadingDone,
   onTerminalFontSize,
-  terminalFontsActive,
+  primeTerminalFonts,
   terminalFontSize,
+  terminalFontsReady,
   TERMINAL_LINE_HEIGHT
 } from '../../core/terminal/font-port'
 import { windowsPtyFor } from '../../core/terminal/pty-emulation'
@@ -148,6 +149,10 @@ export class TerminalPane {
    *  only). Stamped on this pane's input/resize so the daemon can REFUSE a stale
    *  sender after the id is reused; undefined (pre-reply, in-proc) sends ungated. */
   private sessionGen?: number
+  /** The grid the SESSION reported holding, as of the last spawn reply. Diagnostic and
+   *  gate-visible only — never an input to a fit. A pane fits its own box; this is just
+   *  the other side of the comparison. */
+  private sessionDims?: { cols: number; rows: number }
   private stateDot?: HTMLSpanElement
   /** The pane's process is gone (exit or failed spawn — the markDead paths). The state
    *  dot only records this when it is VISIBLE, so untracked plain panes need this flag:
@@ -467,10 +472,16 @@ export class TerminalPane {
     // font (or a stale activation state), its canvas renders narrower than the pane —
     // a dead strip at the right edge. Once the terminal faces are active, force a
     // re-measure (fontFamily must actually change to invalidate xterm's char-size
-    // cache) + refit. terminalFontsActive STARTS the loads (fonts.ready is one-shot
+    // cache) + refit. primeTerminalFonts STARTS the loads (fonts.ready is one-shot
     // and could resolve before a lazy load began — the old silent re-measure-against-
     // the-fallback race); the loadingdone subscription catches any face landing later.
-    void terminalFontsActive().then(() => this.remeasureFont())
+    //
+    // This is also the moment a pane becomes MEASURABLE: proposeGrid returns null until
+    // terminalFontsReady(), so the refit below is the first one that can publish a grid,
+    // and — for a fresh session — the one that releases the daemon's deferred launch at a
+    // size a client actually measured. Priming here rather than only in the bootstrap
+    // means a pane constructed before main.ts's prime resolves still arms it.
+    void primeTerminalFonts().then(() => this.remeasureFont())
     this.disposers.push(onFontsLoadingDone(() => this.remeasureFont()))
 
     // Monitor hop / display-scale change: the CSS boxes don't move (no ResizeObserver
@@ -674,6 +685,14 @@ export class TerminalPane {
         // the OSC 52 guard through it (replayed copies must not touch the clipboard).
         this.replayCopyGraceUntil = Date.now() + 1500
         this.anchor?.pin()
+        // The session just reported the grid it actually holds. This is the ONLY moment
+        // the two sides are knowably comparable, and the only place a boot-time drift can
+        // be caught: spawnPty waits on the emulation round trip (and can wait on an armed
+        // run), so a refit may have raced ahead of the session's existence and been
+        // dropped, or ensure() may have applied this spawn's older dims over it. Nothing
+        // else revisits either — reassertGrid rides the reconnect edge, which boot never
+        // crosses.
+        if (!this.disposed) this.reconcileSession(res.cols, res.rows)
         // Second stateSync pull: the spawn just registered/reattached the session, so
         // the backend now KNOWS this pane's state (the mountChrome pull may have run
         // before it existed). Reattach to a busy/attention agent paints correctly here.
@@ -861,30 +880,44 @@ export class TerminalPane {
   }
 
   /** Re-fit the grid to the body (pane-fit.ts — the house derivation, no phantom
-   *  scrollbar lane) and tell the PTY when it changed. Cheap by construction: propose
-   *  bails when hidden/unmeasurable, apply bails when unchanged — safe on hot churn
-   *  paths. `force` only adds the unconditional anchor pin for the reveal/zoom cases,
-   *  where the viewport moved under a follower even if the grid did not. */
+   *  scrollbar lane) and ASSERT it to the PTY. Cheap by construction: propose bails when
+   *  hidden/unmeasurable, apply bails when unchanged — safe on hot churn paths. `force`
+   *  only adds the unconditional anchor pin for the reveal/zoom cases, where the viewport
+   *  moved under a follower even if the grid did not. */
   private refit(force = false): void {
     try {
       const d = proposeGrid(this.term)
       if (!d) {
-        // Hidden, not yet opened, or xterm moved its internals — nothing was fitted, so
-        // GIVE THE LEADING EDGE BACK. scheduleRefit consumed it before calling here; left
-        // consumed, a hide's unmeasurable tick would burn it and the REVEAL inside the
-        // next 120 ms would wait the full trailing settle — the exact "reveal must not
-        // wait on a timer" case the coalescer's contract forbids.
+        // Hidden, not yet opened, unmeasurable, or the faces are not active yet — nothing
+        // was fitted, so GIVE THE LEADING EDGE BACK. scheduleRefit consumed it before
+        // calling here; left consumed, a hide's unmeasurable tick would burn it and the
+        // REVEAL inside the next 120 ms would wait the full trailing settle — the exact
+        // "reveal must not wait on a timer" case the coalescer's contract forbids.
         this.refitLeading = true
         return
       }
-      if (applyGrid(this.term, d)) {
+      const changed = applyGrid(this.term, d)
+      // ASSERT, never "send only if xterm changed". A changed-only send makes the PTY's
+      // correctness a function of XTERM's state, and the two disagree exactly when it
+      // matters: a resize lost to a dead socket or to a session that did not exist yet,
+      // or a session the daemon resized itself on attach. Nothing else revisits those —
+      // reassertGrid rides the reconnect edge, which a boot-time drift never crosses.
+      //
+      // Free when nothing drifted: PaneSession.resize is idempotent BY DIMENSION and drops
+      // a same-size resize before ConPTY ever sees it, so the cost is one small control
+      // frame — zero pty bytes, zero repaint. A dead pane is skipped: it has no session to
+      // assert to, and the daemon would log a drop on every window tick.
+      //
+      // Deliberately NOT memoized behind a renderer-side "last published" cache. That is a
+      // belief about the PTY held in the renderer, which is the same defect class one
+      // layer up. If the frame volume ever matters, the safe form is a (gen, cols, rows)
+      // memo reconciled at every spawn reply — not a local guess.
+      if (!this.dead) {
         terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows, gen: this.sessionGen })
-        // A fit REFLOWS the buffer under a viewport nobody asked to move (a reveal, a
-        // zoom, a window drag). If this pane was following its output, it still is.
-        this.anchor?.pin()
-      } else if (force) {
-        this.anchor?.pin()
       }
+      // A fit REFLOWS the buffer under a viewport nobody asked to move (a reveal, a
+      // zoom, a window drag). If this pane was following its output, it still is.
+      if (changed || force) this.anchor?.pin()
     } catch (err) {
       // Never swallow silently — a failing fit is exactly how "the terminal doesn't
       // take its space" bugs hide.
@@ -892,21 +925,44 @@ export class TerminalPane {
     }
   }
 
-  /** Re-assert grid agreement after a daemon reconnect. Both halves of a drift, in
-   *  order: refit heals a WRONG XTERM (deduped — a right one costs nothing), then the
-   *  unconditional send heals a WRONG PTY, whose last resize died in the dead socket
-   *  while xterm already applied it — the one case refit's changed-only send can never
-   *  reach. Free when nothing drifted: the daemon drops a same-size resize before
-   *  ConPTY sees it (PaneSession.resize). Measured panes only — re-asserting the
-   *  unmeasured 80×24 default would resize a surviving session wrong, the exact hazard
-   *  spawnPty's dims guard documents. Riding the normal resize IPC also re-banks the
-   *  relay's replay spec, so the NEXT flap replays current dims. */
+  /** Re-assert grid agreement after a daemon reconnect. Now just a refit: since refit
+   *  asserts unconditionally, its two halves — heal a WRONG XTERM, then heal a WRONG PTY
+   *  whose last resize died in the dead socket — are one path instead of two, and the
+   *  "measured panes only" rule is structural (proposeGrid returns null, refit returns
+   *  early, nothing is asserted) rather than a second guard that could drift from the
+   *  first. Riding the normal resize IPC still re-banks the relay's replay spec, so the
+   *  NEXT flap replays current dims. */
   private reassertGrid(): void {
     if (this.disposed || this.dead) return
     this.refit()
-    if (proposeGrid(this.term)) {
-      terminalClient.resize({ id: this.id, cols: this.term.cols, rows: this.term.rows, gen: this.sessionGen })
-    }
+  }
+
+  /**
+   * Heal against the grid the SESSION reports holding (SpawnResult.cols/rows, sampled by
+   * the backend after its own attach reconciliation). Three cases, and the direction is
+   * never symmetric:
+   *
+   *   UNMEASURED pane — adopt nothing. The session's size is not evidence about this
+   *   pane's box, and taking it would resize a live agent to a layout from another app
+   *   run. This is the same rule spawnPty's absent dims encode, one message later.
+   *
+   *   MEASURED and EQUAL — assert nothing. This is the only place agreement is knowable,
+   *   so it is the only place silence is provably right rather than merely quiet.
+   *
+   *   MEASURED and DIFFERENT — assert. Either our resize never landed or the backend
+   *   applied something else over it; both are permanent otherwise.
+   *
+   * Absent dims (an older daemon) read as "unknown", not as zero: no comparison is
+   * possible, so we leave the session alone exactly as we did before it reported at all.
+   */
+  private reconcileSession(cols?: number, rows?: number): void {
+    this.sessionDims = typeof cols === 'number' && typeof rows === 'number' ? { cols, rows } : undefined
+    if (this.dead || !this.sessionDims) return
+    const d = proposeGrid(this.term)
+    if (!d) return
+    applyGrid(this.term, d) // heal a wrong xterm first; deduped, so a right one costs nothing
+    if (this.sessionDims.cols === d.cols && this.sessionDims.rows === d.rows) return
+    terminalClient.resize({ id: this.id, cols: d.cols, rows: d.rows, gen: this.sessionGen })
   }
 
   /** Invalidate xterm's cached character metrics (the option must CHANGE to trigger a
@@ -2424,6 +2480,23 @@ export class TerminalPane {
       bufferLines: () => this.term.buffer.active.length,
       rows: () => this.term.rows,
       cols: () => this.term.cols,
+      /** GRIDHEAL: the three grids that must agree, side by side, plus the two readiness
+       *  inputs that decide whether a proposal exists at all. `proposed` null means this
+       *  pane has nothing publishable yet (hidden, or the faces are not active) — which is
+       *  a legitimate state, not a failure, and the gate must read it as one. */
+      grid: (): {
+        proposed: { cols: number; rows: number } | null
+        xterm: { cols: number; rows: number }
+        session: { cols: number; rows: number } | null
+        fontsReady: boolean
+        renderer: string
+      } => ({
+        proposed: proposeGrid(this.term),
+        xterm: { cols: this.term.cols, rows: this.term.rows },
+        session: this.sessionDims ?? null,
+        fontsReady: terminalFontsReady(),
+        renderer: this.gl.isActive() ? 'webgl' : 'dom'
+      }),
       // PANESCROLL (scroll-anchor gate): the viewport's position, whether the pane is
       // still following its output, and what the overlay bar is showing for it.
       scroll: (): {

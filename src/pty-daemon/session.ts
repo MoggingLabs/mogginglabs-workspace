@@ -11,6 +11,7 @@ import { mergeEnv } from '@backend/platform/env-path'
 import { killPtyTree } from '@backend/platform/process-tree'
 import { paneShellLaunch } from '@backend/platform/shell'
 import { PTY_INPUT_CHUNK_CHARS, RESTORE_MODE_RESET, SCROLLBACK_CHARS, chunkPtyInput, pickCwd, trimTornStart , paneProcessEnv} from '@backend/features/terminal/pane-shared'
+import { composeReplay, TerminalModeTracker } from '@backend/features/terminal/pane-modes'
 import { aiderLogPath } from '@backend/features/context'
 import type { Approval, SpawnSpec, PaneInfo, AgentState } from '@contracts'
 import { PANE_CWD_MAX, normalizeRemoteConnection, notifyEventToState } from '@contracts'
@@ -418,6 +419,9 @@ class PaneSession {
   rows: number
   private proc: IPty
   private buffer = ''
+  /** Mode state at the ring's HEAD, advanced by the bytes evicted from it. The ring can
+   *  only carry content; this carries what makes that content mean anything. */
+  private readonly headModes = new TerminalModeTracker()
   /** `unknown`, matching the tracker's own initial state: a pane that has never spoken a
    *  verdict must replay/report `unknown` (hollow), not `idle` (a claim). This is what
    *  subscribe() replays and info() lists — an `idle` here made every never-spoken pane
@@ -716,7 +720,17 @@ class PaneSession {
     )
     this.proc.onData((d) => {
       const grown = this.buffer + d
-      this.buffer = grown.length > SCROLLBACK_CHARS ? trimTornStart(grown.slice(-SCROLLBACK_CHARS)) : grown
+      const kept = grown.length > SCROLLBACK_CHARS ? trimTornStart(grown.slice(-SCROLLBACK_CHARS)) : grown
+      // Feed the mode tracker what LEAVES the ring, not what arrives in it. Scanning the
+      // live stream would be a third full pass over every pty byte; eviction only begins
+      // once the ring is full, so the steady-state cost is one DEFERRED pass and exactly
+      // zero until 200k characters have accumulated. It also means the tracker holds the
+      // state at the ring's HEAD, which is the state a replay of that ring needs grounding
+      // with — the tail is derived at replay time, by the same code, so the two cannot
+      // disagree. Slices cut here are arbitrary by construction; the tracker is a state
+      // machine precisely so that is the ordinary case.
+      if (kept.length !== grown.length) this.headModes.push(grown.slice(0, grown.length - kept.length))
+      this.buffer = kept
       osc.push(d)
       this.gitContext?.drain()
       for (const s of this.subs) s.send(d)
@@ -840,8 +854,21 @@ class PaneSession {
     }
   }
 
-  get scrollback(): string {
-    return this.buffer
+  /**
+   * What a (re)attaching client should WRITE INTO A TERMINAL to arrive at this session's
+   * screen — the ring plus the mode state the ring itself cannot carry (pane-modes.ts).
+   *
+   * Named apart from the raw buffer on purpose: `snapshot()` and `captureTail()` read
+   * `this.buffer` DIRECTLY, because persistence and the Control API's `capture` verb want
+   * the recorded output and nothing else. Collapsing the two — which is exactly what a
+   * future tidy-up would try — would put escape prefixes into the store and into
+   * `mogging capture`.
+   *
+   * Free for an ordinary shell pane: with a ground head and no alternate screen,
+   * composeReplay returns the ring byte-identical.
+   */
+  get replayStream(): string {
+    return composeReplay(this.buffer, this.headModes.snapshot())
   }
   /** The pane shell's pid — the root the agent-process detector walks from. */
   get pid(): number {
@@ -1043,17 +1070,31 @@ class PaneSession {
     // a same-size resize is never a harmless no-op to forward — it is a spurious
     // repaint replayed over whatever the agent is drawing. It IS still a client
     // measurement, though — the fact a deferred launch waits on — so it confirms.
+    // Refuse what node-pty would throw on BEFORE anything believes it. transport forwards
+    // a client's cols/rows unvalidated, so a single `cols: 0` was enough to make the apply
+    // below throw while the fields above had already been written — after which the
+    // dimension guard made the wrong belief permanent. Same floors as the renderer's fit
+    // and attachDims', from the one native-free module that defines them.
+    if (!specDimsUsable({ cols, rows })) return
     if (cols === this.cols && rows === this.rows) {
       this.flushPendingLaunch()
       return
     }
-    this.cols = cols
-    this.rows = rows
+    // BELIEF FOLLOWS THE PTY, NEVER LEADS IT. These fields are not bookkeeping: they are
+    // what info() reports to every client, what snapshot() persists, and what attachDims
+    // compares a reattaching client against. Written before the apply and paired with a
+    // swallowed throw, one failed resize left all three telling a size ConPTY never took,
+    // permanently — and the dedupe above then guaranteed nothing would ever correct it.
     try {
       this.proc.resize(cols, rows)
-    } catch {
-      /* pane may be exiting */
+    } catch (err) {
+      // Not confirmed, either: the invariant a deferred launch waits on is "the pty HOLDS
+      // the measured size", and a throw is proof that it does not.
+      log(`resize FAILED for pane ${this.id} (${cols}x${rows}): ${err instanceof Error ? err.message : String(err)}`)
+      return
     }
+    this.cols = cols
+    this.rows = rows
     // The grid is persisted state now (snapshot): a resize with no output in its wake
     // (a quiet pane dragged to a new layout) must still reach the store, or the next
     // cold start restores at the size before the drag.
