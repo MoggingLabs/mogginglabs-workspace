@@ -71,9 +71,11 @@ export function isTerminalReply(data: string): boolean {
  * text into a prompt is composing, not answering. An UNbracketed paste carrying a newline does
  * count — without bracketing, that newline genuinely submits.
  *
- * Distinct from `countSubmittedLines` (agent-proc), which counts ANY CR/LF including the one
- * inside an ESC-CR. That is right for the cwd detector — a pasted script really does start
- * commands — and wrong here, where the question is whether a human answered a blocked agent.
+ * Distinct from `countSubmittedLines` (agent-proc), which counts EVERY CR/LF in a plain
+ * chunk — a pasted script really does start one command per line — but shares this file's
+ * ESC rule: an ESC-introduced chunk (bracketed paste, Shift+Enter, arrows) is a sequence,
+ * and counts zero. It once counted the CR inside an ESC-CR; a 2k-line bracketed paste then
+ * read as 2k pending commands and pinned the pane busy (phase-launch F001).
  */
 export function isSubmittedInput(data: string): boolean {
   if (!data) return false

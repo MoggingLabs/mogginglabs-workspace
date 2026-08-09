@@ -80,9 +80,16 @@ describe('parseOsc52', () => {
     expect(parseOsc52('c;!!!not base64!!!')).toBeNull()
   })
 
-  // An unbounded write lets a pane hand the app an arbitrarily large string to hold.
-  it('refuses a payload past the cap', () => {
-    expect(parseOsc52(`c;${'A'.repeat(OSC52_MAX_BASE64 + 1)}`)).toBeNull()
+  // An unbounded write lets a pane hand the app an arbitrarily large string to hold. The cap
+  // stands — but the answer is a REPORTABLE refusal, not `null`. `null` is what a parse failure
+  // says, and the pane consumes every OSC 52, so an oversize copy used to be silently dropped
+  // while the CLI printed "Copied N characters". See tests/unit/osc52-oversize.test.ts, which
+  // pins the discrimination between the two silences.
+  it('refuses a payload past the cap, and SAYS so', () => {
+    expect(parseOsc52(`c;${'A'.repeat(OSC52_MAX_BASE64 + 1)}`)).toEqual({
+      kind: 'refused',
+      reason: 'too-big'
+    })
   })
 
   it('accepts one exactly at the cap', () => {

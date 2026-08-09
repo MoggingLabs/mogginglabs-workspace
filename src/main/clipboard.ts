@@ -21,6 +21,7 @@ import type {
 import { defaultShell } from '@backend/platform/shell'
 import { redactSecrets } from '@backend/features/review'
 import {
+  consumeClipboardSilentDrop,
   consumeClipboardWriteFailure,
   noteClipboardRead,
   noteSensitiveClipboardEntryBlocked
@@ -85,11 +86,13 @@ function clipboardFormats(): string[] {
 
 function writeClipboardText(text: string): void {
   if (consumeClipboardWriteFailure()) throw new Error('clipboard write failed')
+  if (consumeClipboardSilentDrop()) return // the Windows locked-clipboard no-op, modelled
   clipboard.writeText(text)
 }
 
 function writeClipboardImage(img: Electron.NativeImage): void {
   if (consumeClipboardWriteFailure()) throw new Error('clipboard write failed')
+  if (consumeClipboardSilentDrop()) return // the Windows locked-clipboard no-op, modelled
   clipboard.writeImage(img)
 }
 
@@ -340,10 +343,47 @@ export function registerClipboard(): void {
           ? nativeImage.createFromDataURL(entry.imageDataUrl)
           : undefined
       if (!img || img.isEmpty()) return
+      // The write handler's read-back, applied to the IMAGE half too — writeClipboardImage
+      // carries the very same silent-drop seam, so a locked Windows clipboard made this a
+      // no-op that still re-dated the row, floated it to the top, primed lastImageSig and
+      // reported "Copied".
+      //
+      // Compared by IDENTITY, never by SIZE. The reaching case for image history is two
+      // full-screen screenshots, and "1920x1080 came back" is equally true of the OTHER
+      // one — so a dropped write would sail straight through the guard that exists to catch
+      // it. (Nor can the DIB round-trip be blamed for moving a semi-transparent image's
+      // hash: `remove` below stakes its clear-it-from-the-system-clipboard promise on that
+      // very fingerprint surviving that very round trip, and poll()'s de-dupe does too. If
+      // the hash moved, both would already be broken — every image copy doubling in the
+      // ring, every image delete leaving the image one Ctrl+V away.)
+      //
+      // The rule that needs no such assumption anyway: fingerprint the clipboard BEFORE the
+      // write, then accept if it CHANGED (ours is the only write in flight, so a change is
+      // ours) or if it now reads back AS ours. That accepts everything a bare
+      // `after === ours` compare would and more, so it can never be the thing that refuses
+      // an honest restore — while UNCHANGED AND NOT OURS is precisely a write that did not
+      // take. One extra full read, on a click: a user action, not poll()'s 800 ms tax.
+      const before = imageSignature()
       writeClipboardImage(img)
-      lastImageSig = signatureOf(img)
+      const ours = signatureOf(img)
+      const after = imageSignature()
+      if (!after || (after === before && after !== ours)) {
+        throw new Error('clipboard write did not take')
+      }
+      // Prime the watcher from the READ-BACK rather than from the image we handed over:
+      // poll() compares read-back fingerprints, and `after` is one already in hand.
+      lastImageSig = after
     } else {
       writeClipboardText(entry.text)
+      // The same read-back the `write` handler does, for the same reason: on Windows the
+      // clipboard is a machine-wide locked resource, so `clipboard.writeText` is a SILENT
+      // no-op while another process holds it — Electron neither copies nor throws. Verify
+      // BEFORE mutating the ring: a failed restore that still re-dated the entry, floated it
+      // to the top and primed `lastText` reported "Copied" to the user, claimed the row WAS
+      // the clipboard, and left Ctrl+V pasting the previous contents.
+      if (entry.text && !sameClipboardText(clipboard.readText(), entry.text)) {
+        throw new Error('clipboard write did not take')
+      }
       lastText = entry.text
     }
     // Restoring re-dates the entry and floats it to the top: it IS the clipboard now.

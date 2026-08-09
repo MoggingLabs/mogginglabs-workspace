@@ -5,6 +5,7 @@ import { installFixtures, type UpdateFeedFixture, type UsageWorld } from './fixt
 import { maybeAsyncFault } from './async-audit-faults'
 import { waitForMutationAudit } from './mutation-audit-faults'
 import { consumeConsentSetFailure } from './browserzero-audit-faults'
+import { consumeUpdatePrefsSetFailure } from './updateprefs-audit-faults'
 import { currentBoardGhWorld } from './boardgh-audit-fixture'
 
 // THE DEV SIDE OF THE PORTS (audit finding 41). Imported ONLY by src/main/index.dev.ts, which
@@ -42,9 +43,11 @@ const brokenFeed: UpdateFeedFixture = {
 }
 const offlineFeed: UpdateFeedFixture = {
   next: () =>
-    process.env.MOGGING_UPDATE_OUTCOME === 'ok'
-      ? { kind: 'ok' }
-      : { kind: 'error', message: 'Error: net::ERR_NAME_NOT_RESOLVED' },
+    process.env.MOGGING_UPDATE_OUTCOME === 'available'
+      ? { kind: 'available', version: '9.9.9' } // downloads to ready — the settle guard's subject
+      : process.env.MOGGING_UPDATE_OUTCOME === 'ok'
+        ? { kind: 'ok' }
+        : { kind: 'error', message: 'Error: net::ERR_NAME_NOT_RESOLVED' },
   retryDelaysMs: [1500]
 }
 
@@ -131,6 +134,7 @@ export function installHarnessPorts(): void {
     channel: maybeAsyncFault, // reject / hang / delay a named channel (ASYNCSTATE)
     mutation: waitForMutationAudit, // hold grant/plan/profile pending (MUTATIONRACE)
     consentSet: consumeConsentSetFailure, // drop a consent write on purpose (BROWSERZERO)
+    updatePrefsSet: consumeUpdatePrefsSetFailure, // drop an update-prefs write on purpose (UPDATEFAIL)
     persist: persistFault // break open/load/save (PERSISTHEALTH)
   })
 

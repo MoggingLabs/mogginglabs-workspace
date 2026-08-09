@@ -106,6 +106,88 @@ describe('the plan cap is enforced at the layout doors, not just at split', () =
   })
 })
 
+// THE MOVE DOOR CHARGED THE MACHINE TWICE FOR ONE PANE.
+//
+// `GridLayout.capacity()` derives the destination's headroom as
+// `livePaneCount() - this.paneIds().length` — panes running ELSEWHERE. At a move door the pane
+// being moved is still live in the SOURCE, so it is inside that term; charging the destination
+// for it as well made the refusal reduce to `totalLivePanes >= machineBudget`. Once the machine
+// budget was reached, EVERY cross-workspace move was refused and the picker rendered every row
+// "Full" — for an operation that neither creates nor destroys a terminal. The inner `adoptPane`
+// gate never had the bug, because it runs AFTER `detachPane`, when the count is already one
+// lower: two gates on one door, and only the outer one was wrong.
+//
+// The ARITHMETIC is pinned in pane-capacity.test.ts. This is the WIRING — that the discount
+// actually reaches both doors, and reaches them with the same value, since a picker that offers
+// a move this door then refuses is the same bug wearing a different face.
+describe('a move is charged once, not twice', () => {
+  it('capacity() and limit() carry the discount down to the machine term', () => {
+    const capacity = bodyWithoutComments(gridLayout, 'capacity(discountElsewhere = 0): PaneCapacity')
+    expect(capacity).toMatch(/livePaneCount\(\) - this\.paneIds\(\)\.length - Math\.max\(0, discountElsewhere\)/)
+    // Clamped at both ends: a negative discount must not INFLATE the elsewhere term, and the
+    // term itself must not go below zero.
+    expect(capacity).toMatch(/Math\.max\(0, livePaneCount\(\)/)
+    expect(bodyWithoutComments(gridLayout, 'limit(discountElsewhere = 0): number')).toMatch(
+      /this\.capacity\(discountElsewhere\)\.maxPanes/
+    )
+    expect(bodyWithoutComments(controller, 'private effectiveMaxPanes(')).toMatch(
+      /view\.layout\.limit\(discountElsewhere\)/
+    )
+  })
+
+  it.each([
+    ['the picker', 'moveTargets(paneId: number): MoveTarget[]'],
+    ['the move itself', 'movePaneToWorkspace(paneId: number, dstId: string): boolean']
+  ])('%s discounts the mover', (_name, signature) => {
+    const body = bodyWithoutComments(controller, signature)
+    const at = body.search(/effectiveMaxPanes\(/)
+    expect(at, `${signature} no longer gates on the effective cap`).toBeGreaterThan(-1)
+    expect(body.slice(at)).toMatch(/^effectiveMaxPanes\((?:v|dst), 1\)/)
+  })
+
+  it('the doors are the ONLY discounted callers — nothing else creates a free pane', () => {
+    // A split, a template apply, a reorganize all CREATE a terminal; discounting there would
+    // hand the machine one pane more than it budgeted for, at every workspace.
+    expect(controller.match(/effectiveMaxPanes\([^)]*,\s*1\)/g)).toHaveLength(2)
+  })
+})
+
+// A WORKSPACE CLOSED MID-DRAG LEFT THE DRAG RUNNING.
+//
+// dispose() cleared seamPersistTimer and left two siblings alive: the pulse timers (a mid-swell
+// 1400 ms timer holding the detached slot AND this GridLayout), and the in-flight drag's window
+// mousemove/mouseup listeners, which are removed only by their own `up`. Close a workspace while
+// the user holds a seam (a close-pane control command will do it) and the listeners leaked,
+// `body.resizing` latched forever, and the leaked mouseup could re-publish slots into a DETACHED
+// grid — reviving pane ids, and their PTYs, that nobody can see.
+describe('dispose leaves nothing running', () => {
+  const body = bodyWithoutComments(gridLayout, '  dispose(): void')
+
+  it('aborts an in-flight drag and clears the pulse timers, not just the seam timer', () => {
+    expect(body).toMatch(/this\.seamPersistTimer/)
+    expect(body).toMatch(/this\.activeDragCleanup\?\.\(\)/)
+    expect(body).toMatch(/this\.pulseTimers\.clear\(\)/)
+    expect(body).toMatch(/clearTimeout\(t\)/)
+  })
+
+  it('BOTH drags register the cleanup — a seam drag and a pane drag leak identically', () => {
+    for (const signature of ['private startGutterDrag(', 'private wirePaneDrag(): void']) {
+      const drag = bodyWithoutComments(gridLayout, signature)
+      expect(drag, `${signature} must publish its teardown`).toMatch(/this\.activeDragCleanup = teardown/)
+      // The teardown NULLS the field, so a drag that ended normally leaves dispose nothing to
+      // call — otherwise dispose would re-run a stale teardown against the next drag's state.
+      expect(drag).toMatch(/this\.activeDragCleanup = null/)
+    }
+  })
+
+  it('a drop is applied only by a drag that ended on its own', () => {
+    // dispose() nulls the field rather than calling `up`, so the aborted drag's zone is never
+    // resolved — the detached grid must not re-publish slots.
+    const drag = bodyWithoutComments(gridLayout, 'private wirePaneDrag(): void')
+    expect(drag).toMatch(/if \(wasActive && zone\) this\.applyDrop\(/)
+  })
+})
+
 describe('the manifest records what landed', () => {
   const body = bodyWithoutComments(controller, 'private applyResolvedLayout(')
 

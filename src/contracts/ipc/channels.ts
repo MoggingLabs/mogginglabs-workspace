@@ -309,7 +309,7 @@ export const UpdateChannels = {
   check: 'update:check', // renderer -> main: re-check now (UpdateCheckRequest; no payload = a human asked)
   stateGet: 'update:stateGet', // -> UpdateState (a PULL: settings mounts long after the last push)
   prefsGet: 'update:prefsGet', // -> UpdatePrefs
-  prefsSet: 'update:prefsSet' // (UpdatePrefs) -> void (applied immediately, persisted)
+  prefsSet: 'update:prefsSet' // (UpdatePrefs) -> { ok } (applied immediately, persisted; false = store write failed, the toggle must not lie)
 } as const
 
 export const UsageChannels = {

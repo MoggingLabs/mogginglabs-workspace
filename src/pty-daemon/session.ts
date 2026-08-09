@@ -17,6 +17,7 @@ import type { Approval, SpawnSpec, PaneInfo, AgentState, PaneLaunchIntent } from
 import { PANE_CWD_MAX, launchIntentPrecedence, normalizeRemoteConnection, notifyEventToState } from '@contracts'
 import { log } from './lifecycle'
 import { attachDims, specDimsUsable } from './attach-dims'
+import { exitCodeFor } from './exit-code'
 import {
   ActivityTracker,
   AgentProcessDetector,
@@ -762,7 +763,7 @@ class PaneSession {
       for (const s of this.subs) s.send(d)
       hooks.onChange()
     })
-    this.proc.onExit(({ exitCode }) => {
+    this.proc.onExit(({ exitCode, signal }) => {
       this.tracker.dispose()
       this.gitContext?.dispose()
       this.pendingLaunch = undefined
@@ -770,7 +771,12 @@ class PaneSession {
         clearTimeout(this.launchGraceTimer)
         this.launchGraceTimer = undefined
       }
-      for (const s of this.subs) s.exit(exitCode)
+      // A SIGNAL death is not exit code 0. node-pty reports {exitCode, signal} and POSIX
+      // WIFSIGNALED yields exitCode 0 with the signal alongside — so a SIGKILL/SIGSEGV
+      // epitaph was byte-identical to the user typing `exit`, defeating the dead-pane
+      // diagnostic on exactly the crashes it was built for. 128+signal is the shell's own
+      // convention, the number the user already reads in $?.
+      for (const s of this.subs) s.exit(exitCodeFor({ exitCode, signal }))
       this.subs.clear()
       hooks.onExit()
     })

@@ -219,8 +219,7 @@ export async function materializeToolPlanAtLaunch(
       // who refusal is for.
       const writeOnce = async (): Promise<void> => {
         const snapshot = await configMutationCoordinator.read(file.path)
-        before.push({ path: file.path, existed: snapshot.text !== null, content: snapshot.text ?? '' })
-        await configMutationCoordinator.mutate({
+        const res = await configMutationCoordinator.mutate({
           file: file.path,
           expectedHash: snapshot.hash,
           transform: (current) => (file.projectScoped ? mergeToolPlanProjectConfig(cli, current.text, entries) : file.content),
@@ -228,6 +227,18 @@ export async function materializeToolPlanAtLaunch(
             ? (content) => (cli === 'codex' ? tomlCodec.validate(content) : jsoncCodec.validate(content))
             : undefined
         })
+        // Record the undo ONLY after OUR write took. The read→mutate window is not serialized
+        // (read is unqueued), so a concurrent launch for the same (workspace, cli) can write the
+        // file between our read and our mutate — our mutate then fails `changed-under-us`. If the
+        // undo had been recorded before the mutate, this launch's rollback (`existed:false`) would
+        // `rmSync` the file the OTHER launch legitimately wrote, deleting a plan the winner already
+        // returned `ok:true` for and now points `--mcp-config` at. No successful write ⇒ nothing
+        // of ours to undo.
+        // `changed:false` is likewise reachable for a file a SIBLING already wrote with our exact
+        // values (the coordinator no longer refuses an already-satisfied edit). Recording an undo
+        // then would re-open the same defect through the back door: `existed:false` against the
+        // WINNER's file. Same rule, both directions — no successful write of OURS, nothing to undo.
+        if (res.changed) before.push({ path: file.path, existed: snapshot.text !== null, content: snapshot.text ?? '' })
       }
       try {
         await writeOnce()

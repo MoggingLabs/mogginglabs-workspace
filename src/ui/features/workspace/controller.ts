@@ -1450,8 +1450,10 @@ export class WorkspaceController {
    *  redesign's honest capacity), lowered — never raised — by the plan's `maxPanes`
    *  entitlement (phase-accounts/05). Free covers the whole grid budget, so an
    *  account-less install behaves exactly as the redesign shipped it. */
-  private effectiveMaxPanes(view: WorkspaceView): number {
-    return Math.min(view.layout.limit(), Math.max(1, Math.floor(entitlementLimit('maxPanes'))))
+  /** `discountElsewhere: 1` at a MOVE door — the pane is already running and already charged
+   *  to the machine from its source; see GridLayout.capacity. */
+  private effectiveMaxPanes(view: WorkspaceView, discountElsewhere = 0): number {
+    return Math.min(view.layout.limit(discountElsewhere), Math.max(1, Math.floor(entitlementLimit('maxPanes'))))
   }
 
   /** The ceiling the palette's "Layout: N" rows grey themselves against. Deliberately
@@ -2000,8 +2002,11 @@ export class WorkspaceController {
       .map((v) => {
         // The DESTINATION's own effective cap (its grid budget ∧ the plan) — the
         // number movePaneToWorkspace will actually gate on, so the picker's "Full"
-        // chip can never contradict the move it offers.
-        const cap = this.effectiveMaxPanes(v)
+        // chip can never contradict the move it offers. The MOVER is discounted: it is
+        // already running and already charged to the machine from its source, so charging
+        // the destination for it too made every row read "Full" at machine saturation for
+        // an operation that creates no pane (see GridLayout.capacity).
+        const cap = this.effectiveMaxPanes(v, 1)
         return {
           id: v.meta.id,
           name: v.meta.name,
@@ -2037,7 +2042,10 @@ export class WorkspaceController {
     const src = this.viewForPane(paneId)
     const dst = this.views.get(dstId)
     if (!src || !dst || src === dst || this.pendingClose.has(dstId)) return false
-    const cap = this.effectiveMaxPanes(dst)
+    // The mover is discounted from the machine term — it is already running (in `src`), so
+    // the destination must not be charged for it twice. Must match moveTargets' cap exactly,
+    // or the picker offers a move this door then refuses.
+    const cap = this.effectiveMaxPanes(dst, 1)
     if (dst.layout.paneCount >= cap) {
       showToast({
         tone: 'attention',
@@ -2124,6 +2132,19 @@ export class WorkspaceController {
         tone: 'attention',
         title: 'Too late to undo',
         body: 'That workspace has already closed.'
+      })
+      return
+    }
+    // The PANE can be gone too — closed in the destination, or moved onward, inside the grace.
+    // Check before reviving: revivePending is not undoable, so a revival followed by a failed
+    // detach left the source workspace in the rail holding ZERO panes, and switch() refuses to
+    // enter a zero-pane workspace — a tab that does nothing when clicked, forever, with a
+    // persisted paneCount that no longer matches its serialized tree.
+    if (!dst.layout.paneIds().includes(m.paneId)) {
+      showToast({
+        tone: 'attention',
+        title: 'Too late to undo',
+        body: 'That terminal has already closed.'
       })
       return
     }

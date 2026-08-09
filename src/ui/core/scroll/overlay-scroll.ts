@@ -124,8 +124,17 @@ export function installOverlayScrollbars(doc: Document = document): () => void {
     }
   }
 
-  // The pointer leaving the window can never produce a `pointermove` that clears the lane.
-  const onLeave = (): void => {
+  // The pointer leaving the WINDOW can never produce a `pointermove` that clears the lane.
+  //
+  // `pointerleave` does not bubble — but this listener is CAPTURE-phase on the document, and
+  // the capture phase visits every ancestor regardless of `bubbles`. So it fired whenever the
+  // pointer left ANY element, not the window: a live-updating list (file tree, board) that
+  // re-rendered the row under a stationary pointer hid the scrollbar, and since only `onMove`
+  // can re-light it, the bar stayed hidden until the user jiggled the mouse. Only a leave
+  // aimed at the document itself means the pointer is actually gone.
+  const onLeave = (e: Event): void => {
+    const target = e.target
+    if (target !== doc && target !== doc.documentElement && target !== doc.body) return
     hot?.classList.remove(HOT)
     hot = null
   }

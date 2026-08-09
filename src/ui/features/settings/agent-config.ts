@@ -463,7 +463,13 @@ export function createAgentConfigWorkspace(onBack: () => void): AgentConfigWorks
             : 'This provider marks the setting as high impact. Review the selected scope before continuing.',
           confirmLabel: 'Apply setting',
           danger: true,
-          rememberKey: `agentcfg:${setting.id}`
+          // Key the session-skip by SCOPE, not just the setting. The message says the change
+          // "applies only to the selected scope", but a scope-blind key let a "Don't ask again"
+          // ticked for one project silence the SAME setting at All-projects (machine-wide) —
+          // the most dangerous scope, reached with no prompt. `permission-bypass` is 19 of the
+          // 20 danger settings; the controller refuses rememberKey outright for its own
+          // permission-bypass confirm (controller.ts), and scoping is the equivalent here.
+          rememberKey: `agentcfg:${setting.id}:${targetKey(currentSnapshot.target)}`
         })
         if (!confirmed) return
       }

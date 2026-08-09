@@ -60,6 +60,12 @@ function lockedSessionLog(paneId: number): { provider: string; file: string } | 
   return sessionLogOverrides?.get(paneId) ?? paneSessionLog(paneId)
 }
 
+/** How many slots a workspace's manifest describes: paneCount is the count, but a per-slot
+ *  array that runs longer still names a slot, so the widest one wins. */
+function slotCount(meta: WorkspaceStateMeta): number {
+  return Math.max(meta.paneCount, meta.assignments?.length ?? 0, meta.paneIds?.length ?? 0)
+}
+
 /**
  * Per-slot session capture for one workspace, while its panes are alive. Slots whose pane
  * has no session at all (a plain shell, a CLI the monitor can't read) record null.
@@ -74,10 +80,9 @@ function lockedSessionLog(paneId: number): { provider: string; file: string } | 
  * wins where both answer: it is the one that tracks claude's own `/clear`.
  */
 function paneSessionsFor(meta: WorkspaceStateMeta): (SnapshotPaneSession | null)[] | undefined {
-  const slots = Math.max(meta.paneCount, meta.assignments?.length ?? 0, meta.paneIds?.length ?? 0)
   const sessions: (SnapshotPaneSession | null)[] = []
   let any = false
-  for (let slot = 1; slot <= slots; slot++) {
+  for (let slot = 1; slot <= slotCount(meta); slot++) {
     const paneId = paneIdForSlot(meta, slot)
     const log = lockedSessionLog(paneId)
     // Assigned ids are claude's alone (agents.ts assigns nowhere else); the slot's own
@@ -99,6 +104,40 @@ function paneSessionsFor(meta: WorkspaceStateMeta): (SnapshotPaneSession | null)
   return any ? sessions : undefined
 }
 
+/** The sessions an EARLIER save recorded for this workspace, re-read through the panes they
+ *  were recorded AGAINST and re-placed on the slots those panes hold now.
+ *
+ *  A slot index is not an identity. `paneIds` re-lets a slot to a pane dragged in from another
+ *  workspace (contracts/domain/pane.ts), and both readers of a stored array — armResumeIntents
+ *  and bootIntentsFor — resolve it through the meta that array RIDES. So a held array grafted
+ *  by POSITION is silently re-keyed onto the new occupants: a session recorded for slot 3 while
+ *  that slot was still the formula's pane 103 arms on the pane 205 that has moved in since, and
+ *  the user's conversation reopens inside somebody else's terminal while the pane that owns it
+ *  resumes nothing. The hold therefore travels by PANE ID, resolved through the meta that
+ *  recorded it, and lands only where that same pane still sits. A pane that left takes its
+ *  session with it and the slot holds nothing — the pre-hold answer, a bare relaunch, which is
+ *  far the cheaper wrong. */
+function heldSessionsFor(
+  held: StoredSnapshot | null,
+  next: WorkspaceStateMeta
+): (SnapshotPaneSession | null)[] | undefined {
+  const prior = held?.workspaces.find((p) => p.id === next.id)
+  const priorSessions = prior?.paneSessions
+  if (!prior || !priorSessions) return undefined
+  const byPane = new Map<number, SnapshotPaneSession>()
+  priorSessions.forEach((session, i) => {
+    if (session) byPane.set(paneIdForSlot(prior, i + 1), session)
+  })
+  const sessions: (SnapshotPaneSession | null)[] = []
+  let any = false
+  for (let slot = 1; slot <= slotCount(next); slot++) {
+    const session = byPane.get(paneIdForSlot(next, slot))
+    if (session) any = true
+    sessions.push(session ?? null)
+  }
+  return any ? sessions : undefined
+}
+
 /**
  * Called by the workspace:saveState handler (app-settings.ts) with the state it just
  * replaced and the state it wrote. Mirrors non-shrinking, non-empty saves into the
@@ -114,11 +153,21 @@ export function noteWorkspaceSave(previous: WorkspaceState | null, next: Workspa
     // Teardown/hold: an empty or shrinking save keeps the pre-shrink snapshot —
     // that snapshot IS the "last working session" the empty Home will offer back.
     if (nextCount === 0 || nextCount < prevCount) return
+    // Read past that return, never before it: closing a five-workspace day is five saves,
+    // and each was paying for a settings read and a parse it then threw away.
+    const held = loadSnapshot()
     const snapshot: StoredSnapshot = {
       savedAt: Date.now(),
       activeId: next.activeId ?? null,
       workspaces: next.workspaces.map((w) => {
-        const paneSessions = paneSessionsFor(w)
+        // HOLD what this save cannot re-derive, the same stance as the shrink-hold above.
+        // The boot restore fires a debounced mirror save ~400ms after launch, when the context
+        // monitor has locked NO session logs yet and no launch has assigned an id either — so
+        // paneSessionsFor answers undefined for every workspace and this rewrite ERASED the
+        // exact-session ids the card exists to carry. A later teardown save is held, so a user
+        // who boots, works, and closes without an intervening lock-bearing save restored with a
+        // bare `--resume`: the CLI's session PICKER instead of their conversation.
+        const paneSessions = paneSessionsFor(w) ?? heldSessionsFor(held, w)
         return paneSessions ? { ...w, paneSessions } : { ...w }
       })
     }

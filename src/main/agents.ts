@@ -16,7 +16,7 @@ import { claudeProjectDirName, findClaudeProjectDir } from '@backend/features/co
 import { resolveHome } from '@backend/features/usage'
 import { HOME_POINTER } from '@backend/features/usage/homes'
 import { AgentChannels, LAUNCH_INTENT_VERSION, normalizeLaunchIntent, type AgentCliId, type AgentCommandCommitRequest, type AgentCommandCommitResult, type AgentCommandRequest, type AgentCommandResult, type AgentInfo, type AgentProfile, type PaneLaunchIntent } from '@contracts'
-import { statSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { getSettingsStore } from './app-settings'
 import { notePaneAgent } from './agent-presence'
@@ -141,6 +141,15 @@ export function registerAgents(getWin: () => BrowserWindow | null): void {
       : undefined
     if (req.remoteHostId && !remoteHost) {
       return { ok: false, reason: 'The saved remote host no longer exists. The agent was not launched locally.' }
+    }
+    // A LOCAL launch whose cwd has vanished (a restored session pointing at a deleted/renamed/
+    // unmounted folder) would `cd`-fail before the CLI ran — the daemon's pickCwd silently
+    // falls back to $HOME, so the app booked the pane agent-bearing and SPENT its one-shot
+    // config overrides + the restore resume intent on a session that never started. Refuse
+    // like a vanished remote host, BEFORE any of that is consumed — the pane stays a plain
+    // shell. Checked here (main) because only main can ask the filesystem.
+    if (!req.remoteHostId && req.remote !== true && req.cwd && !existsSync(req.cwd)) {
+      return { ok: false, reason: 'The saved folder no longer exists. The agent was not launched.' }
     }
     // A remote launch is typed into the shell on the far side of SSH: no profile homes, no
     // materialized plan file, no bell/statusline hooks (all of those are LOCAL filesystem

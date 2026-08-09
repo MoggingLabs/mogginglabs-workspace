@@ -100,9 +100,20 @@ export interface ProcRow {
   startedAt?: number
 }
 
-/** Count logical submitted lines in one PTY input chunk. Bracketed paste can carry several
- * commands at once; CRLF is one boundary, not two. */
+/** Count logical submitted lines in one PTY input chunk. CRLF is one boundary, not two.
+ *
+ * An ESC-introduced chunk is a SEQUENCE, not submitted lines — the same rule
+ * `isSubmittedInput` applies one call away (replies.ts), and for the same reason: inside a
+ * bracketed paste (`ESC[200~ … ESC[201~`, on in every modern shell and agent prompt) the CRs
+ * are literal TEXT the program receives, not Enter keys that start commands. Counting them
+ * armed one probe and one command-start per pasted line: a 2k-line paste left `pendingSubmits`
+ * far above the `<= 1` reset gate, so every later prompt bought a full process-table listing
+ * for the rest of the pane's life, and `commandActive` stuck true let a background `git`
+ * relabel the pane's cwd — and, since the foreground publisher reads that same flag, kept the
+ * pane's `foreground` verdict `active` long after the paste was over. Both twins (this and the
+ * daemon's) call it from the same block. */
 export function countSubmittedLines(data: string): number {
+  if (data.startsWith('\x1b')) return 0
   return data.match(/\r\n|\r|\n/g)?.length ?? 0
 }
 
@@ -274,6 +285,41 @@ const isForegroundRow = (row: ProcRow): boolean => {
   return !hasGroupEvidence || (row.pgid! > 0 && row.pgid === row.tpgid)
 }
 
+/** Switches that leave a shell INTERACTIVE. The prefix is stripped before the lookup, so `/c`
+ *  and `-c` disqualify as the same thing, and anything not listed here disqualifies too. */
+const INTERACTIVE_SHELL_SWITCHES = new Set([
+  'i', 'l', 'login', 'interactive', 'norc', 'noprofile', 'no-rcs', // POSIX
+  'nologo', 'noexit', 'sta', 'mta', // PowerShell
+  'd', 'q' // cmd.exe
+])
+
+/** Is this row a shell the user is SITTING IN, rather than a shell running a command?
+ *
+ *  The bare basename test this replaced fired for ANY foreground row named like a shell, and
+ *  the commonest one on Windows is not a nested prompt at all: PowerShell cannot CreateProcess
+ *  a `.cmd`, so `npm run dev` in a PowerShell pane spawns `cmd.exe /c "…npm.cmd" run dev` as
+ *  the pane's shallowest foreground child. That latched `foregroundIsShell` for the whole life
+ *  of the dev server — only a prompt clears it, and a dev server never prompts — which handed
+ *  the re-anchor below a pane it was never meant to pay for: one process listing every
+ *  REANCHOR_MS for as long as the server ran, in exactly the pane the cost model promises
+ *  costs ONE. `bash ./dev.sh`, `sh -c …` and `./gradlew` are the same shape on POSIX.
+ *
+ *  The tell is the COMMAND LINE, which ProcRow already carries on both platforms (Windows:
+ *  Win32_Process.CommandLine; POSIX: `ps args`), argv[0] first on both. A shell handed a
+ *  script or a command string has an argument that is neither the shell nor an interactivity
+ *  switch; a shell the user typed has none. An unreadable command line is not evidence of an
+ *  interactive shell — say no, and that pane keeps the pre-flag cost of zero listings.
+ *  Exported for the unit tier. */
+export function isInteractiveShellRow(row: ProcRow | undefined): boolean {
+  if (!row || !SHELL_BINS.has(row.base) || !row.cmd.trim()) return false
+  return tokenizeCommandLine(row.cmd)
+    .slice(1) // argv[0] is the shell itself
+    .every((arg) => {
+      const name = /^(?:--?|\/)(.+)$/.exec(arg)?.[1]
+      return name !== undefined && INTERACTIVE_SHELL_SWITCHES.has(name.toLowerCase())
+    })
+}
+
 /** The agent id a single process represents, or null. Pure — the unit of the gate. */
 export function matchAgentProcess(base: string, cmd: string): string | null {
   const direct = BIN_TO_AGENT.get(base)
@@ -437,6 +483,14 @@ interface TrackedPane {
   current: DetectedAgentProc | null
   /** The foreground process context, whether or not its executable is a known adapter. */
   foreground: DetectedProcessContext | null
+  /** True when that foreground is itself an interactive SHELL (the user typed `bash` or
+   *  `powershell` at the pane prompt) — proven from its command line by `isInteractiveShellRow`,
+   *  because a shell RUNNING something wears the same name. It suppresses every later
+   *  commandSubmitted, and the nested shell emits no prompt marker of its own — while
+   *  `hasPromptMarker` stays latched from the OUTER shell, which used to skip the one re-anchor
+   *  built for marker-less panes. An agent started in there was invisible to the whole identity
+   *  stack: no gauge, no provider mark, no resume, and a restore brought back a plain shell. */
+  foregroundIsShell: boolean
   contextCheckedAt: number
   /** True only while the shell is waiting for a submitted/restored foreground command. */
   contextArmed: boolean
@@ -524,6 +578,7 @@ export class AgentProcessDetector {
       rootPid,
       current: null,
       foreground: null,
+      foregroundIsShell: false,
       contextCheckedAt: 0,
       contextArmed: expectAgent,
       contextEpoch: 0,
@@ -596,6 +651,7 @@ export class AgentProcessDetector {
     // be alive, but it no longer owns the pane's active directory.
     if (t.foreground) {
       t.foreground = null
+      t.foregroundIsShell = false
       this.emitContext(paneId, null)
     }
     if (t.current) {
@@ -679,6 +735,7 @@ export class AgentProcessDetector {
             t.probeAt = this.now()
           } else {
             t.foreground = null
+            t.foregroundIsShell = false
             this.emitContext(paneId, null)
           }
         }
@@ -702,7 +759,10 @@ export class AgentProcessDetector {
     // none of it, and a 30-minute agent session there costs zero listings instead of six.
     if (this.now() - this.lastSnapshotAt >= REANCHOR_MS) {
       for (const t of this.panes.values()) {
-        if ((t.current || t.foreground) && !t.hasPromptMarker) t.probeAt = this.now()
+        // `foregroundIsShell` too: a NESTED interactive shell holds the foreground, so no Enter
+        // is ever announced and no prompt mark ever arrives — the marker-less case this
+        // re-anchor exists for, wearing the outer shell's latched hasPromptMarker.
+        if ((t.current || t.foreground) && (!t.hasPromptMarker || t.foregroundIsShell)) t.probeAt = this.now()
       }
     }
     this.tickTimer = this.setTimer(() => this.tick(), LIVENESS_TICK_MS)
@@ -823,6 +883,7 @@ export class AgentProcessDetector {
                 : sinceFloorMs(byPid.get(foreground.pid)?.startedAt, this.now())
           }
           t.foreground = nextContext
+          t.foregroundIsShell = isInteractiveShellRow(byPid.get(nextContext.pid))
           t.contextCheckedAt = this.now()
           t.pendingSubmits = 0 // subsequent Enter keys belong to this foreground program
           if (
@@ -834,6 +895,7 @@ export class AgentProcessDetector {
           }
         } else if (previousContext) {
           t.foreground = null
+          t.foregroundIsShell = false
           this.emitContext(paneId, null)
         }
         const prev = t.current

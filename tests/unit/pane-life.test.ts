@@ -199,3 +199,98 @@ describe('freshPaneLife re-arms every once-per-life latch', () => {
     expect(freshPaneLife().remoteReadyProbe).toBe('')
   })
 })
+
+// THE OTHER HALF OF "A PANE ID OUTLIVES ITS SHELLS": a reply that lands after the pane is GONE.
+//
+// dispose() runs forgetSpawnRun(this.id) and retirePaneLife(this.id), which is what frees the id
+// for the next pane. Every effect in the spawn handlers is therefore `!this.disposed`-guarded —
+// the marks were, and the comments beside them spell out this exact hazard. The spawn-RUN
+// outcome was not, in either handler. A reply landing after dispose wrote a STALE outcome for a
+// now-FREE id; the next pane to recycle that id reads it SYNCHRONOUSLY (whenSpawnRunOutcome
+// short-circuits on a known outcome, so it resolves in the same tick as arming), skips the typed
+// fallback and still runs recordCliLaunch — a pane with NO agent that the app records as
+// agent-bearing: provider chip, session facts, launch entries retired from the menu.
+//
+// The port states the law this violated: "a recycled pane id must start with no armed build, no
+// stale outcome, and no waiter still hoping."
+describe('a spawn reply that lands after dispose reports nothing', () => {
+  const src = sourceOf('src/ui/features/terminal/terminal-pane.ts')
+  const spawn = bodyWithoutComments(src, 'private spawnPty(')
+
+  it.each([
+    ['the success handler', /reportSpawnRunOutcome\(this\.id, !!run && !res\.existing\)/],
+    ['the failure handler', /reportSpawnRunOutcome\(this\.id, false\)/]
+  ])('%s reports only while the pane is alive', (_name, call) => {
+    const at = spawn.search(call)
+    expect(at, 'the report was renamed, not deleted, surely?').toBeGreaterThan(-1)
+    // Guarded ON THE SAME STATEMENT — a `!this.disposed` somewhere else in the method is not
+    // this call's guard, which is precisely how these two were missed among their guarded
+    // siblings.
+    expect(spawn.slice(spawn.lastIndexOf('\n', at), at)).toContain('if (!this.disposed)')
+  })
+
+  it('reports nowhere else — one door, so there is one thing to guard', () => {
+    expect(src.match(/reportSpawnRunOutcome\(/g)).toHaveLength(2)
+  })
+
+  // The same law one step earlier: the armed-run race can take up to 2.5s, and the pane can be
+  // closed inside it. Spawning then creates a daemon session nobody in this app will address —
+  // the relay tombstone re-kills it in THIS session, but the detached daemon has already
+  // persisted it and restores it on the next app start.
+  it('a pane closed during the armed-run race never spawns at all', () => {
+    const at = src.indexOf('return this.spawnPty(run, launch)')
+    expect(at, 'the mount spawn call moved — re-anchor this test').toBeGreaterThan(-1)
+    const guard = src.lastIndexOf('if (this.disposed) return', at)
+    expect(guard, 'the mount spawn must be gated on the pane still being alive').toBeGreaterThan(-1)
+    // IMMEDIATELY before the spawn — nothing but whitespace between them, so a guard that
+    // drifts above some other statement (and stops covering this call) fails loudly.
+    expect(src.slice(guard + 'if (this.disposed) return'.length, at).trim()).toBe('')
+  })
+})
+
+// THE SESSION-CAPTURE MARK MUST SURVIVE THE BLOCK RING.
+//
+// emitSessionCapture is once per LIFE (the captureEmitted latch above), but its high-water mark
+// spans lives on purpose — the block ladder is the whole xterm buffer, and scrollback survives a
+// restart. It marked its progress with an ARRAY INDEX (`.slice(capturedThrough)`, then
+// `capturedThrough = ladder.length`) into a ring that BlockTracker caps and `shift()`s. An index
+// goes stale the moment the ring shifts: once saturated, list().length stops growing, the slice
+// returns EMPTY, and every post-restart life captured NOTHING — the Brain draft for that session
+// life never landed in the quarantine, silently. It degraded before saturation too (at 295/300
+// with 20 new blocks, 15 were lost). Block.id is a monotonic mint, so an id mark stays true
+// across shifts.
+describe('the session-capture mark survives the block ring', () => {
+  const src = sourceOf('src/ui/features/terminal/terminal-pane.ts')
+  const capture = bodyWithoutComments(src, 'private emitSessionCapture(): void')
+
+  it('the ring genuinely shifts — the index was not a hypothetical staleness', () => {
+    // Non-vacuity: if the ladder only ever grew, an index would be a valid mark forever.
+    const tracker = sourceOf('src/ui/features/blocks/block-tracker.ts')
+    expect(tracker).toMatch(/const MAX_BLOCKS = \d+/)
+    expect(tracker).toMatch(/if \(this\.blocks\.length > MAX_BLOCKS\) this\.disposeBlock\(this\.blocks\.shift\(\)\)/)
+    // ...and the ids outrun the indices because they are minted, never re-derived.
+    expect(tracker).toMatch(/id: this\.nextId\+\+/)
+  })
+
+  it('takes the new blocks by ID, never by array position', () => {
+    expect(capture).toMatch(/\.filter\(\(b\) => b\.id > this\.capturedThroughId\)/)
+    expect(capture, 'a slice into a shifting ring is the defect itself').not.toMatch(/\.slice\(/)
+  })
+
+  it('parks the mark on the last block’s id, and not on the ladder LENGTH', () => {
+    expect(capture).toMatch(/this\.capturedThroughId = ladder\[ladder\.length - 1\]!?\.id/)
+    expect(capture).not.toMatch(/capturedThroughId = ladder\.length/)
+  })
+
+  it('an empty ladder leaves the mark where it was', () => {
+    // `ladder[ladder.length - 1]` on an empty ladder is undefined; writing it would reset the
+    // high-water mark to 0 and re-capture a prior life's commands on the next emission.
+    expect(capture).toMatch(/if \(ladder\.length\) this\.capturedThroughId =/)
+  })
+
+  it('no index-shaped mark is left anywhere in the pane', () => {
+    expect(src, 'the old index field must be gone, not merely unused').not.toMatch(
+      /private\s+capturedThrough\s*[:=]/
+    )
+  })
+})

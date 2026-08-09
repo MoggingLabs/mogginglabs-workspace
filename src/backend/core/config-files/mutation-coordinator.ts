@@ -85,9 +85,6 @@ export class ConfigMutationCoordinator {
     return this.enqueue(target, async () => {
       const maxBytes = request.maxBytes ?? DEFAULT_MAX_BYTES
       const current = await this.readTarget(target, maxBytes)
-      if (request.expectedHash !== undefined && current.hash !== request.expectedHash) {
-        throw new ConfigMutationError('changed-under-us', 'The config changed before the edit could be applied.')
-      }
 
       let nextText: string
       try {
@@ -102,7 +99,19 @@ export class ConfigMutationCoordinator {
         throw new ConfigMutationError('too-large', 'The edited config exceeds the safe size limit.')
       }
       const nextHash = digest(encoded)
+      // The no-op check comes BEFORE the CAS deliberately. `read()` is unqueued, so a token
+      // goes stale the moment a SIBLING writes — and the common sibling here is a second
+      // launch for the same (workspace, cli) applying the IDENTICAL value (the wizard lineup
+      // requests every pane's agent in one synchronous pass). Refusing that is refusing an
+      // edit that is already satisfied: the caller saw `changed-under-us`, the launch was
+      // REFUSED, and the user read "The config changed before the edit could be applied"
+      // about a config now in exactly the requested state — plus every row persisted
+      // status:'error'. You asked for what is already there, so there is no conflict to have.
       if (nextHash === current.hash) return { changed: false, previousHash: current.hash, hash: current.hash, snapshot: current }
+      // A genuinely DIVERGENT edit still rejects — this is the real out-of-band writer.
+      if (request.expectedHash !== undefined && current.hash !== request.expectedHash) {
+        throw new ConfigMutationError('changed-under-us', 'The config changed before the edit could be applied.')
+      }
 
       try {
         // External CLIs may rewrite their own config while our synchronous codec

@@ -11,6 +11,7 @@ import { activeView, goBack, onViewChange, setActiveView } from '../../core/shel
 import { registerSettingsTabNav, takeRequestedSettingsTab } from '../../core/shell/settings-tab-port'
 import { requestIntegrationsFocus, type IntegrationsFocus } from '../../core/shell/integrations-focus-port'
 import { isModKey, renderShortcutList } from '../../core/commands/shortcuts'
+import { shortcutsBlocked } from '../../core/commands/context'
 import { setTerminalFontSize, terminalFontSize, TERMINAL_FONT_SIZES } from '../../core/terminal/font-port'
 import { calmMotion, setCalmMotion } from '../../core/a11y/motion-port'
 import { TEMPLATE_COUNTS } from '../layout'
@@ -1061,6 +1062,11 @@ export const settingsFeature: UiFeature = {
       'keydown',
       (e) => {
         if (isModKey(e) && !e.altKey && !e.shiftKey && e.key === ',') {
+          // A blocking modal owns the keyboard: #app is inert, so swapping the whole
+          // top-level view behind it strands the user on Settings with their grid gone the
+          // moment they dismiss the dialog. Four sibling chord handlers already ask this;
+          // this one and the rail toggle did not.
+          if (shortcutsBlocked(e.target)) return
           e.preventDefault()
           e.stopPropagation()
           if (activeView() === 'settings') goBack()

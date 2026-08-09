@@ -20,7 +20,8 @@
 // the clamp it beats, and `grep infinite global.css` returns a dozen hits that are all
 // perfectly legitimate full-motion animations. Only SCOPE tells them apart, and scope
 // means tracking brace depth. Hence a script, not a grep.
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join, sep } from 'node:path'
 
 // Selectors exempt from the rule — i.e. motion so essential that stopping it would
 // destroy the meaning (a genuinely indeterminate progress indicator with nothing else
@@ -81,6 +82,42 @@ for (const ch of code) {
     buf += ch
   }
   if (ch === '\n') line++
+}
+
+// ── The JS half: a smooth scroll is neither an animation nor a transition ────────────────
+// `.motion-calm`'s entire reach is the CSS clamps above, so a scroll driven by the
+// `behavior: 'smooth'` OPTION is unreachable by any class — the in-app switch, documented as
+// the twin of the OS reduce-motion preference, had no twin at all for scrolling. Every
+// renderer scroll must go through `scrollBehavior()` (core/a11y/motion-port.ts), which answers
+// 'auto' when calm motion or the OS preference is on. A literal is a hole this gate exists to
+// keep shut, so it is checked here rather than left to review.
+{
+  const rawSmooth = []
+  const walkSrc = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walkSrc(full)
+      else if (entry.name.endsWith('.ts')) {
+        const posix = full.split(sep).join('/')
+        if (posix.endsWith('core/a11y/motion-port.ts')) continue // the helper's own home
+        readFileSync(full, 'utf8')
+          .split('\n')
+          .forEach((text, i) => {
+            if (/behavior:\s*['"`]smooth['"`]/.test(text)) rawSmooth.push(posix + ':' + (i + 1))
+          })
+      }
+    }
+  }
+  walkSrc('src/ui')
+  if (rawSmooth.length) {
+    console.error('\nreduced motion — ' + rawSmooth.length + " raw smooth scroll(s) bypassing scrollBehavior():\n")
+    for (const r of rawSmooth) console.error('  ' + r)
+    console.error(
+      "\n::error::route these through scrollBehavior() (core/a11y/motion-port.ts) — no CSS class can " +
+        "becalm a behavior:'smooth' option, so a literal ignores both Calm motion and the OS preference.\n"
+    )
+    process.exit(1)
+  }
 }
 
 if (violations.length) {

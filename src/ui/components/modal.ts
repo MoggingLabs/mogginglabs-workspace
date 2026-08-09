@@ -85,13 +85,20 @@ export function createModal(opts: ModalOpts = {}): ModalHandle {
   let opener: Element | null = null
   let dropTimer: ReturnType<typeof setTimeout> | undefined
   let trap: OverlayTrap | undefined
+  let inertedBeneath: HTMLElement[] = []
 
   const onEsc = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      e.stopPropagation()
-      close()
-    }
+    if (e.key !== 'Escape') return
+    // Only the TOPMOST modal answers Escape. Every open modal registers its own capture-phase
+    // listener on `window`, and `stopPropagation` does NOT stop siblings on the same node (that
+    // needs stopImmediatePropagation) — so listeners fired in REGISTRATION order and the OUTER
+    // sheet closed FIRST. One Escape dismissed the whole stack: backing out of a confirm raised
+    // over a settings sheet took the sheet with it, discarding whatever the confirm was about.
+    const live = document.querySelectorAll('.modal-overlay:not(.is-closing)')
+    if (live.length > 0 && live[live.length - 1] !== overlay) return
+    e.preventDefault()
+    e.stopPropagation()
+    close()
   }
 
   function doOpen(): void {
@@ -112,6 +119,14 @@ export function createModal(opts: ModalOpts = {}): ModalHandle {
       clearTimeout(dropTimer)
       dropTimer = undefined
     }
+    // Stacking over another modal: `trapOverlay` inerts only #app, so the modal(s) BENEATH
+    // this one stayed reachable — a screen reader in browse mode could walk its virtual cursor
+    // out of the top dialog and read (and activate) the one underneath. Inert the ones already
+    // open (they are siblings under <body>, not inside #app); un-inert exactly these on close.
+    inertedBeneath = [...document.querySelectorAll<HTMLElement>('.modal-overlay')].filter(
+      (o) => o !== overlay && !o.inert
+    )
+    for (const o of inertedBeneath) o.inert = true
     document.body.append(overlay)
     window.addEventListener('keydown', onEsc, true)
     // Inert the shell BEFORE focusing in: aria-modal told the screen reader this was modal
@@ -138,6 +153,10 @@ export function createModal(opts: ModalOpts = {}): ModalHandle {
     // an element that is still inert.
     trap?.release()
     trap = undefined
+    // Restore the modals this open had inerted beneath it (only those — a modal even higher
+    // owns its own set), so the one now on top becomes reachable again.
+    for (const o of inertedBeneath) o.inert = false
+    inertedBeneath = []
     // One curve out (8.5/07b): fade the overlay, detach on animationend — with a ≤260ms
     // fallback so reduced-motion / animations-off never strands the overlay in the DOM.
     overlay.classList.add('is-closing')

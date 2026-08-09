@@ -47,6 +47,31 @@ describe('materializeToolPlanAtLaunch memoizes an unchanged plan', () => {
   })
 })
 
+// A LAUNCH MUST NEVER ROLL BACK A FILE IT DID NOT WRITE.
+//
+// `configMutationCoordinator.read()` is unqueued, so two same-tick launches for one
+// (workspace, cli) both read the plan file as absent. The winner writes it; the loser either
+// loses the CAS or finds its edit already satisfied — and if the loser had recorded its undo
+// BEFORE the mutate, its rollback (`existed:false`) `rmSync`es the WINNER's file, leaving the
+// winner's pane pointed at a deleted `--mcp-config`. TOOLPLAN's race phase proves the behavior;
+// the ordering is pinned here because tool-plan.ts imports electron.
+describe('the rollback ledger only ever holds our own writes', () => {
+  const writeOnce = bodyWithoutComments(sourceOf('src/main/tool-plan.ts'), 'const writeOnce = async (): Promise<void> => {')
+
+  it('records the undo only AFTER our own mutate resolved', () => {
+    const mutateAt = writeOnce.indexOf('configMutationCoordinator.mutate(')
+    const pushAt = writeOnce.indexOf('before.push(')
+    expect(mutateAt, 'the write itself must still go through the coordinator').toBeGreaterThan(-1)
+    expect(pushAt, 'an undo recorded pre-mutate deletes the winner of a same-tick race').toBeGreaterThan(mutateAt)
+  })
+
+  it('records it only when OUR write actually changed the file', () => {
+    // `changed:false` is reachable now that the coordinator accepts an already-satisfied
+    // edit — that file is the SIBLING's, and undoing it is the same defect by another door.
+    expect(writeOnce).toMatch(/if \(res\.changed\) before\.push\(/)
+  })
+})
+
 describe('the launch handler runs its independent work in parallel', () => {
   const body = bodyWithoutComments(
     sourceOf('src/main/agents.ts'),

@@ -4,7 +4,7 @@ import {
   type UpdatePrefs,
   type UpdateState
 } from '@contracts'
-import { Button, Card, SectionHeader, createToggleRow, el } from '../../components'
+import { Button, Card, SectionHeader, createToggleRow, el, showToast } from '../../components'
 import { getBridge } from '../../core/ipc/bridge'
 
 /**
@@ -87,21 +87,40 @@ export function createUpdatesSection(): HTMLElement {
   restartBtn.hidden = true
 
   let prefs: UpdatePrefs = UPDATE_PREFS_DEFAULT
-  const save = (patch: Partial<UpdatePrefs>): void => {
-    prefs = { ...prefs, ...patch }
-    void bridge.invoke(UpdateChannels.prefsSet, prefs)
+  // save() ANSWERS now: the store can be absent or throw, and a silent failure left the toggle
+  // showing a value that was never persisted. The caller reverts the switch it flipped and
+  // toasts — the same contract every other settings toggle already honours (settings/index.ts).
+  const save = async (patch: Partial<UpdatePrefs>): Promise<boolean> => {
+    const next = { ...prefs, ...patch }
+    const res = (await bridge.invoke(UpdateChannels.prefsSet, next)) as { ok?: boolean } | undefined
+    if (!res?.ok) {
+      showToast({
+        tone: 'danger',
+        title: 'Setting was not saved',
+        body: 'The settings store did not accept the change — nothing was changed. Try again.'
+      })
+      return false
+    }
+    prefs = next
+    return true
   }
 
   const prerelease = createToggleRow({
     label: 'Receive pre-release builds',
     hint: 'Get beta tags (like v1.0.0-beta.1) as soon as they ship. Turning this back off returns you to the latest stable build, even if that means stepping back down from a beta.',
-    onChange: (on) => save({ allowPrerelease: on })
+    onChange: (on) =>
+      void save({ allowPrerelease: on }).then((ok) => {
+        if (!ok) prerelease.setChecked(!on)
+      })
   })
 
   const installOnQuit = createToggleRow({
     label: 'Install updates when the app quits',
     hint: 'On: a downloaded update applies quietly the next time you close the app, so you never wait for one. Off: it installs only when you press Restart — nothing is ever swapped out from under you.',
-    onChange: (on) => save({ installOnQuit: on })
+    onChange: (on) =>
+      void save({ installOnQuit: on }).then((ok) => {
+        if (!ok) installOnQuit.setChecked(!on)
+      })
   })
 
   function render(s: UpdateState): void {

@@ -34,6 +34,8 @@ export interface FaultHooks {
   mutation?: (kind: MutationKind) => Promise<void>
   /** TRUE = this `browser:consentSet` must drop the write and admit it (BROWSERZERO). */
   consentSet?: () => boolean
+  /** TRUE = this `update:prefsSet` must persist nothing and report it (UPDATEFAIL). */
+  updatePrefsSet?: () => boolean
   /** The injected failure message for a persistence op, or null (PERSISTHEALTH). */
   persist?: (op: PersistOp) => string | null
 }
@@ -58,6 +60,11 @@ export async function maybeMutationFault(kind: MutationKind): Promise<void> {
 /** Consumed inside the `browser:consentSet` handler. Always false in production. */
 export function consumeConsentSetFailure(): boolean {
   return hooks.consentSet ? hooks.consentSet() : false
+}
+
+/** Consumed inside the `update:prefsSet` handler. Always false in production. */
+export function consumeUpdatePrefsSetFailure(): boolean {
+  return hooks.updatePrefsSet ? hooks.updatePrefsSet() : false
 }
 
 /** The message an injected persistence failure should carry, or null. Always null in production. */

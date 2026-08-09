@@ -101,10 +101,19 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
   let reconnecting = false
   let retryWake: (() => void) | null = null
   let client!: DaemonClient
-  /** The last spec this app sent per pane. Replayed on reconnect: `spawn` is an ensure —
-   *  it reattaches to a session the (new) daemon restored, or respawns a lost one — and its
-   *  reply replays scrollback through onData, so every pane repaints without renderer help. */
-  const specs = new Map<string, SpawnSpec>()
+  /** The last spec this app sent per pane, tagged with the ISSUE TOKEN of the door call that
+   *  recorded it. Replayed on reconnect: `spawn` is an ensure — it reattaches to a session
+   *  the (new) daemon restored, or respawns a lost one — and its reply replays scrollback
+   *  through onData, so every pane repaints without renderer help.
+   *  The token is what makes the FAILURE path safe. A spawn's rejection is (for the reachable
+   *  cause) its own 5s client-side timeout, and 5s is long enough for a newer spawn of the
+   *  same id to have replaced this entry — a renderer reload re-mounts the pane and re-spawns
+   *  it through the same door. Withdrawing on identity ("still mine?") instead of on id keeps
+   *  a stale rejection from deleting the live pane's spec: nothing else in this app writes
+   *  this map, so a clobbered entry is a pane that is never replayed or reattached again for
+   *  the rest of the run. */
+  const specs = new Map<string, { spec: SpawnSpec; token: number }>()
+  let nextSpecToken = 0
   /** THE generation gate (v5). Pane id -> the one session generation whose events may
    *  reach the renderer; 'killed' is a tombstone set the moment the app closes a pane.
    *  Ids are reused (a split takes the lowest free slot), so events still in flight from
@@ -205,7 +214,7 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
           // `spawn {cols, rows}`, which the daemon reads as a CLIENT MEASUREMENT and which
           // releases a deferred launch. That would type an agent into a size no client ever
           // measured, through the back door of an invariant built to prevent exactly that.
-          const banked = specs.get(p.id)
+          const banked = specs.get(p.id)?.spec
           if (banked && typeof banked.cols === 'number' && (banked.cols !== p.cols || banked.rows !== p.rows)) {
             clientLog('dims-divergent', {
               id: p.id,
@@ -324,12 +333,12 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
         // suppress. New daemon (the old one died; this one restored): the panes show a
         // dead generation's content — reset-and-repaint from the restored ring.
         const replayMode = daemonPid === prevPid ? 'suppress' : 'reset'
-        for (const [id, spec] of specs) {
+        for (const [id, entry] of specs) {
           // Role state lives in the daemon's mailbox and may have vanished with a
           // restarted daemon, so replay it only after spawn/attach is acknowledged;
           // absent-session role writes are refused.
           void next
-            .spawn(id, spec, undefined, replayMode)
+            .spawn(id, entry.spec, undefined, replayMode)
             .then(async () => {
               const role = appRoles.get(id)?.role
               if (role) await bindRole(id, role)
@@ -478,11 +487,70 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     // `launch` is the OPPOSITE and is deliberately KEPT: it types nothing, it says what the
     // pane is. A replay that dropped it would rebuild the session having forgotten its agent
     // and profile — the very loss this field exists to prevent.
-    specs.set(String(req.id), { ...spec, run: undefined })
+    const id = String(req.id)
+    const token = ++nextSpecToken
+    specs.set(id, { spec: { ...spec, run: undefined }, token })
     // Straight through, unmodified: `existing` tells the restore path not to type a launch
     // command into a live agent, and `pty` tells xterm how this pane's pty grows. Main relays
     // the daemon's answer — it does not compute either (that is the whole point of pty-host).
-    return await client.spawn(String(req.id), spec)
+    try {
+      return await client.spawn(id, spec)
+    } catch (err) {
+      // The caller is about to BURY this pane: terminal-pane's spawn catch writes
+      // "[terminal failed to start]", marks it dead and gates every keystroke on the
+      // assumption that the daemon has no session for the id. Restart is the one road back,
+      // and it re-records the spec through this same door. So the spec must go — but WHOSE
+      // spec, and what about the session it may already have made?
+      //
+      // WHOSE (identity). The reachable failure here is the client's own 5s timeout, and a
+      // renderer reload inside those 5s re-mounts the pane and re-spawns it through this
+      // door, writing a NEWER spec. An unconditional withdrawal deletes that one — and since
+      // nothing else in the app writes this map, the successful second spawn's pane is never
+      // replayed or reattached again for the rest of the run. A superseded rejection is news
+      // about a pane that no longer exists: it withdraws nothing.
+      //
+      // AND THE SESSION (ordering). The withdrawal cannot assume there is no session behind
+      // it. The reconnect loop's first retry is at 500ms and it replays `specs` the moment it
+      // heals — five times faster than this timeout — so by the time we get here the daemon
+      // may hold a REAL session for this id (for a remote pane, a real ssh with a live auth
+      // attempt). Deleting the spec ALONE orphans it: a live process that no replay covers
+      // and no welcome reattaches, painting its prompt under the dead banner forever. The app
+      // already has one answer for "a session the app is not showing" — the kill handler's —
+      // so take it whole: withdraw the spec, tombstone the id so nothing still in flight from
+      // that session lands in the reused slot, and close it on the CURRENT connection (the
+      // loop reassigns `client`, so this is the connection any replay landed on). A `kill`
+      // for an id the daemon does not have is a no-op (sessions.remove) with no reply frame,
+      // so this costs nothing in the common case where the spawn failed with nothing behind
+      // it, and reaps the session in the case where the race actually ran.
+      const mine = specs.get(id)?.token === token
+      if (mine) {
+        specs.delete(id)
+        gens.set(id, 'killed')
+        lastStates.delete(id)
+        livePaneIds.delete(id)
+        cwdRevisions.delete(id)
+        // Same reason as the kill handler's: the tombstone is what makes onExit/onAgent
+        // unreachable for this id, so the un-book has to happen where the burial does. A
+        // launch books its target pane when the COMMAND is built (agents.ts), which for a
+        // spawn-run launch is before this spawn is even answered — so a pane that never
+        // started would otherwise stay booked agent-bearing for the rest of the run.
+        // Only when the entry is still ours: a superseded rejection must not un-book the
+        // pane a newer, live spawn is running.
+        notePaneGone(Number(id))
+        // NOT forgetPaneLaunch, deliberately — unlike the kill handler below. A failed spawn
+        // does not FREE the id: the pane stays mounted under its dead banner, and the only
+        // road back is restart, which re-spawns THIS pane. The id recycles when the pane is
+        // CLOSED, and that goes through the kill handler, which forgets there. Dropping the
+        // record here would only cost the restart its profile — back to order-0 on a pane
+        // whose config home the user had chosen.
+        client.kill(id)
+      }
+      // Journaled for the same reason every other daemon-lifecycle decision is: a session
+      // main reaped (or deliberately did NOT withdraw) is otherwise reconstructable only from
+      // side effects. `withdrawn:false` is the superseded case — a newer spawn owns the id.
+      clientLog('spawn-failed', { id, withdrawn: mine })
+      throw err
+    }
   })
   // Platform truth a pane needs BEFORE its first byte. The daemon's own `spawned`
   // reply answers from THIS same module (transport.ts imports the same ptyEmulation)
@@ -530,8 +598,8 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     // which is also the shape a late resize from a disposed pane arrives in. Writing its
     // dims into the stored spec would hand the REPLAY a size that no live session ever had,
     // and the replay is the one thing that decides how a restored pane comes back.
-    const spec = typeof gen === 'number' ? specs.get(id) : undefined
-    if (spec) Object.assign(spec, { cols: cmd.cols, rows: cmd.rows }) // the replay must use CURRENT dims
+    const entry = typeof gen === 'number' ? specs.get(id) : undefined
+    if (entry) Object.assign(entry.spec, { cols: cmd.cols, rows: cmd.rows }) // the replay must use CURRENT dims
     client.resize(id, cmd.cols, cmd.rows, gen)
   })
   ipcMain.on(TerminalChannels.kill, (_e, cmd: KillCommand) => {
@@ -542,6 +610,14 @@ export async function startDaemonBackend(getWebContents: () => WebContents | nul
     lastStates.delete(String(cmd.id))
     livePaneIds.delete(String(cmd.id))
     cwdRevisions.delete(String(cmd.id))
+    // Presence dies HERE, not on the exit event — because the tombstone above is what stops
+    // that event. Both roads that un-book a pane (onExit's notePaneGone, onAgent's
+    // `agentId == null`) are gated on `current(id, gen)`, and no numeric gen ever equals
+    // 'killed', so a pane the user CLOSES stayed booked agent-bearing for the rest of the app
+    // run. Ids are reused (a split takes the lowest free slot), so the next plain shell in
+    // this slot inherited the booking and its bell rang a `needs-you` webhook over a pane
+    // with no agent — the exact disagreement between wire and UI that ALERTAGREE closed.
+    notePaneGone(Number(cmd.id))
     // Same reason as the role below: pane ids are REUSED, so a closed pane's profile must
     // not become the default for whatever opens at that id next.
     forgetPaneLaunch(Number(cmd.id))

@@ -11,6 +11,7 @@ interface ClipboardAuditState {
   formatReads: number
   blockedSensitiveEntries: number
   failedWritesRemaining: number
+  silentlyDroppedWritesRemaining: number
 }
 
 const state: ClipboardAuditState = {
@@ -18,7 +19,8 @@ const state: ClipboardAuditState = {
   imageReads: 0,
   formatReads: 0,
   blockedSensitiveEntries: 0,
-  failedWritesRemaining: 0
+  failedWritesRemaining: 0,
+  silentlyDroppedWritesRemaining: 0
 }
 
 export type ClipboardReadKind = 'text' | 'image' | 'formats'
@@ -40,6 +42,23 @@ export function failNextClipboardWrites(count = 1): void {
 export function consumeClipboardWriteFailure(): boolean {
   if (state.failedWritesRemaining <= 0) return false
   state.failedWritesRemaining--
+  return true
+}
+
+/**
+ * Model the REAL Windows hazard, which the throwing fault above cannot: while another process
+ * holds the machine-wide clipboard open, `clipboard.writeText` neither copies nor throws — it
+ * is a SILENT no-op. A write path that only ever sees the throwing fault looks correct while
+ * being unable to notice a write that did not take, so the read-back guards are unprovable
+ * against it. Armed writes here return normally, having written nothing.
+ */
+export function silentlyDropNextClipboardWrites(count = 1): void {
+  state.silentlyDroppedWritesRemaining = Math.max(0, Math.floor(count))
+}
+
+export function consumeClipboardSilentDrop(): boolean {
+  if (state.silentlyDroppedWritesRemaining <= 0) return false
+  state.silentlyDroppedWritesRemaining--
   return true
 }
 

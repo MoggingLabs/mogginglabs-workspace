@@ -110,6 +110,24 @@ const IS_MAC = navigator.platform.toUpperCase().includes('MAC')
  */
 const REFIT_SETTLE_MS = 120
 
+/**
+ * The Windows worktree-lock ladder for the pane's DIRECT removal road (buildMenu's
+ * `!eventHost.isConnected` branch). node-pty exits ASYNCHRONOUSLY, and on Windows the closed
+ * pty's former cwd stays locked until its handle drops, so `git worktree remove` answers
+ * `error` for a moment after the pane is gone. The codebase models this explicitly —
+ * src/main/worktrees.ts injects a transient lock and the WORKTREE gate asserts the ladder
+ * rides it out — and the workspace controller has always retried the identical backend call
+ * (controller.ts, removePaneWorktree). The direct road invoked ONCE, so a transient lock fell
+ * straight to "Could not remove worktree" with the pane already closed: the same dead end the
+ * bypass was added to close.
+ *
+ * These are re-STATED, not imported: the only other copy lives in the workspace controller,
+ * a file this change does not own. A shared home (one worktree-removal helper both roads
+ * call) is the right end state — the two ladders must not be allowed to drift.
+ */
+const WORKTREE_REMOVE_ATTEMPTS = 20
+const WORKTREE_REMOVE_RETRY_MS = 150
+
 /** A single xterm pane bound to a backend PTY of the same id. */
 export class TerminalPane {
   private readonly instance: number
@@ -175,8 +193,16 @@ export class TerminalPane {
   private menuCleanup?: () => void
   private blocks?: BlockTracker
   /** Blocks already captured by a PRIOR life's emission (the ladder spans lives —
-   *  scrollback survives restart). Each emission captures only past this mark. */
-  private capturedThrough = 0
+   *  scrollback survives restart). Each emission captures only past this mark.
+   *
+   *  Marked by block ID, never by array index. `BlockTracker` keeps a RING capped at
+   *  MAX_BLOCKS (300) and `shift()`s the oldest out, so an index goes stale the moment the
+   *  ring saturates: `list().length` stops growing, `.slice(mark)` returns EMPTY, and every
+   *  post-restart life captured NOTHING — the Brain draft for that session life never landed
+   *  in the quarantine, silently. It degraded before saturation too (at 295/300 with 20 new
+   *  blocks, 15 were lost). `Block.id` is a monotonic mint (`nextId++`), so an id mark stays
+   *  true across shifts. */
+  private capturedThroughId = 0
   private refitTimer?: ReturnType<typeof setTimeout>
   /** The reconnect re-assert's delayed second pass (see the onDaemonReconnected
    *  subscription) — cleared on dispose so a closed pane never re-asserts a reused id. */
@@ -328,6 +354,16 @@ export class TerminalPane {
       if (Date.now() < this.replayCopyGraceUntil) return true
       const req = parseOsc52(data)
       if (req?.kind === 'copy') void this.copyOrWarn(req.text)
+      else if (req?.kind === 'refused') {
+        // F032 (phase-launch): an oversize copy used to vanish silently — the agent believed
+        // it copied, the user pasted something stale. The refusal is the clipboard's answer,
+        // so it must reach the person who is about to paste.
+        showToast({
+          tone: 'danger',
+          title: 'Copy failed',
+          body: 'That copy was too large to put on the clipboard.'
+        })
+      }
       return true
     })
 
@@ -558,6 +594,13 @@ export class TerminalPane {
         // knows what it is from its first byte.
         launch = built?.intent
       }
+      // The pane may have been closed while that race was in flight. Spawning into a disposed
+      // pane creates a daemon session nobody in this app will ever address — the relay
+      // tombstone re-kills it in THIS session, but the detached daemon has already persisted
+      // it to sessions.db and restores it on the next app start. UNPROVEN in-tree (like the
+      // other daemon-lifecycle fixes): biting it needs a daemon-session-persist-and-restore
+      // probe, not a relay-side read — `isLivePane` is masked by that tombstone.
+      if (this.disposed) return
       return this.spawnPty(run, launch)
     })()
 
@@ -664,7 +707,14 @@ export class TerminalPane {
       .then((res) => {
         // The delivery report the agents feature settles on: TRUE only when a FRESH
         // session actually received the run line (a reattached session ignored it).
-        reportSpawnRunOutcome(this.id, !!run && !res.existing)
+        // Never after dispose, for the same reason spelled out for the marks below:
+        // dispose() runs forgetSpawnRun(this.id), and a reply landing after that writes a
+        // stale outcome for a FREE id. The next pane to recycle it reads that `true`
+        // SYNCHRONOUSLY (whenSpawnRunOutcome short-circuits on a known outcome), skips the
+        // typed fallback and still books the launch — a pane with no agent that the app
+        // records as agent-bearing. The port states the law: "a recycled pane id must start
+        // with no armed build, no stale outcome, and no waiter still hoping".
+        if (!this.disposed) reportSpawnRunOutcome(this.id, !!run && !res.existing)
         // The generation this spawn BOUND to — from here on this pane's input/resize
         // carry it, and the daemon refuses them once the id belongs to a successor.
         if (!this.disposed) this.sessionGen = res.gen
@@ -718,8 +768,10 @@ export class TerminalPane {
       })
       .catch((err) => {
         // A failed spawn delivered nothing — the agents feature's typed fallback will
-        // wait on liveness and fail as gracefully as it always has.
-        reportSpawnRunOutcome(this.id, false)
+        // wait on liveness and fail as gracefully as it always has. Disposed panes report
+        // nothing at all (see the .then twin): forgetSpawnRun already answered the waiters
+        // with null, which IS the typed-fallback floor.
+        if (!this.disposed) reportSpawnRunOutcome(this.id, false)
         // A pane with no pty renders nothing and grows wrong. Never swallow it — and
         // never leave the USER staring at a silently blank pane: say it in the pane,
         // where the missing prompt would have been.
@@ -1228,10 +1280,10 @@ export class TerminalPane {
     this.life.captureEmitted = true
     const ladder = this.blocks?.list() ?? []
     const blocks = ladder
-      .slice(this.capturedThrough)
+      .filter((b) => b.id > this.capturedThroughId)
       .filter((b) => b.command && b.exitCode !== undefined)
       .map((b) => ({ command: b.command, exitCode: b.exitCode, durationMs: b.durationMs }))
-    this.capturedThrough = ladder.length
+    if (ladder.length) this.capturedThroughId = ladder[ladder.length - 1]!.id
     if (!blocks.length) return
     const req: BrainCaptureSessionRequest = { pane: String(this.id), blocks }
     void getBridge().invoke(BrainChannels.captureSession, req).catch(() => undefined)
@@ -2230,12 +2282,29 @@ export class TerminalPane {
     menu.append(
       separator(),
       item('pencil', 'Rename', () => this.renameFn?.()),
-      item('trash', 'Clear terminal', () => this.term.clear()),
-      item('folder', 'Copy working directory', () => {
-        const cwd = getPaneCwd(this.id)
-        if (cwd) void this.copyOrWarn(cwd)
-      })
+      item('trash', 'Clear terminal', () => this.term.clear())
     )
+    // Offered only when there IS a working directory to copy — the same "don't offer what
+    // cannot work" gate Move uses above. A remote pane has no local cwd (publishPaneCwds
+    // skips remote slots and the spawn sends ''), so this row used to sit there permanently
+    // dead: its handler is `if (cwd)`, so clicking it copied nothing, said nothing, and left
+    // the user pasting whatever was on the clipboard before. The menu is rebuilt on open and
+    // refreshed live, so it appears the moment a cwd is known.
+    //
+    // The APPEND is gated; the VALUE is re-read at CLICK time, never captured at build time.
+    // "Refreshed live" is a MutationObserver on headerGrid, so a cwd change with no header
+    // consequence — `cd` into a plain folder outside any repo, where the git chip's text
+    // never changes — fires no record and rebuilds no menu. A captured value would then hand
+    // the user the OLD directory, silently.
+    const paneCwdNow = (): string => getPaneCwd(this.id) || getPaneRemote(this.id)?.cwd || ''
+    if (paneCwdNow()) {
+      menu.append(
+        item('folder', 'Copy working directory', () => {
+          const now = paneCwdNow()
+          if (now) void this.copyOrWarn(now)
+        })
+      )
+    }
     // Worktree-isolated pane (3/03): guarded removal. Dirty worktrees are refused with
     // an explicit force step — an agent's uncommitted work is never silently destroyed.
     const cwdState = getPaneCwdProjection(this.id)
@@ -2262,14 +2331,28 @@ export class TerminalPane {
               return
             }
           }
-          const res = await new Promise<RemoveWorktreeResult>((resolve) => {
-            eventHost.dispatchEvent(
-              new CustomEvent('mogging:remove-worktree', {
-                bubbles: true,
-                detail: { paneId: this.id, repo, path: cwd, force, resolve }
+          // The controller closes the pane FIRST, then removes — so by the time its `dirty`
+          // refusal comes back (the backend re-checks on every non-force removal, and the
+          // worktrees module's own comment says this refusal "arrives only AFTER the pane was
+          // closed"), this element is DETACHED. A bubbling event from a detached node reaches
+          // no listener — the controller's is on the workspace container — so the retry's
+          // promise never settled and "Remove anyway" was a dead button, with the ⋯ entry that
+          // was the only other door gone along with the pane. Once there is no pane left to
+          // sequence, go straight down the same backend door the controller uses — WITH the
+          // same bounded retry it rides, because bypassing the controller must not bypass the
+          // Windows worktree-lock ladder (see WORKTREE_REMOVE_ATTEMPTS). A single invoke here
+          // reported "Could not remove worktree" on exactly the transient lock the ladder
+          // exists for, with the pane already gone: the dead end this branch was meant to fix.
+          const res = eventHost.isConnected
+            ? await new Promise<RemoveWorktreeResult>((resolve) => {
+                eventHost.dispatchEvent(
+                  new CustomEvent('mogging:remove-worktree', {
+                    bubbles: true,
+                    detail: { paneId: this.id, repo, path: cwd, force, resolve }
+                  })
+                )
               })
-            )
-          })
+            : await this.removeWorktreeDirect({ repo, path: cwd, force })
           {
             if (res.ok) {
               showToast({ tone: 'success', title: 'Worktree removed', body: 'Its branch is kept for review.' })
@@ -2366,6 +2449,24 @@ export class TerminalPane {
         )
       }
     }
+  }
+
+  /** The direct backend road for worktree removal, bounded exactly as the workspace
+   *  controller's is (WORKTREE_REMOVE_ATTEMPTS / WORKTREE_REMOVE_RETRY_MS). Stops early on
+   *  success and on any NON-`error` refusal — a `dirty` verdict is an answer, not a lock, and
+   *  retrying it twenty times would only delay the force-step toast. */
+  private async removeWorktreeDirect(req: {
+    repo: string
+    path: string
+    force: boolean
+  }): Promise<RemoveWorktreeResult> {
+    let res: RemoveWorktreeResult = { ok: false, reason: 'error' }
+    for (let attempt = 0; attempt < WORKTREE_REMOVE_ATTEMPTS; attempt++) {
+      if (attempt) await new Promise((resolve) => setTimeout(resolve, WORKTREE_REMOVE_RETRY_MS))
+      res = (await getBridge().invoke(WorktreeChannels.remove, req)) as RemoveWorktreeResult
+      if (res.ok || res.reason !== 'error') break
+    }
+    return res
   }
 
   /** Dev-only debug handle so tooling/smoke can inspect the real terminal. Guarded by

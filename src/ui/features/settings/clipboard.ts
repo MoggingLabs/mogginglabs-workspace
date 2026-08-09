@@ -93,10 +93,29 @@ function entryRow(entry: ClipboardEntry, now: number, refresh: () => void): HTML
     label: 'Copy to clipboard',
     title: 'Put this back on the clipboard',
     onClick: () => {
-      void restoreEntry(entry.id).then(() => {
-        showToast({ tone: 'success', title: 'Copied' })
-        refresh()
-      })
+      // The main handler REFUSES a write it could not verify (it throws), and this promise
+      // had no catch — so a refused restore produced no feedback at all: an inert-looking
+      // button and an unhandled rejection, while the terminal's own copies warn properly.
+      void restoreEntry(entry.id).then(
+        () => {
+          showToast({ tone: 'success', title: 'Copied' })
+          refresh()
+        },
+        () => {
+          // Say only what the rejection actually establishes. Main refuses when it cannot
+          // PROVE the write landed — usually because another app holds the machine-wide
+          // clipboard open and the write was a silent no-op, but the same refusal covers a
+          // write that DID land whose read-back could not open the clipboard. Naming one
+          // cause as fact, and "Nothing was copied" as fact, is a claim we cannot make: in
+          // that second case it is simply untrue, and it sends the user to re-copy
+          // something that is already there instead of checking what pastes.
+          showToast({
+            tone: 'danger',
+            title: 'Copy not confirmed',
+            body: 'The app could not verify this reached the system clipboard — most often another app is holding it open. Check what pastes before relying on it, then try again.'
+          })
+        }
+      )
     }
   })
 

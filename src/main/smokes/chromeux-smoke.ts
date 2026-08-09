@@ -721,9 +721,14 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         const actionNeedles = [
           'Expand to whole workspace', 'Expand across full width', 'Expand to full height',
           'Split right', 'Split down', 'Rename', 'Clear terminal',
-          'Copy working directory', 'Show claims'
+          'Show claims'
         ]
         const retiredActions = actionNeedles.every(needle => menuText.includes(needle))
+        // F038 (phase-launch): this pane is REMOTE with no published cwd, so the copy-cwd row
+        // must be WITHHELD — a row whose click would copy nothing is a dead button. The needle
+        // used to require it here, which asserted the defect; the absence is the contract now,
+        // and it cannot pass vacuously because the presence needles above prove the menu real.
+        const copyCwdGated = !menuText.includes('Copy working directory')
 
         const renameItem = [...menu.querySelectorAll('.menu-item')].find(el => (el.textContent || '').trim() === 'Rename')
         if (!renameItem) return { ok: false, reason: 'no Rename item', menuText }
@@ -784,11 +789,11 @@ export function runChromeUxSmoke(win: BrowserWindow): void {
         slot.style.width = ''
         return {
           ok: sampleGeometry && signalRhythm && transitions && retiredInline && portaled && viewportContained &&
-            retiredFacts && retiredActions && renamePortaled && titleUpdated && renamedInMenu &&
+            retiredFacts && retiredActions && copyCwdGated && renamePortaled && titleUpdated && renamedInMenu &&
             expandedViaMenu && restoredViaMenu && splitViaMenu && splitCleanup && closesOnWorkspaceSwitch,
           sampleGeometry, signalRhythm, transitions, samples, retiredInline,
           portaled, viewportContained, menuRect: { left: menuRect.left, top: menuRect.top, right: menuRect.right, bottom: menuRect.bottom },
-          retiredFacts, factNeedles, retiredActions, actionNeedles,
+          retiredFacts, factNeedles, retiredActions, actionNeedles, copyCwdGated,
           renamePortaled, titleUpdated, renamedInMenu,
           expandedViaMenu, restoredViaMenu, splitViaMenu, splitCleanup, closesOnWorkspaceSwitch
         }

@@ -110,6 +110,13 @@ export class OscParser {
           this.discarding = false
           this.buf = ''
           if (code === ESC) this.pendingEsc = true
+          // `ESC ]` aborts THIS OSC and OPENS THE NEXT — consuming the ']' here dropped the
+          // successor's intro, so its body scanned as ordinary output and its terminating BEL
+          // fell through to the ground-state branch below and rang a FALSE attention bell (the
+          // very thing the MAX_OSC swallow exists to prevent). Reachable whenever a program is
+          // interrupted mid-OSC and the shell's own prompt sequence follows — and this app
+          // injects an OSC at every prompt, so an OSC is normally what comes next.
+          else if (code === OSC_INTRO) this.inOsc = true
           continue
         }
         if (code === OSC_INTRO) {

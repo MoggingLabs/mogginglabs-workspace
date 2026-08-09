@@ -20,6 +20,25 @@ export function calmMotion(): boolean {
   }
 }
 
+/**
+ * The scroll behavior to use, honouring calm motion.
+ *
+ * `.motion-calm`'s whole reach is CSS — animation-duration / iteration-count /
+ * transition-duration clamps (global.css) — and a scroll driven by the `behavior: 'smooth'`
+ * OPTION is neither an animation nor a transition, so no class can reach it. The in-app
+ * switch is documented as the twin of the OS reduce-motion preference; for smooth scrolling
+ * it had no twin at all. Every scrollIntoView/scrollTo in the renderer goes through this,
+ * and check-reduced-motion.mjs (the MOTION gate) fails any that does not.
+ */
+export function scrollBehavior(): ScrollBehavior {
+  if (calmMotion()) return 'auto'
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+  } catch {
+    return 'smooth'
+  }
+}
+
 export function setCalmMotion(on: boolean): void {
   try {
     localStorage.setItem(KEY, on ? '1' : '')

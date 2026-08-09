@@ -30,7 +30,7 @@ export interface UsageWorld {
 }
 
 /** One update-check attempt's outcome, from the fixture feed standing in for the signed one. */
-export type UpdateCheckOutcome = { kind: 'ok' } | { kind: 'error'; message: string }
+export type UpdateCheckOutcome = { kind: 'ok' } | { kind: 'error'; message: string } | { kind: 'available'; version: string }
 
 /**
  * Replaces the signed feed with scripted check OUTCOMES (UPDATEFAIL / UPDATEOFFLINE). NOT a

@@ -32,7 +32,32 @@ import { getTelemetry } from '../../core/telemetry'
 // Dev/gate override (FLICKER 3c): the release path is pinned by forcing the budget to 0 —
 // with 16 real contexts the smoke's 8 panes could never create genuine pressure.
 const glBudget = (): number => (window as { __moggingGlBudget?: number }).__moggingGlBudget ?? 16
+/**
+ * The ATTACH cap, floored at one context. A budget is a count of live contexts, and the
+ * eviction/give-up branch in attachNow is about a cap that is FULL — which an EMPTY set never
+ * is. Read raw, an override of 0 made `glAttached.size >= 0` true against an empty set with no
+ * hidden holder to reclaim, so no pane could attach at all: the override stopped meaning
+ * "maximum pressure" (the words all three of its gate callers use, and the words this file
+ * used two comments up) and started meaning "GL is impossible". A gate arming it BEFORE any
+ * attach would then read the give-up branch's green vacuously — nothing gave up, because
+ * nothing was ever holding. Floored at one, budget 0 is the tightest HONEST budget: a single
+ * holder, and every other visible pane reaches the real give-up branch and rides the DOM
+ * renderer. The RELEASE threshold below deliberately stays on the RAW budget, so 0 still
+ * surrenders every hidden context — which is what FLICKER 2c, MILESTONE and PANEFIT B assert.
+ */
+const glAttachCap = (): number => Math.max(1, glBudget())
 const glAttached = new Set<PaneWebglManager>()
+/**
+ * Visible panes that reached the give-up branch: past the cap with every holder on screen.
+ * They ride the DOM renderer — correct — but NOTHING used to tell them a slot had opened.
+ * `release()` freed one and notified nobody, and the only other callers of `acquire()` are
+ * `onShow()` and the context-loss retry, so a pane past the cap stayed on the DOM renderer for
+ * the life of the app: on every workspace flip ALL panes are visible at `onShow`, the victim
+ * search finds nothing, and they give up again. Deterministic, not racy. This set is the
+ * missing wake list; entries are pruned on attach, on release (which is also the dispose
+ * path), and while scanning.
+ */
+const glStranded = new Set<PaneWebglManager>()
 
 const glJobQueue: Array<() => void> = []
 let glPumping = false
@@ -76,6 +101,31 @@ export class PaneWebglManager {
   private lastGlLossAt = 0
 
   constructor(private readonly host: PaneWebglHost) {}
+
+  /** Hand a just-freed slot to exactly ONE stranded pane. Deferred to a microtask because
+   *  the eviction path calls `victim.release()` and then attaches into that very slot
+   *  SYNCHRONOUSLY — waking from inside `release()` would spend a 60 ms debounce and a queued
+   *  frame job on a slot that is already gone. One pane per freed slot, never the whole set:
+   *  a reveal that frees one context must not send fifteen panes into the attach queue, and
+   *  the pane that does attach frees nothing, so the cascade stops on its own. */
+  private static wakeOneStranded(): void {
+    if (!glStranded.size) return
+    queueMicrotask(() => {
+      for (const pane of glStranded) {
+        // Prune what can never use a slot again. A stranded pane never held a context, so
+        // its own release() is the only other place this set is trimmed.
+        if (pane.host.isDisposed() || pane.webgl) {
+          glStranded.delete(pane)
+          continue
+        }
+        if (!pane.host.isVisible()) continue // hidden: onShow() asks again for itself
+        if (glAttached.size >= glAttachCap()) return // the slot was taken while we waited
+        glStranded.delete(pane)
+        pane.acquire()
+        return
+      }
+    })
+  }
 
   /** Is the GPU renderer live right now? (dev/gate probe — the PANESCROLL smoke asserts
    *  which renderer painted). */
@@ -138,6 +188,8 @@ export class PaneWebglManager {
         // Budget-aware: a hidden pane's context is only surrendered when the app-wide
         // count is actually pressing the browser cap. Under budget it stays warm, so
         // switching back is pure show/hide — no DOM→WebGL swap, no per-pane flicker.
+        // The RAW budget on purpose (not the floored attach cap): an override of 0 must
+        // still surrender every hidden context — see glAttachCap.
         if (!this.host.isVisible() && glAttached.size > glBudget()) this.release()
       })
     }, 1500)
@@ -151,13 +203,33 @@ export class PaneWebglManager {
     // hidden holder before attaching. (This is also what reclaims contexts a hidden pane
     // kept under budget — its release debounce fired once and did nothing; the pressure
     // that matters shows up here, at acquire time.)
-    if (glAttached.size >= glBudget()) {
+    if (glAttached.size >= glAttachCap()) {
+      let victim: PaneWebglManager | undefined
       for (const other of glAttached) {
         if (other !== this && !other.host.isVisible()) {
-          other.release()
+          victim = other
           break
         }
       }
+      // Past the cap with nothing to reclaim (every holder is on screen), RIDE THE DOM
+      // RENDERER — which is what pane-capacity.ts already promises in words: "GPU is
+      // deliberately NOT a count limit … PaneWebglManager already rides the DOM renderer past
+      // that edge — correct, just not GPU-smooth." Without this branch the attach went ahead
+      // anyway, Chromium force-lost the oldest context, its owner's onContextLoss re-acquired
+      // 1.5s later and evicted the next one — a renderer-swap churn (each swap is a metrics
+      // event → refit → ConPTY repaint over whatever the agent is drawing), re-armed on every
+      // workspace switch because onShow() forgives glLosses. Reachable: the machine budget
+      // offers up to ABS_MAX_PANES=32 and a 1920x1080 work area fits well past 16 at the
+      // 132x110 minima, so >16 panes can be visible at once in one workspace.
+      //
+      // Giving up is not the same as giving up FOREVER, which is what it used to mean: join
+      // the wake list so the next freed slot reaches this pane. Without it the DOM fallback
+      // was permanent — see glStranded.
+      if (!victim) {
+        glStranded.add(this)
+        return
+      }
+      victim.release()
     }
     try {
       const addon = new WebglAddon()
@@ -195,6 +267,7 @@ export class PaneWebglManager {
       this.host.term.loadAddon(addon)
       this.webgl = addon
       glAttached.add(this)
+      glStranded.delete(this) // it has one now; it is nobody's wake candidate
       this.host.onRendererChanged()
     } catch (err) {
       console.warn('WebGL renderer unavailable; using default renderer.', err)
@@ -211,6 +284,10 @@ export class PaneWebglManager {
    *  TRANSIENT context-loss path only (see onContextLoss) — every settled release
    *  must tell the host, or the pane keeps a dead renderer's grid. */
   release(notifyRendererChanged = true): void {
+    // BEFORE the `!this.webgl` early return below: a STRANDED pane never held a context, so
+    // that return is the path its dispose takes — and leaving it on the wake list would keep
+    // a disposed manager (and its terminal) alive in a module-global set for the session.
+    glStranded.delete(this)
     if (this.glRetry) {
       clearTimeout(this.glRetry)
       this.glRetry = undefined
@@ -232,6 +309,11 @@ export class PaneWebglManager {
     } catch {
       /* already disposed with the terminal */
     }
+    // A slot just opened. Nothing else in this module ever announces that, which is exactly
+    // why panes past the cap never came back (see glStranded). Unconditional — including the
+    // TRANSIENT context-loss path, whose own re-acquire is 1.5s away: the slot is genuinely
+    // free now, and wakeOneStranded hands it to at most one pane.
+    PaneWebglManager.wakeOneStranded()
     // After the swap back to the DOM renderer — its metrics may disagree with WebGL's
     // (see PaneWebglHost.onRendererChanged). The host guards its own disposed state
     // (release is also the dispose path).
